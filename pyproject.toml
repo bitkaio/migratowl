@@ -1,0 +1,32 @@
+[project]
+name = "migratowl"
+version = "0.1.0"
+description = "AI-powered dependency migration analyzer"
+requires-python = ">=3.13"
+dependencies = [
+    "deepagents>=0.2.5",
+    "langchain-kubernetes",
+    "langchain-anthropic",
+    "pydantic>=2.0",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio",
+    "ruff",
+    "langgraph-cli[inmem]",
+    "langfuse",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

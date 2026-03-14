@@ -216,6 +216,9 @@ __marimo__/
 .cody/
 .continue/
 
+CLAUDE.md
+docs/local/
+
 ### macOS template
 # General
 .DS_Store
