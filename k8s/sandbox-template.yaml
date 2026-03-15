@@ -1,0 +1,21 @@
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: python-sandbox-template
+  namespace: default
+spec:
+  podTemplate:
+    spec:
+      containers:
+        - name: sandbox
+          image: sandbox-runtime:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8888
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi

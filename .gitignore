@@ -218,6 +218,7 @@ __marimo__/
 
 CLAUDE.md
 docs/local/
+.langgraph_api
 
 ### macOS template
 # General
