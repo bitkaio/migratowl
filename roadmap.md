@@ -10,9 +10,9 @@ Ordered by implementation priority. Each task builds on the previous ones.
 
 4. **Configuration system** — Centralized config via pydantic-settings with typed env vars (`MIGRATOWL_` prefix) for API keys, sandbox settings, and pipeline parameters. ✅
 
-5. **Data models & schemas** — Pydantic models for all pipeline data: ScanWebhookPayload, Dependency, OutdatedDependency, ScanResult, ExecutionResult, AnalysisReport, ScanAnalysisReport.
+5. **Data models & schemas** — Pydantic models for all pipeline data: ScanWebhookPayload, Dependency, OutdatedDependency, ScanResult, ExecutionResult, AnalysisReport, ScanAnalysisReport. ✅
 
-6. **Language detection** — Detect project language inside the sandbox by checking for marker files (pyproject.toml, package.json, go.mod, Cargo.toml) and select the appropriate build/test commands.
+6. **Language detection** — Detect project language inside the sandbox by checking for marker files (pyproject.toml, package.json, go.mod, Cargo.toml) and select the appropriate build/test commands. ✅
 
 7. **Dependency scanning** — Parse manifest files (requirements.txt, pyproject.toml, package.json, go.mod, Cargo.toml) to extract declared dependencies and their current versions.
 

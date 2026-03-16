@@ -5,12 +5,10 @@ from typing import Any
 
 from langchain.tools import tool
 
-DEFAULT_WORKSPACE_PATH = "/home/user/workspace"
-
 
 def create_clone_repo_tool(
     get_backend: Callable[[], Any],
-    workspace_path: str = DEFAULT_WORKSPACE_PATH,
+    workspace_path: str,
 ) -> Any:
     """Create a clone_repo tool bound to a sandbox backend.
 

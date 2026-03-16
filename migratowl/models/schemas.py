@@ -15,6 +15,16 @@ class Ecosystem(enum.StrEnum):
     RUST = "rust"
 
 
+class LanguageDetection(BaseModel):
+    """Detected language ecosystem in a repository."""
+
+    ecosystem: Ecosystem
+    marker_file: str
+    project_root: str
+    default_test_command: str
+    default_install_command: str
+
+
 class ScanWebhookPayload(BaseModel):
     """Payload received to trigger a repository scan."""
 
@@ -23,7 +33,6 @@ class ScanWebhookPayload(BaseModel):
     git_provider: str = "github"
     pr_number: int | None = None
     callback_url: str | None = None
-    ecosystems: list[Ecosystem] | None = None
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
 
