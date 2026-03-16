@@ -36,6 +36,7 @@ Work within /home/user/workspace where the repository is checked out.
 """
 
 # --- Sandbox lifecycle (lazy init via background thread) ---
+# TODO: When FastAPI webhook is implemented, move sandbox init to a lifespan handler and pass the instance directly to create_deep_agent(backend=sandbox) instead of using the ThreadPoolExecutor workaround.
 
 _provider: KubernetesProvider | None = None
 _sandbox_future: Future[BackendProtocol] | None = None
