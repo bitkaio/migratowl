@@ -1,0 +1,58 @@
+"""Tests for MigratOwl configuration."""
+
+from migratowl.config import Settings, get_settings
+
+
+class TestSettingsDefaults:
+    def test_default_model_name(self) -> None:
+        settings = Settings()
+        assert settings.model_name == "claude-sonnet-4-6"
+
+    def test_default_sandbox_template(self) -> None:
+        settings = Settings()
+        assert settings.sandbox_template == "migratowl-sandbox-template"
+
+    def test_default_sandbox_namespace(self) -> None:
+        settings = Settings()
+        assert settings.sandbox_namespace == "default"
+
+    def test_default_sandbox_connection_mode(self) -> None:
+        settings = Settings()
+        assert settings.sandbox_connection_mode == "tunnel"
+
+    def test_default_workspace_path(self) -> None:
+        settings = Settings()
+        assert settings.workspace_path == "/home/user/workspace"
+
+
+class TestSettingsFromEnv:
+    def test_env_override_model_name(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_NAME", "claude-opus-4-6")
+        settings = Settings()
+        assert settings.model_name == "claude-opus-4-6"
+
+    def test_env_override_sandbox_template(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_TEMPLATE", "custom-template")
+        settings = Settings()
+        assert settings.sandbox_template == "custom-template"
+
+    def test_env_override_sandbox_namespace(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_NAMESPACE", "staging")
+        settings = Settings()
+        assert settings.sandbox_namespace == "staging"
+
+    def test_env_override_sandbox_connection_mode(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
+        settings = Settings()
+        assert settings.sandbox_connection_mode == "direct"
+
+    def test_env_override_workspace_path(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_WORKSPACE_PATH", "/tmp/workspace")
+        settings = Settings()
+        assert settings.workspace_path == "/tmp/workspace"
+
+
+class TestGetSettings:
+    def test_returns_settings_instance(self) -> None:
+        result = get_settings()
+        assert isinstance(result, Settings)

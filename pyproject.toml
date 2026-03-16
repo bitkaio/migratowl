@@ -9,6 +9,7 @@ dependencies = [
     "langchain-kubernetes[agent-sandbox]>=0.2.0",
     "langchain-anthropic",
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "python-dotenv",
     "python-multipart>=0.0.18",
 ]

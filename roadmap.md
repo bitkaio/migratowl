@@ -6,9 +6,9 @@ Ordered by implementation priority. Each task builds on the previous ones.
 
 2. **Kubernetes sandbox init** — Initialize langchain-kubernetes provider at startup, create sandbox via agent-sandbox mode, wire as backend factory for deepagents. ✅
 
-3. **Repo clone tool** — Agent tool that clones a given repository (by URL + branch) into the Kubernetes sandbox workspace so the agent can operate on real project files.
+3. **Repo clone tool** — Agent tool that clones a given repository (by URL + branch) into the Kubernetes sandbox workspace so the agent can operate on real project files. ✅
 
-4. **Configuration system** — Centralized config via pydantic-settings with typed env vars (`MIGRATOWL_` prefix) for API keys, sandbox settings, and pipeline parameters.
+4. **Configuration system** — Centralized config via pydantic-settings with typed env vars (`MIGRATOWL_` prefix) for API keys, sandbox settings, and pipeline parameters. ✅
 
 5. **Data models & schemas** — Pydantic models for all pipeline data: ScanWebhookPayload, Dependency, OutdatedDependency, ScanResult, ExecutionResult, AnalysisReport, ScanAnalysisReport.
 

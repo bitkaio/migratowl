@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 from migratowl.agent.tools.clone import create_clone_repo_tool
 
+CUSTOM_WORKSPACE = "/opt/workspace"
+
 
 @dataclass
 class _ExecResult:
@@ -34,6 +36,20 @@ class TestCloneRepoTool:
         )
         assert "/home/user/workspace" in result
         assert "success" in result.lower() or "cloned" in result.lower()
+
+    def test_custom_workspace_path(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            _ExecResult(output="Cloning...\n", exit_code=0),
+            _ExecResult(output="README.md\n", exit_code=0),
+        ]
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=CUSTOM_WORKSPACE)
+
+        result = tool.invoke({"repo_url": "https://github.com/psf/requests"})
+
+        clone_cmd = backend.execute.call_args_list[0][0][0]
+        assert CUSTOM_WORKSPACE in clone_cmd
+        assert CUSTOM_WORKSPACE in result
 
     def test_failed_clone(self) -> None:
         backend = _make_backend(

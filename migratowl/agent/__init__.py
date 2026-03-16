@@ -2,19 +2,18 @@
 
 import atexit
 import logging
-import os
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
-from dotenv import load_dotenv
 from langchain.tools import ToolRuntime
 from langchain_anthropic import ChatAnthropic
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
 from migratowl.agent.tools.clone import create_clone_repo_tool
+from migratowl.config import get_settings
 
-load_dotenv()
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +53,9 @@ def _init_sandbox() -> BackendProtocol:
     try:
         _provider = KubernetesProvider(
             KubernetesProviderConfig(
-                template_name=os.getenv("SANDBOX_TEMPLATE", "migratowl-sandbox-template"),
-                namespace=os.getenv("SANDBOX_NAMESPACE", "default"),
-                connection_mode="tunnel",
+                template_name=settings.sandbox_template,
+                namespace=settings.sandbox_namespace,
+                connection_mode=settings.sandbox_connection_mode,
             )
         )
         sandbox = _provider.get_or_create()
@@ -110,10 +109,10 @@ def _get_sandbox_backend() -> BackendProtocol:
     return _sandbox_future.result(timeout=120)
 
 
-clone_repo = create_clone_repo_tool(_get_sandbox_backend)
+clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 
 graph = create_deep_agent(
-    model=ChatAnthropic(model="claude-sonnet-4-6"),
+    model=ChatAnthropic(model=settings.model_name),
     system_prompt=SYSTEM_PROMPT,
     tools=[clone_repo],
     backend=_k8s_backend_factory,
