@@ -1,9 +1,9 @@
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
 kind: SandboxWarmPool
 metadata:
-  name: python-warm-pool
+  name: migratowl-warm-pool
   namespace: default
 spec:
   sandboxTemplateRef:
-    name: python-sandbox-template
+    name: migratowl-sandbox-template
   replicas: 3  # keep 3 Pods warm at all times

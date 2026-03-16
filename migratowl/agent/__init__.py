@@ -12,6 +12,8 @@ from langchain.tools import ToolRuntime
 from langchain_anthropic import ChatAnthropic
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
+from migratowl.agent.tools.clone import create_clone_repo_tool
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -20,13 +22,14 @@ SYSTEM_PROMPT = """\
 You are MigratOwl, an AI-powered dependency migration analyzer.
 
 You have access to a sandboxed Python environment where you can:
+- Clone public Git repositories using the clone_repo tool
 - Write and execute Python scripts
 - Install packages with pip
 - Analyze codebases
 - Run tests
 
-For now, you are in early development. Help users by executing code \
-in your sandbox environment to prove the system works.
+When given a repository URL and branch, clone it first using clone_repo. \
+After cloning, work within /home/user/workspace where the repository is checked out.
 """
 
 # --- Sandbox lifecycle (eager background thread — avoids blockbuster BlockingError) ---
@@ -51,7 +54,7 @@ def _init_sandbox() -> BackendProtocol:
     try:
         _provider = KubernetesProvider(
             KubernetesProviderConfig(
-                template_name=os.getenv("SANDBOX_TEMPLATE", "python-sandbox-template"),
+                template_name=os.getenv("SANDBOX_TEMPLATE", "migratowl-sandbox-template"),
                 namespace=os.getenv("SANDBOX_NAMESPACE", "default"),
                 connection_mode="tunnel",
             )
@@ -102,8 +105,16 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
 
 # --- Agent graph ---
 
+def _get_sandbox_backend() -> BackendProtocol:
+    """Return cached sandbox backend for custom tools."""
+    return _sandbox_future.result(timeout=120)
+
+
+clone_repo = create_clone_repo_tool(_get_sandbox_backend)
+
 graph = create_deep_agent(
     model=ChatAnthropic(model="claude-sonnet-4-6"),
     system_prompt=SYSTEM_PROMPT,
+    tools=[clone_repo],
     backend=_k8s_backend_factory,
 )

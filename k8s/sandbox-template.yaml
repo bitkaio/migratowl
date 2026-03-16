@@ -1,7 +1,7 @@
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
 kind: SandboxTemplate
 metadata:
-  name: python-sandbox-template
+  name: migratowl-sandbox-template
   namespace: default
 spec:
   podTemplate:
@@ -18,4 +18,4 @@ spec:
               memory: 1Gi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 6Gi
