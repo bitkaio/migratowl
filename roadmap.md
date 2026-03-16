@@ -16,7 +16,7 @@ Ordered by implementation priority. Each task builds on the previous ones.
 
 7. **Dependency scanning** — Parse manifest files (requirements.txt, pyproject.toml, package.json, go.mod, Cargo.toml) to extract declared dependencies and their current versions. ✅
 
-8. **Package registry queries** — Query PyPI, npm, crates.io, and proxy.golang.org to determine latest available versions and enrich with metadata (homepage, repository, changelog URLs).
+8. **Package registry queries** — Query PyPI, npm, crates.io, and proxy.golang.org to determine latest available versions and enrich with metadata (homepage, repository, changelog URLs). ✅
 
 9. **Dependency bumping** — Upgrade a single dependency to its latest version inside the sandbox using the appropriate package manager (pip, npm, go get, cargo).
 
