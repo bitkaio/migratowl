@@ -1,5 +1,6 @@
 """Centralized configuration for MigratOwl."""
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,14 @@ class Settings(BaseSettings):
 
     # Registry scanning
     scan_registry_concurrency: int = 10
+
+    # GitHub
+    github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
+
+    # HTTP client
+    http_timeout: float = 30.0
+    http_retry_count: int = 3
+    http_retry_backoff_base: float = 0.5
 
 
 def get_settings() -> Settings:

@@ -11,6 +11,7 @@ from langchain.tools import ToolRuntime
 from langchain_anthropic import ChatAnthropic
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
+from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import create_clone_repo_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
 from migratowl.agent.tools.registry import create_check_outdated_tool
@@ -36,6 +37,9 @@ After cloning, use detect_languages to identify the programming languages \
 and frameworks used in the repository. \
 Then use scan_dependencies to find all declared dependencies, and \
 check_outdated_deps to identify which ones have newer versions available. \
+For each outdated dependency, use fetch_changelog_tool to retrieve its \
+changelog filtered to the relevant version range, so you can understand \
+what changed between the current and latest versions.
 Work within /home/user/workspace where the repository is checked out.
 """
 
@@ -122,10 +126,11 @@ clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=setting
 detect_languages = create_detect_languages_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 scan_dependencies = create_scan_dependencies_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 check_outdated_deps = create_check_outdated_tool(concurrency=settings.scan_registry_concurrency)
+fetch_changelog = create_fetch_changelog_tool()
 
 graph = create_deep_agent(
     model=ChatAnthropic(model=settings.model_name),
     system_prompt=SYSTEM_PROMPT,
-    tools=[clone_repo, detect_languages, scan_dependencies, check_outdated_deps],
+    tools=[clone_repo, detect_languages, scan_dependencies, check_outdated_deps, fetch_changelog],
     backend=_k8s_backend_factory,
 )

@@ -28,6 +28,22 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.scan_registry_concurrency == 10
 
+    def test_default_github_token(self) -> None:
+        settings = Settings()
+        assert settings.github_token == ""
+
+    def test_default_http_timeout(self) -> None:
+        settings = Settings()
+        assert settings.http_timeout == 30.0
+
+    def test_default_http_retry_count(self) -> None:
+        settings = Settings()
+        assert settings.http_retry_count == 3
+
+    def test_default_http_retry_backoff_base(self) -> None:
+        settings = Settings()
+        assert settings.http_retry_backoff_base == 0.5
+
 
 class TestSettingsFromEnv:
     def test_env_override_model_name(self, monkeypatch: object) -> None:
@@ -59,6 +75,16 @@ class TestSettingsFromEnv:
         monkeypatch.setenv("MIGRATOWL_SCAN_REGISTRY_CONCURRENCY", "20")
         settings = Settings()
         assert settings.scan_registry_concurrency == 20
+
+    def test_github_token_from_env(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test123")
+        settings = Settings()
+        assert settings.github_token == "ghp_test123"
+
+    def test_http_timeout_from_env(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_HTTP_TIMEOUT", "60.0")
+        settings = Settings()
+        assert settings.http_timeout == 60.0
 
 
 class TestGetSettings:
