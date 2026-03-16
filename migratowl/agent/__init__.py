@@ -13,6 +13,7 @@ from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
 from migratowl.agent.tools.clone import create_clone_repo_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
+from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.config import get_settings
 
 settings = get_settings()
@@ -116,10 +117,11 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
 
 clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 detect_languages = create_detect_languages_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
+scan_dependencies = create_scan_dependencies_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 
 graph = create_deep_agent(
     model=ChatAnthropic(model=settings.model_name),
     system_prompt=SYSTEM_PROMPT,
-    tools=[clone_repo, detect_languages],
+    tools=[clone_repo, detect_languages, scan_dependencies],
     backend=_k8s_backend_factory,
 )
