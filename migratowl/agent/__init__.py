@@ -13,6 +13,7 @@ from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
 from migratowl.agent.tools.clone import create_clone_repo_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
+from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.config import get_settings
 
@@ -33,6 +34,8 @@ You have access to a sandboxed Python environment where you can:
 When given a repository URL and branch, clone it first using clone_repo. \
 After cloning, use detect_languages to identify the programming languages \
 and frameworks used in the repository. \
+Then use scan_dependencies to find all declared dependencies, and \
+check_outdated_deps to identify which ones have newer versions available. \
 Work within /home/user/workspace where the repository is checked out.
 """
 
@@ -118,10 +121,11 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
 clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 detect_languages = create_detect_languages_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
 scan_dependencies = create_scan_dependencies_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
+check_outdated_deps = create_check_outdated_tool(concurrency=settings.scan_registry_concurrency)
 
 graph = create_deep_agent(
     model=ChatAnthropic(model=settings.model_name),
     system_prompt=SYSTEM_PROMPT,
-    tools=[clone_repo, detect_languages, scan_dependencies],
+    tools=[clone_repo, detect_languages, scan_dependencies, check_outdated_deps],
     backend=_k8s_backend_factory,
 )

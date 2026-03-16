@@ -24,6 +24,10 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.workspace_path == "/home/user/workspace"
 
+    def test_default_scan_registry_concurrency(self) -> None:
+        settings = Settings()
+        assert settings.scan_registry_concurrency == 10
+
 
 class TestSettingsFromEnv:
     def test_env_override_model_name(self, monkeypatch: object) -> None:
@@ -50,6 +54,11 @@ class TestSettingsFromEnv:
         monkeypatch.setenv("MIGRATOWL_WORKSPACE_PATH", "/tmp/workspace")
         settings = Settings()
         assert settings.workspace_path == "/tmp/workspace"
+
+    def test_env_override_scan_registry_concurrency(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("MIGRATOWL_SCAN_REGISTRY_CONCURRENCY", "20")
+        settings = Settings()
+        assert settings.scan_registry_concurrency == 20
 
 
 class TestGetSettings:

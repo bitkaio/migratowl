@@ -944,8 +944,10 @@ source = { virtual = "." }
 dependencies = [
     { name = "deepagents" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain-anthropic" },
     { name = "langchain-kubernetes", extra = ["agent-sandbox"] },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
@@ -965,8 +967,10 @@ dev = [
 requires-dist = [
     { name = "deepagents", specifier = ">=0.2.5" },
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic" },
     { name = "langchain-kubernetes", extras = ["agent-sandbox"], specifier = ">=0.2.0" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "python-dotenv" },

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Workspace
     workspace_path: str = "/home/user/workspace"
 
+    # Registry scanning
+    scan_registry_concurrency: int = 10
+
 
 def get_settings() -> Settings:
     """Settings factory."""
