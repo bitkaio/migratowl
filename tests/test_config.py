@@ -45,6 +45,15 @@ class TestSettingsDefaults:
         assert settings.http_retry_backoff_base == 0.5
 
 
+    def test_default_confidence_threshold(self) -> None:
+        settings = Settings()
+        assert settings.confidence_threshold == 0.7
+
+    def test_default_max_output_chars(self) -> None:
+        settings = Settings()
+        assert settings.max_output_chars == 50_000
+
+
 class TestSettingsFromEnv:
     def test_env_override_model_name(self, monkeypatch: object) -> None:
         monkeypatch.setenv("MIGRATOWL_MODEL_NAME", "claude-opus-4-6")

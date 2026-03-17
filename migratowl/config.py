@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Registry scanning
     scan_registry_concurrency: int = 10
 
+    # Analysis
+    confidence_threshold: float = 0.7
+    max_output_chars: int = 50_000
+
     # GitHub
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
 

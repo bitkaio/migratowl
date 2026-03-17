@@ -12,10 +12,12 @@ from langchain_anthropic import ChatAnthropic
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
-from migratowl.agent.tools.clone import create_clone_repo_tool
+from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
+from migratowl.agent.tools.execute import create_execute_project_tool
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
+from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.config import get_settings
 
 settings = get_settings()
@@ -25,26 +27,84 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """\
 You are MigratOwl, an AI-powered dependency migration analyzer.
 
-You have access to a sandboxed Python environment where you can:
-- Clone public Git repositories using the clone_repo tool
-- Write and execute Python scripts
-- Install packages with pip
-- Analyze codebases
-- Run tests
+You operate inside a Kubernetes sandbox with a workspace laid out as:
 
-When given a repository URL and branch, clone it first using clone_repo. \
-After cloning, use detect_languages to identify the programming languages \
-and frameworks used in the repository. \
-Then use scan_dependencies to find all declared dependencies, and \
-check_outdated_deps to identify which ones have newer versions available. \
-For each outdated dependency, use fetch_changelog_tool to retrieve its \
-changelog filtered to the relevant version range, so you can understand \
-what changed between the current and latest versions.
-Work within /home/user/workspace where the repository is checked out.
+  /home/user/workspace/
+  ├── source/          # Immutable clone — NEVER executed
+  ├── main/            # All deps updated to latest, executed first
+  ├── <package-name>/  # Single-package isolation (created on demand)
+  └── ...
+
+## Workflow
+
+### Phase 1: Setup
+1. Clone the repo with clone_repo — this populates source/.
+2. Run detect_languages on source/ to find ecosystems and default commands.
+3. Run scan_dependencies on source/ to find all declared dependencies.
+4. Run check_outdated_deps to identify which have newer versions.
+
+### Phase 2: Main Analysis
+5. Run copy_source("main") to create the main/ working copy.
+6. Run update_dependencies("main", ecosystem, all_outdated_packages, install_command) \
+to update every outdated dependency at once.
+7. Run execute_project("main", install_command, test_command) to install and run tests.
+
+### Phase 3: Confidence Assessment
+After executing main/:
+- If ALL tests pass → all packages are safe. Produce AnalysisReport per package \
+with is_breaking=false and confidence=1.0.
+- If tests FAIL → analyze the error output and assign a confidence score (0.0–1.0) \
+to each outdated package indicating how likely it caused the failure.
+
+Confidence scoring guidelines:
+- Error message directly references the package → high confidence (≥0.8)
+- Large major version jump (e.g. 2.x→3.x) → moderate confidence boost
+- Import/attribute errors for known package APIs → high confidence
+- Generic test failures with no clear link → low confidence (<0.5)
+
+For packages with confidence ≥ {confidence_threshold}:
+- Fetch the changelog with fetch_changelog_tool.
+- Produce an AnalysisReport with error_summary, changelog_citation, and suggested_human_fix.
+
+For packages with confidence < {confidence_threshold}:
+- Delegate to the "package-analyzer" subagent via task() for isolated testing.
+  Provide: package name, current_version, latest_version, ecosystem, \
+install_command, test_command.
+
+### Phase 4: Compile Results
+Collect all AnalysisReports (from your own analysis + subagent results) \
+into a final ScanAnalysisReport.
+
+## Important Rules
+- NEVER execute code in source/ — it is the immutable reference.
+- Only call fetch_changelog_tool when a package causes errors or warnings.
+- Per-package folders share the same sandbox — isolation is by path, not by instance.
+""".format(confidence_threshold=settings.confidence_threshold)  # noqa: UP032
+
+PACKAGE_ANALYZER_PROMPT = """\
+You are a dependency migration analyzer for a single package.
+
+You are given a package name, its current and latest version, the ecosystem,
+and install/test commands.
+
+Workflow:
+1. Copy source to the package folder using copy_source("{package_name}")
+2. Update ONLY the specified package using update_dependencies
+3. Run the project using execute_project
+4. If tests fail or produce warnings, call fetch_changelog_tool to understand
+   what changed. Suggest a fix citing the exact changelog section.
+5. If tests pass cleanly, report is_breaking=false with high confidence.
+   Do NOT call fetch_changelog_tool if there are no errors.
+
+Return your final analysis as JSON matching:
+{dependency_name, is_breaking, error_summary, changelog_citation, \
+suggested_human_fix, confidence}
 """
 
 # --- Sandbox lifecycle (lazy init via background thread) ---
-# TODO: When FastAPI webhook is implemented, move sandbox init to a lifespan handler and pass the instance directly to create_deep_agent(backend=sandbox) instead of using the ThreadPoolExecutor workaround.
+# TODO: When FastAPI webhook is implemented, move sandbox init to a lifespan
+# handler and pass the instance directly to create_deep_agent(backend=sandbox)
+# instead of using the ThreadPoolExecutor workaround.
 
 _provider: KubernetesProvider | None = None
 _sandbox_future: Future[BackendProtocol] | None = None
@@ -122,15 +182,49 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
         raise RuntimeError("Kubernetes sandbox is required but failed to initialize.") from exc
 
 
-clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
-detect_languages = create_detect_languages_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
-scan_dependencies = create_scan_dependencies_tool(_get_sandbox_backend, workspace_path=settings.workspace_path)
+# --- Tool instances ---
+workspace_path = settings.workspace_path
+source_path = f"{workspace_path}/source"
+
+clone_repo = create_clone_repo_tool(_get_sandbox_backend, workspace_path=workspace_path)
+copy_source = create_copy_source_tool(_get_sandbox_backend, workspace_path=workspace_path)
+detect_languages = create_detect_languages_tool(_get_sandbox_backend, workspace_path=source_path)
+scan_dependencies = create_scan_dependencies_tool(_get_sandbox_backend, workspace_path=source_path)
 check_outdated_deps = create_check_outdated_tool(concurrency=settings.scan_registry_concurrency)
+update_dependencies = create_update_dependencies_tool(_get_sandbox_backend, workspace_path=workspace_path)
+execute_project = create_execute_project_tool(
+    _get_sandbox_backend,
+    workspace_path=workspace_path,
+    max_output_chars=settings.max_output_chars,
+)
 fetch_changelog = create_fetch_changelog_tool()
 
+# --- Subagent config ---
+package_analyzer = {
+    "name": "package-analyzer",
+    "description": (
+        "Analyzes a single package upgrade in isolation. Copies source, "
+        "updates only that package, runs tests, optionally fetches changelog, "
+        "and returns an AnalysisReport."
+    ),
+    "system_prompt": PACKAGE_ANALYZER_PROMPT,
+    "tools": [copy_source, update_dependencies, execute_project, fetch_changelog],
+}
+
+# --- Agent graph ---
 graph = create_deep_agent(
     model=ChatAnthropic(model=settings.model_name),
     system_prompt=SYSTEM_PROMPT,
-    tools=[clone_repo, detect_languages, scan_dependencies, check_outdated_deps, fetch_changelog],
+    tools=[
+        clone_repo,
+        copy_source,
+        detect_languages,
+        scan_dependencies,
+        check_outdated_deps,
+        update_dependencies,
+        execute_project,
+        fetch_changelog,
+    ],
     backend=_k8s_backend_factory,
+    subagents=[package_analyzer],
 )

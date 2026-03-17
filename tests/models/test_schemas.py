@@ -9,7 +9,9 @@ from migratowl.models.schemas import (
     Dependency,
     Ecosystem,
     ExecutionResult,
+    MainExecutionAnalysis,
     OutdatedDependency,
+    PackageConfidence,
     ScanAnalysisReport,
     ScanResult,
     ScanWebhookPayload,
@@ -323,3 +325,55 @@ class TestScanAnalysisReport:
         assert restored.repo_url == report.repo_url
         assert restored.reports[0].dependency_name == "flask"
         assert restored.scan_result.outdated[0].latest_version == "3.0.0"
+
+
+class TestPackageConfidence:
+    def test_construction(self) -> None:
+        pc = PackageConfidence(
+            name="requests",
+            confidence=0.85,
+            reason="Error message directly references requests import",
+        )
+        assert pc.name == "requests"
+        assert pc.confidence == 0.85
+        assert "requests" in pc.reason
+
+    def test_confidence_boundaries(self) -> None:
+        pc_zero = PackageConfidence(name="x", confidence=0.0, reason="safe")
+        assert pc_zero.confidence == 0.0
+        pc_one = PackageConfidence(name="x", confidence=1.0, reason="certain")
+        assert pc_one.confidence == 1.0
+
+    def test_confidence_too_high(self) -> None:
+        with pytest.raises(ValidationError):
+            PackageConfidence(name="x", confidence=1.5, reason="bad")
+
+    def test_confidence_too_low(self) -> None:
+        with pytest.raises(ValidationError):
+            PackageConfidence(name="x", confidence=-0.1, reason="bad")
+
+
+class TestMainExecutionAnalysis:
+    def test_construction(self) -> None:
+        analysis = MainExecutionAnalysis(
+            packages_likely_breaking=[
+                PackageConfidence(name="flask", confidence=0.9, reason="ImportError"),
+            ],
+            packages_likely_safe=["requests"],
+            overall_test_passed=False,
+            raw_error_summary="ImportError: cannot import name 'escape' from 'markupsafe'",
+        )
+        assert len(analysis.packages_likely_breaking) == 1
+        assert analysis.packages_likely_breaking[0].name == "flask"
+        assert analysis.packages_likely_safe == ["requests"]
+        assert analysis.overall_test_passed is False
+
+    def test_all_pass(self) -> None:
+        analysis = MainExecutionAnalysis(
+            packages_likely_breaking=[],
+            packages_likely_safe=["requests", "flask"],
+            overall_test_passed=True,
+            raw_error_summary="",
+        )
+        assert analysis.overall_test_passed is True
+        assert len(analysis.packages_likely_breaking) == 0

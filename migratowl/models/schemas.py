@@ -88,6 +88,23 @@ class ChangelogResult(TypedDict):
     format_warning: bool
 
 
+class PackageConfidence(BaseModel):
+    """Per-package confidence that this package caused a failure."""
+
+    name: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str
+
+
+class MainExecutionAnalysis(BaseModel):
+    """Agent's analysis after running main/ with all deps updated."""
+
+    packages_likely_breaking: list[PackageConfidence]
+    packages_likely_safe: list[str]
+    overall_test_passed: bool
+    raw_error_summary: str
+
+
 class AnalysisReport(BaseModel):
     """Per-dependency agent analysis output."""
 
