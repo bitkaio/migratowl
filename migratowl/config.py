@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # GitHub
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
 
+    # Rate limiting
+    model_rate_limit_rps: float = 0.1  # requests per second; 0.1 = 6 req/min
+
     # HTTP client
     http_timeout: float = 30.0
     http_retry_count: int = 3

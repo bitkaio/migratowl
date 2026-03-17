@@ -9,6 +9,7 @@ from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 from langchain.tools import ToolRuntime
 from langchain_anthropic import ChatAnthropic
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
@@ -199,6 +200,14 @@ execute_project = create_execute_project_tool(
 )
 fetch_changelog = create_fetch_changelog_tool()
 
+# --- Shared model (rate limiter shared across main agent and all subagents) ---
+_rate_limiter = InMemoryRateLimiter(
+    requests_per_second=settings.model_rate_limit_rps,
+    check_every_n_seconds=0.1,
+    max_bucket_size=1,
+)
+_model = ChatAnthropic(model=settings.model_name, rate_limiter=_rate_limiter, max_retries=8)
+
 # --- Subagent config ---
 package_analyzer = {
     "name": "package-analyzer",
@@ -209,11 +218,12 @@ package_analyzer = {
     ),
     "system_prompt": PACKAGE_ANALYZER_PROMPT,
     "tools": [copy_source, update_dependencies, execute_project, fetch_changelog],
+    "model": _model,
 }
 
 # --- Agent graph ---
 graph = create_deep_agent(
-    model=ChatAnthropic(model=settings.model_name),
+    model=_model,
     system_prompt=SYSTEM_PROMPT,
     tools=[
         clone_repo,
