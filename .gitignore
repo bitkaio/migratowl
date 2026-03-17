@@ -209,14 +209,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# AI coding tools
-.claude/
-.cursor/
-.windsurf/
-.cody/
-.continue/
-
-CLAUDE.md
+# Local files
 docs/local/
 .langgraph_api
 
