@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # GitHub
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
 
+    # LangFuse — optional observability (keys read from standard LangFuse env vars)
+    langfuse_public_key: str = Field(default="", validation_alias=AliasChoices("LANGFUSE_PUBLIC_KEY"))
+    langfuse_secret_key: str = Field(default="", validation_alias=AliasChoices("LANGFUSE_SECRET_KEY"))
+    langfuse_host: str = Field(default="https://cloud.langfuse.com", validation_alias=AliasChoices("LANGFUSE_HOST"))
+
     # Rate limiting
     model_rate_limit_rps: float = 0.1  # requests per second; 0.1 = 6 req/min
 

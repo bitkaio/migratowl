@@ -957,6 +957,7 @@ dependencies = [
     { name = "httpx" },
     { name = "langchain-anthropic" },
     { name = "langchain-kubernetes", extra = ["agent-sandbox"] },
+    { name = "langfuse" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -966,7 +967,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "langfuse" },
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -981,6 +981,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic" },
     { name = "langchain-kubernetes", extras = ["agent-sandbox"], specifier = ">=0.2.0" },
+    { name = "langfuse" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -990,7 +991,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "langfuse" },
     { name = "langgraph-cli", extras = ["inmem"] },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio" },

@@ -20,6 +20,8 @@ from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.config import get_settings
+from migratowl.observability import _langfuse_handler
+from migratowl.observability import get_invoke_config as get_invoke_config  # re-export
 from migratowl.patches import apply_patches
 
 apply_patches()
@@ -211,7 +213,12 @@ _rate_limiter = InMemoryRateLimiter(
     check_every_n_seconds=0.1,
     max_bucket_size=1,
 )
-_model = ChatAnthropic(model=settings.model_name, rate_limiter=_rate_limiter, max_retries=8)
+_model = ChatAnthropic(
+    model=settings.model_name,
+    rate_limiter=_rate_limiter,
+    max_retries=8,
+    callbacks=[_langfuse_handler] if _langfuse_handler else None,
+)
 
 # --- Subagent config ---
 package_analyzer = {
