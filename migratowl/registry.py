@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from packaging.version import InvalidVersion, Version
 
+from migratowl.config import get_settings
 from migratowl.models.schemas import Dependency, Ecosystem, OutdatedDependency
 
 logger = logging.getLogger(__name__)
@@ -224,8 +225,9 @@ async def check_outdated(
 
     owns_client = client is None
     if owns_client:
+        settings = get_settings()
         client = httpx.AsyncClient(
-            timeout=15.0,
+            timeout=settings.http_timeout,
             headers={"User-Agent": _USER_AGENT},
         )
 

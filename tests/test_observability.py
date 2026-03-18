@@ -144,3 +144,89 @@ class TestGetInvokeConfig:
             result = obs_module.get_invoke_config()
 
         assert "metadata" not in result
+
+
+class TestInjectSessionId:
+    def test_injects_thread_id_as_session_id(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        config = {"configurable": {"thread_id": "thread-abc"}}
+        with patch.object(obs_module, "_langfuse_handler", MagicMock()):
+            result = obs_module.inject_session_id(config)
+
+        assert result["metadata"]["langfuse_session_id"] == "thread-abc"
+
+    def test_preserves_existing_session_id(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        config = {
+            "configurable": {"thread_id": "thread-abc"},
+            "metadata": {"langfuse_session_id": "explicit-session"},
+        }
+        with patch.object(obs_module, "_langfuse_handler", MagicMock()):
+            result = obs_module.inject_session_id(config)
+
+        assert result["metadata"]["langfuse_session_id"] == "explicit-session"
+
+    def test_no_op_when_no_thread_id(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        config = {"configurable": {}, "metadata": {}}
+        with patch.object(obs_module, "_langfuse_handler", MagicMock()):
+            result = obs_module.inject_session_id(config)
+
+        assert "langfuse_session_id" not in result.get("metadata", {})
+
+    def test_no_op_when_handler_not_configured(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        config = {"configurable": {"thread_id": "thread-abc"}}
+        with patch.object(obs_module, "_langfuse_handler", None):
+            result = obs_module.inject_session_id(config)
+
+        assert result == config
+
+    def test_preserves_other_metadata_keys(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        config = {
+            "configurable": {"thread_id": "thread-abc"},
+            "metadata": {"other_key": "other_value"},
+        }
+        with patch.object(obs_module, "_langfuse_handler", MagicMock()):
+            result = obs_module.inject_session_id(config)
+
+        assert result["metadata"]["other_key"] == "other_value"
+        assert result["metadata"]["langfuse_session_id"] == "thread-abc"
+
+    def test_handles_none_config(self) -> None:
+        import importlib
+
+        import migratowl.observability as obs_module
+
+        importlib.reload(obs_module)
+
+        with patch.object(obs_module, "_langfuse_handler", MagicMock()):
+            result = obs_module.inject_session_id(None)
+
+        assert result is None

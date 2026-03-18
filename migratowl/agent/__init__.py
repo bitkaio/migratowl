@@ -12,6 +12,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
+from migratowl.agent.session_graph import apply_session_injection
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
@@ -187,6 +188,7 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
     try:
         return _get_sandbox_backend()
     except Exception as exc:
+        logger.exception("Kubernetes sandbox initialization failed: %s", exc)
         raise RuntimeError("Kubernetes sandbox is required but failed to initialize.") from exc
 
 
@@ -213,11 +215,15 @@ _rate_limiter = InMemoryRateLimiter(
     check_every_n_seconds=0.1,
     max_bucket_size=1,
 )
+_base_url = (
+    settings.anthropic_base_url if settings.model_provider == "anthropic" else settings.openai_base_url
+)
 _model = init_chat_model(
     f"{settings.model_provider}:{settings.model_name}",
     rate_limiter=_rate_limiter,
     max_retries=8,
     callbacks=[_langfuse_handler] if _langfuse_handler else None,
+    **({"base_url": _base_url} if _base_url else {}),
 )
 
 # --- Subagent config ---
@@ -234,7 +240,7 @@ package_analyzer = {
 }
 
 # --- Agent graph ---
-graph = create_deep_agent(
+graph = apply_session_injection(create_deep_agent(
     model=_model,
     system_prompt=SYSTEM_PROMPT,
     tools=[
@@ -249,4 +255,4 @@ graph = create_deep_agent(
     ],
     backend=_k8s_backend_factory,
     subagents=[package_analyzer],
-)
+))

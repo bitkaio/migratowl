@@ -48,6 +48,39 @@ def create_langfuse_handler(settings: Settings | None = None) -> Any | None:
     return CallbackHandler()
 
 
+def inject_session_id(config: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Copy ``thread_id`` from LangGraph configurable into Langfuse session metadata.
+
+    When invoked via LangGraph Server the session identifier lives in
+    ``config["configurable"]["thread_id"]``, not in ``config["metadata"]``.
+    This function bridges the two so that every LangGraph run is automatically
+    grouped into a Langfuse session — even when the caller never calls
+    ``get_invoke_config``.
+
+    If ``_langfuse_handler`` is not configured, or if ``langfuse_session_id``
+    is already present in metadata, the config is returned unchanged.
+
+    Args:
+        config: LangChain ``RunnableConfig`` dict, or ``None``.
+
+    Returns:
+        Config dict with ``metadata["langfuse_session_id"]`` set, or the
+        original value unchanged when no action is needed.
+    """
+    if config is None or _langfuse_handler is None:
+        return config
+
+    thread_id: str | None = config.get("configurable", {}).get("thread_id")
+    if not thread_id:
+        return config
+
+    metadata: dict[str, Any] = config.get("metadata", {})
+    if metadata.get("langfuse_session_id"):
+        return config
+
+    return {**config, "metadata": {**metadata, "langfuse_session_id": thread_id}}
+
+
 def get_invoke_config(session_id: str | None = None) -> dict[str, Any]:
     """Return a LangChain runnable config for graph.ainvoke() with LangFuse tracing.
 
