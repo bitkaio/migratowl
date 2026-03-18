@@ -7,8 +7,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
+from langchain.chat_models import init_chat_model
 from langchain.tools import ToolRuntime
-from langchain_anthropic import ChatAnthropic
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
@@ -213,8 +213,8 @@ _rate_limiter = InMemoryRateLimiter(
     check_every_n_seconds=0.1,
     max_bucket_size=1,
 )
-_model = ChatAnthropic(
-    model=settings.model_name,
+_model = init_chat_model(
+    f"{settings.model_provider}:{settings.model_name}",
     rate_limiter=_rate_limiter,
     max_retries=8,
     callbacks=[_langfuse_handler] if _langfuse_handler else None,

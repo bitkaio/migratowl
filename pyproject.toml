@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "langchain-kubernetes[agent-sandbox]>=0.2.0",
     "langchain-anthropic",
+    "langchain-openai",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "python-dotenv",

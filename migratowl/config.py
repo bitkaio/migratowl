@@ -1,5 +1,7 @@
 """Centralized configuration for MigratOwl."""
 
+from typing import Literal
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -7,7 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MIGRATOWL_", env_file=".env", extra="ignore")
 
-    # LLM (API key is read by langchain-anthropic directly from ANTHROPIC_API_KEY)
+    # LLM — API keys read directly from env: ANTHROPIC_API_KEY or OPENAI_API_KEY
+    model_provider: Literal["anthropic", "openai"] = "anthropic"
     model_name: str = "claude-sonnet-4-6"
 
     # Kubernetes sandbox

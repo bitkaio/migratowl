@@ -1,5 +1,8 @@
 """Tests for MigratOwl configuration."""
 
+import pytest
+from pydantic import ValidationError
+
 from migratowl.config import Settings, get_settings
 
 
@@ -52,6 +55,10 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.max_output_chars == 30_000
 
+    def test_default_model_provider(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.model_provider == "anthropic"
+
 
 class TestSettingsFromEnv:
     def test_env_override_model_name(self, monkeypatch: object) -> None:
@@ -93,6 +100,16 @@ class TestSettingsFromEnv:
         monkeypatch.setenv("MIGRATOWL_HTTP_TIMEOUT", "60.0")
         settings = Settings()
         assert settings.http_timeout == 60.0
+
+    def test_env_override_model_provider_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "openai")
+        settings = Settings()
+        assert settings.model_provider == "openai"
+
+    def test_invalid_model_provider_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "gemini")
+        with pytest.raises(ValidationError):
+            Settings()
 
 
 class TestGetSettings:

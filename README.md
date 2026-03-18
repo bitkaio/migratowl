@@ -77,8 +77,9 @@ Response payload (sent to `callback_url` on completion):
 
 - **Python 3.13+** / **FastAPI** / **asyncio**
 - **deepagents** — LangChain agent harness (LangGraph-based) for AI investigation
-- **claude-sonnet-4-6** — LLM via `langchain-anthropic`
+- **LLM** — `langchain-anthropic` (default: `claude-sonnet-4-6`) or `langchain-openai` (e.g. `gpt-4o`), selected via `MIGRATOWL_MODEL_PROVIDER`
 - **langchain-kubernetes** — Kubernetes sandbox backend (no SaaS, code stays in-cluster)
+- **LangFuse** — optional observability; set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` to enable tracing
 
 ## Security
 
@@ -97,7 +98,7 @@ All untrusted build and test commands run inside ephemeral Kubernetes pods:
 uv sync
 
 # Configure environment
-cp .env.example .env   # add ANTHROPIC_API_KEY
+cp .env.example .env   # set ANTHROPIC_API_KEY (or OPENAI_API_KEY if using MIGRATOWL_MODEL_PROVIDER=openai)
 
 # Start local Kubernetes cluster
 minikube start --driver=docker --memory=8192 --cpus=4
