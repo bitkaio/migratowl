@@ -12,6 +12,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_kubernetes import KubernetesProvider, KubernetesProviderConfig
 
+from migratowl.agent.subagents import create_package_analyzer_subagent
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
@@ -51,7 +52,7 @@ You operate inside a Kubernetes sandbox with a workspace laid out as:
 
 ### Phase 2: Main Analysis
 5. Run copy_source("main") to create the main/ working copy.
-6. Run update_dependencies("main", ecosystem, all_outdated_packages, install_command) \
+6. Run update_dependencies("main", ecosystem, all_outdated_packages) \
 to update every outdated dependency at once.
 7. Run execute_project("main", install_command, test_command) to install and run tests.
 
@@ -86,26 +87,6 @@ into a final ScanAnalysisReport.
 - Only call fetch_changelog_tool when a package causes errors or warnings.
 - Per-package folders share the same sandbox — isolation is by path, not by instance.
 """.format(confidence_threshold=settings.confidence_threshold)  # noqa: UP032
-
-PACKAGE_ANALYZER_PROMPT = """\
-You are a dependency migration analyzer for a single package.
-
-You are given a package name, its current and latest version, the ecosystem,
-and install/test commands.
-
-Workflow:
-1. Copy source to the package folder using copy_source("{package_name}")
-2. Update ONLY the specified package using update_dependencies
-3. Run the project using execute_project
-4. If tests fail or produce warnings, call fetch_changelog_tool to understand
-   what changed. Suggest a fix citing the exact changelog section.
-5. If tests pass cleanly, report is_breaking=false with high confidence.
-   Do NOT call fetch_changelog_tool if there are no errors.
-
-Return your final analysis as JSON matching:
-{dependency_name, is_breaking, error_summary, changelog_citation, \
-suggested_human_fix, confidence}
-"""
 
 # --- Sandbox lifecycle (lazy init via background thread) ---
 # TODO: When FastAPI webhook is implemented, move sandbox init to a lifespan
@@ -214,17 +195,11 @@ _rate_limiter = InMemoryRateLimiter(
 _model = ChatAnthropic(model=settings.model_name, rate_limiter=_rate_limiter, max_retries=8)
 
 # --- Subagent config ---
-package_analyzer = {
-    "name": "package-analyzer",
-    "description": (
-        "Analyzes a single package upgrade in isolation. Copies source, "
-        "updates only that package, runs tests, optionally fetches changelog, "
-        "and returns an AnalysisReport."
-    ),
-    "system_prompt": PACKAGE_ANALYZER_PROMPT,
-    "tools": [copy_source, update_dependencies, execute_project, fetch_changelog],
-    "model": _model,
-}
+package_analyzer = create_package_analyzer_subagent(
+    model=_model,
+    backend_factory=_k8s_backend_factory,
+    tools=[copy_source, update_dependencies, execute_project, fetch_changelog],
+)
 
 # --- Agent graph ---
 graph = create_deep_agent(

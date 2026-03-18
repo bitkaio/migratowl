@@ -14,7 +14,6 @@ class TestUpdateDependenciesTool:
         backend = MagicMock()
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),  # pip install requests==2.31.0
-            ExecResult(output="Successfully installed\n", exit_code=0),  # pip install -e .
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -23,7 +22,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
         pip_cmd = backend.execute.call_args_list[0][0][0]
@@ -36,7 +34,6 @@ class TestUpdateDependenciesTool:
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),  # pip install requests==2.31.0
             ExecResult(output="", exit_code=0),  # pip install flask==3.0.0
-            ExecResult(output="", exit_code=0),  # pip install -e .
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -48,17 +45,15 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
-        assert backend.execute.call_count == 3
+        assert backend.execute.call_count == 2
         assert "requests" in result and "flask" in result
 
     def test_nodejs_packages(self) -> None:
         backend = MagicMock()
         backend.execute.side_effect = [
             ExecResult(output="added 1 package\n", exit_code=0),  # npm install express@5.0.0
-            ExecResult(output="", exit_code=0),  # npm install (install_command)
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -67,7 +62,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "nodejs",
             "packages_json": packages,
-            "install_command": "npm install",
         })
 
         npm_cmd = backend.execute.call_args_list[0][0][0]
@@ -87,7 +81,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "go",
             "packages_json": packages,
-            "install_command": "go mod download",
         })
 
         go_cmd = backend.execute.call_args_list[0][0][0]
@@ -107,7 +100,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "rust",
             "packages_json": packages,
-            "install_command": "cargo build",
         })
 
         cargo_cmd = backend.execute.call_args_list[0][0][0]
@@ -117,7 +109,6 @@ class TestUpdateDependenciesTool:
         backend = MagicMock()
         backend.execute.side_effect = [
             ExecResult(output="ERROR: No matching distribution found\n", exit_code=1),
-            ExecResult(output="", exit_code=0),  # install_command still runs
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -126,7 +117,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
         assert "fail" in result.lower() or "error" in result.lower()
@@ -136,7 +126,6 @@ class TestUpdateDependenciesTool:
         backend = MagicMock()
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),  # pip install
-            ExecResult(output="", exit_code=0),  # install_command
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -145,7 +134,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
         for call in backend.execute.call_args_list:
@@ -157,7 +145,6 @@ class TestUpdateDependenciesTool:
         backend = MagicMock()
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),
-            ExecResult(output="", exit_code=0),
         ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -166,7 +153,6 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
         for call in backend.execute.call_args_list:
@@ -175,9 +161,6 @@ class TestUpdateDependenciesTool:
 
     def test_empty_package_list(self) -> None:
         backend = MagicMock()
-        backend.execute.side_effect = [
-            ExecResult(output="", exit_code=0),  # install_command
-        ]
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
         packages = json.dumps([])
@@ -185,8 +168,46 @@ class TestUpdateDependenciesTool:
             "folder_name": "main",
             "ecosystem": "python",
             "packages_json": packages,
-            "install_command": "pip install -e .",
         })
 
-        # Should still run install command, no package updates
-        assert "no packages" in result.lower() or "0" in result or "success" in result.lower()
+        backend.execute.assert_not_called()
+        assert "0" in result or "no packages" in result.lower() or "success" in result.lower()
+
+    def test_does_not_run_install_command_after_python_update(self) -> None:
+        """update_dependencies must NOT run install_command — that belongs to execute_project."""
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # pip install pkg==ver only
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{"name": "requests", "latest_version": "2.31.0"}])
+        tool.invoke({
+            "folder_name": "main",
+            "ecosystem": "python",
+            "packages_json": packages,
+        })
+
+        assert backend.execute.call_count == 1
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "pip install -e" not in cmd  # no install_command re-run
+        assert "requests==2.31.0" in cmd
+
+    def test_does_not_run_install_command_after_nodejs_update(self) -> None:
+        """update_dependencies must NOT run install_command — that belongs to execute_project."""
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # npm install pkg@ver only
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{"name": "express", "latest_version": "5.0.0"}])
+        tool.invoke({
+            "folder_name": "main",
+            "ecosystem": "nodejs",
+            "packages_json": packages,
+        })
+
+        assert backend.execute.call_count == 1
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "express@5.0.0" in cmd
