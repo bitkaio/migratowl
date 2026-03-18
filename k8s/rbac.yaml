@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: migratowl
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: migratowl-sandbox-role
+  namespace: default
+rules:
+  # Manage Sandbox CRs (agent-sandbox mode — controller creates the actual Pods)
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+
+  # Exec into sandbox pods and stream logs
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # Read pod status to detect readiness
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: migratowl-sandbox-rolebinding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: migratowl
+    namespace: default
+roleRef:
+  kind: Role
+  name: migratowl-sandbox-role
+  apiGroup: rbac.authorization.k8s.io
