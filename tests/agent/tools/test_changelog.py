@@ -57,3 +57,56 @@ class TestFetchChangelogTool:
         tool = create_fetch_changelog_tool()
         with pytest.raises(json.JSONDecodeError):
             await tool.ainvoke({"outdated_dep_json": "not json"})
+
+    async def test_large_changelog_is_reduced(self) -> None:
+        """Large changelog output should be under max_changelog_chars."""
+        # Build a changelog with many large breaking-change entries (so extraction keeps them)
+        versions = [f"## {i}.0.0\nBREAKING CHANGE: {'x' * 5000}\n" for i in range(50, 0, -1)]
+        big_changelog = "\n".join(versions)
+
+        input_json = json.dumps({
+            "name": "bigpkg",
+            "current_version": "0.0.0",
+            "latest_version": "50.0.0",
+            "changelog_url": "https://example.com/CHANGELOG.md",
+        })
+
+        with (
+            patch(
+                "migratowl.agent.tools.changelog.fetch_changelog",
+                new_callable=AsyncMock,
+                return_value=(big_changelog, []),
+            ),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 5_000
+            tool = create_fetch_changelog_tool()
+            raw = await tool.ainvoke({"outdated_dep_json": input_json})
+
+        assert len(raw) <= 5_000 + 500  # some overhead for JSON envelope + warnings
+
+    async def test_truncation_warning_added(self) -> None:
+        """When truncation occurs, warnings should include the truncation message."""
+        versions = [f"## {i}.0.0\nBREAKING CHANGE: {'y' * 3000}\n" for i in range(20, 0, -1)]
+        big_changelog = "\n".join(versions)
+
+        input_json = json.dumps({
+            "name": "bigpkg",
+            "current_version": "0.0.0",
+            "latest_version": "20.0.0",
+            "changelog_url": "https://example.com/CHANGELOG.md",
+        })
+
+        with (
+            patch(
+                "migratowl.agent.tools.changelog.fetch_changelog",
+                new_callable=AsyncMock,
+                return_value=(big_changelog, []),
+            ),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 2_000
+            tool = create_fetch_changelog_tool()
+            result = json.loads(await tool.ainvoke({"outdated_dep_json": input_json}))
+
+        assert any("truncated" in w.lower() for w in result["warnings"])

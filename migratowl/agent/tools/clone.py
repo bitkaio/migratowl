@@ -42,7 +42,21 @@ def create_clone_repo_tool(
         result = backend.execute(cmd)
 
         if result.exit_code != 0:
-            return f"Failed to clone {repo_url} (exit code {result.exit_code}): {result.output}"
+            if branch == "main":
+                # Fallback: retry with repo's default branch
+                backend.execute(f"rm -rf {source_path}")
+                cmd_default = f"git clone --depth 1 {repo_url} {source_path}"
+                result_default = backend.execute(cmd_default)
+                if result_default.exit_code == 0:
+                    result = result_default
+                    branch = "(default)"
+                else:
+                    return (
+                        f"Failed to clone {repo_url}: branch 'main' failed (exit {result.exit_code}), "
+                        f"default branch also failed (exit {result_default.exit_code}): {result_default.output}"
+                    )
+            else:
+                return f"Failed to clone {repo_url} (exit code {result.exit_code}): {result.output}"
 
         verify = backend.execute(f"ls {source_path}")
         if not verify.output.strip():

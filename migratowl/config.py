@@ -23,13 +23,19 @@ class Settings(BaseSettings):
 
     # Analysis
     confidence_threshold: float = 0.7
-    max_output_chars: int = 50_000
+    max_output_chars: int = 30_000
 
     # GitHub
     github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
 
     # Rate limiting
     model_rate_limit_rps: float = 0.1  # requests per second; 0.1 = 6 req/min
+
+    # Changelog
+    max_changelog_chars: int = 15_000
+
+    # Registry output cap
+    max_outdated_deps: int = 100
 
     # HTTP client
     http_timeout: float = 30.0

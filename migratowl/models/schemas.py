@@ -35,6 +35,7 @@ class ScanWebhookPayload(BaseModel):
     callback_url: str | None = None
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
+    ecosystems: list[Ecosystem] | None = None
 
 
 class Dependency(BaseModel):

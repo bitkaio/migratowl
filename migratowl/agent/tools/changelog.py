@@ -5,11 +5,19 @@ from typing import Any
 
 from langchain.tools import tool
 
-from migratowl.changelog import chunk_changelog_by_version, fetch_changelog, filter_chunks_by_version_range
+from migratowl.changelog import (
+    chunk_changelog_by_version,
+    extract_breaking_changes,
+    fetch_changelog,
+    filter_chunks_by_version_range,
+    truncate_chunks,
+)
+from migratowl.config import get_settings
 
 
 def create_fetch_changelog_tool() -> Any:
     """Create a fetch_changelog tool for the agent."""
+    settings = get_settings()
 
     @tool
     async def fetch_changelog_tool(outdated_dep_json: str) -> str:
@@ -30,6 +38,11 @@ def create_fetch_changelog_tool() -> Any:
             dep["current_version"],
             dep["latest_version"],
         )
-        return json.dumps({"chunks": filtered, "warnings": warnings})
+        extracted = extract_breaking_changes(filtered)
+        capped, truncated = truncate_chunks(extracted, settings.max_changelog_chars)
+        warnings = list(warnings)
+        if truncated:
+            warnings.append("Changelog truncated to fit context budget")
+        return json.dumps({"chunks": capped, "warnings": warnings})
 
     return fetch_changelog_tool

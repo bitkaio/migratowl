@@ -5,53 +5,52 @@ from migratowl.config import Settings, get_settings
 
 class TestSettingsDefaults:
     def test_default_model_name(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.model_name == "claude-sonnet-4-6"
 
     def test_default_sandbox_template(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.sandbox_template == "migratowl-sandbox-template"
 
     def test_default_sandbox_namespace(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.sandbox_namespace == "default"
 
     def test_default_sandbox_connection_mode(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.sandbox_connection_mode == "tunnel"
 
     def test_default_workspace_path(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.workspace_path == "/home/user/workspace"
 
     def test_default_scan_registry_concurrency(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.scan_registry_concurrency == 10
 
     def test_default_github_token(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.github_token == ""
 
     def test_default_http_timeout(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.http_timeout == 30.0
 
     def test_default_http_retry_count(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.http_retry_count == 3
 
     def test_default_http_retry_backoff_base(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.http_retry_backoff_base == 0.5
 
-
     def test_default_confidence_threshold(self) -> None:
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.confidence_threshold == 0.7
 
     def test_default_max_output_chars(self) -> None:
-        settings = Settings()
-        assert settings.max_output_chars == 50_000
+        settings = Settings(_env_file=None)
+        assert settings.max_output_chars == 30_000
 
 
 class TestSettingsFromEnv:

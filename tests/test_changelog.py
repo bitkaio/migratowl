@@ -8,8 +8,10 @@ import pytest
 from migratowl.changelog import (
     _extract_changelog_link,
     chunk_changelog_by_version,
+    extract_breaking_changes,
     fetch_changelog,
     filter_chunks_by_version_range,
+    truncate_chunks,
 )
 
 
@@ -158,3 +160,104 @@ class TestFetchChangelog:
         assert text == ""
         assert len(warnings) == 1
         assert "testpkg" in warnings[0]
+
+
+class TestExtractBreakingChanges:
+    def test_chunks_with_breaking_changes_preserved(self) -> None:
+        chunks = [
+            {"version": "2.0.0", "content": "## BREAKING CHANGES\n- Removed old API\n\nOther stuff"},
+            {"version": "1.1.0", "content": "## Deprecated\n- Old method deprecated"},
+        ]
+        result = extract_breaking_changes(chunks)
+        assert len(result) == 2
+        assert "Removed old API" in result[0]["content"]
+        assert "deprecated" in result[1]["content"].lower()
+
+    def test_chunks_without_breaking_changes(self) -> None:
+        chunks = [
+            {"version": "1.1.0", "content": "- Added new feature\n- Fixed typo"},
+        ]
+        result = extract_breaking_changes(chunks)
+        assert len(result) == 1
+        assert result[0]["version"] == "1.1.0"
+        assert result[0]["content"] == "(no breaking changes noted)"
+
+    def test_mixed_chunks(self) -> None:
+        chunks = [
+            {"version": "3.0.0", "content": "## Breaking Change\n- API removed\n\n## Features\n- New widget"},
+            {"version": "2.1.0", "content": "- Minor improvements"},
+        ]
+        result = extract_breaking_changes(chunks)
+        assert "API removed" in result[0]["content"]
+        # Non-breaking content should not be in the extracted result
+        assert result[1]["content"] == "(no breaking changes noted)"
+
+    def test_empty_chunks(self) -> None:
+        assert extract_breaking_changes([]) == []
+
+    def test_case_insensitivity(self) -> None:
+        for label in ["BREAKING CHANGE", "breaking change", "Breaking Change"]:
+            chunks = [{"version": "1.0.0", "content": f"## {label}\n- Something changed"}]
+            result = extract_breaking_changes(chunks)
+            assert "Something changed" in result[0]["content"], f"Failed for label: {label}"
+
+    def test_version_preserved(self) -> None:
+        chunks = [{"version": "5.0.0", "content": "Migration guide: do X"}]
+        result = extract_breaking_changes(chunks)
+        assert result[0]["version"] == "5.0.0"
+
+    def test_removal_keyword(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "- Removed legacy endpoint"}]
+        result = extract_breaking_changes(chunks)
+        assert "Removed legacy endpoint" in result[0]["content"]
+
+    def test_migration_keyword(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "## Migration Guide\nDo X then Y"}]
+        result = extract_breaking_changes(chunks)
+        assert "Do X then Y" in result[0]["content"]
+
+    def test_renamed_keyword(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "- Renamed `foo` to `bar`"}]
+        result = extract_breaking_changes(chunks)
+        assert "Renamed" in result[0]["content"]
+
+    def test_no_longer_supported_keyword(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "- No longer supports Node 12"}]
+        result = extract_breaking_changes(chunks)
+        assert "No longer supports" in result[0]["content"]
+
+
+class TestTruncateChunks:
+    def test_under_budget(self) -> None:
+        chunks = [
+            {"version": "2.0.0", "content": "Small change"},
+            {"version": "1.0.0", "content": "Initial"},
+        ]
+        result, truncated = truncate_chunks(chunks, 10_000)
+        assert result == chunks
+        assert truncated is False
+
+    def test_over_budget_drops_oldest(self) -> None:
+        chunks = [
+            {"version": "3.0.0", "content": "A" * 100},
+            {"version": "2.0.0", "content": "B" * 100},
+            {"version": "1.0.0", "content": "C" * 100},
+        ]
+        # Each chunk is ~130 bytes in JSON; budget of 150 fits only the first
+        result, truncated = truncate_chunks(chunks, 150)
+        assert truncated is True
+        assert len(result) < len(chunks)
+        assert result[0]["version"] == "3.0.0"
+
+    def test_single_large_chunk_truncated(self) -> None:
+        chunks = [{"version": "1.0.0", "content": "X" * 10_000}]
+        result, truncated = truncate_chunks(chunks, 500)
+        assert truncated is True
+        assert len(result) == 1
+        assert result[0]["content"].endswith("... [truncated]")
+        assert result[0]["version"] == "1.0.0"
+
+    def test_empty_list(self) -> None:
+        result, truncated = truncate_chunks([], 1000)
+        assert result == []
+        assert truncated is False

@@ -49,7 +49,12 @@ class TestCloneRepoTool:
             ExecResult(
                 output="fatal: repository 'https://github.com/bad/repo' not found",
                 exit_code=128,
-            ),
+            ),  # clone --branch main FAILS
+            ExecResult(output="", exit_code=0),  # rm -rf cleanup
+            ExecResult(
+                output="fatal: repository 'https://github.com/bad/repo' not found",
+                exit_code=128,
+            ),  # clone without --branch ALSO FAILS
         ]
         tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
@@ -161,6 +166,57 @@ class TestCloneRepoTool:
 
         assert backend.execute.call_count == 3
         assert "success" in result.lower() or "cloned" in result.lower()
+
+    def test_main_branch_fails_fallback_succeeds(self) -> None:
+        """branch='main' (default) fails, retry without --branch succeeds."""
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),          # (1) ls source/ — empty
+            ExecResult(output="error", exit_code=128),   # (2) git clone --branch main FAILS
+            ExecResult(output="", exit_code=0),          # (3) rm -rf cleanup
+            ExecResult(output="Cloning...", exit_code=0),  # (4) git clone without --branch SUCCEEDS
+            ExecResult(output="README.md\n", exit_code=0),  # (5) ls verify
+        ]
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = tool.invoke({"repo_url": "https://github.com/psf/requests"})
+
+        assert "success" in result.lower()
+        # Call 3 (index 2) must be rm -rf
+        rm_cmd = backend.execute.call_args_list[2][0][0]
+        assert "rm -rf" in rm_cmd
+        # Call 4 (index 3) must NOT contain --branch
+        retry_cmd = backend.execute.call_args_list[3][0][0]
+        assert "--branch" not in retry_cmd
+
+    def test_main_branch_fails_fallback_also_fails(self) -> None:
+        """branch='main' fails and the fallback default-branch clone also fails."""
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),         # (1) ls source/ — empty
+            ExecResult(output="error1", exit_code=128), # (2) git clone --branch main FAILS
+            ExecResult(output="", exit_code=0),         # (3) rm -rf cleanup
+            ExecResult(output="error2", exit_code=1),   # (4) git clone without --branch ALSO FAILS
+        ]
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = tool.invoke({"repo_url": "https://github.com/psf/requests"})
+
+        assert "failed" in result.lower()
+
+    def test_explicit_non_main_branch_fails_no_fallback(self) -> None:
+        """branch='develop' fails — no fallback attempted, only 2 execute calls."""
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),        # (1) ls source/ — empty
+            ExecResult(output="error", exit_code=128), # (2) git clone --branch develop FAILS
+        ]
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = tool.invoke({"repo_url": "https://github.com/psf/requests", "branch": "develop"})
+
+        assert backend.execute.call_count == 2
+        assert "failed" in result.lower()
 
 
 class TestCopySourceTool:

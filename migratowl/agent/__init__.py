@@ -20,6 +20,9 @@ from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.config import get_settings
+from migratowl.patches import apply_patches
+
+apply_patches()
 
 settings = get_settings()
 
@@ -43,6 +46,8 @@ You operate inside a Kubernetes sandbox with a workspace laid out as:
 2. Run detect_languages on source/ to find ecosystems and default commands.
 3. Run scan_dependencies on source/ to find all declared dependencies.
 4. Run check_outdated_deps to identify which have newer versions.
+   Result format: {{"outdated": [...], "warning": null or "..."}}.
+   If warning is present, only the largest version gaps are shown.
 
 ### Phase 2: Main Analysis
 5. Run copy_source("main") to create the main/ working copy.

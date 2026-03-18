@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 
 import html2text as _html2text
@@ -520,3 +521,111 @@ def filter_chunks_by_version_range(
             filtered.append(chunk)
 
     return filtered
+
+
+# ---------------------------------------------------------------------------
+# Semantic extraction & truncation
+# ---------------------------------------------------------------------------
+
+_BREAKING_CHANGE_PATTERNS = re.compile(
+    r"(?:^|\n)"
+    r"(?:#+\s*|[-*]\s+)?"
+    r"(?:"
+    r"break(?:ing)?[\s_-]?change"
+    r"|deprecat"
+    r"|remov(?:ed?|ing|al)"
+    r"|renam(?:ed?|ing)"
+    r"|migrat(?:e|ion|ing)"
+    r"|upgrade[\s_-]?guide"
+    r"|backwards?[\s_-]?(?:in)?compat"
+    r"|no[\s_-]?longer[\s_-]?support"
+    r")",
+    re.IGNORECASE,
+)
+
+# Matches the start of a markdown heading or a blank line (section boundary).
+_SECTION_BOUNDARY = re.compile(r"(?:^|\n)(?=#{1,6}\s|\s*$)")
+
+
+def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
+    """Filter chunk content to only breaking-change-related sections.
+
+    For each chunk:
+    - If breaking change patterns are found, extract the matching
+      line + subsequent lines until a section boundary.
+    - If no patterns match, replace content with a placeholder.
+    - Version keys are always preserved.
+    """
+    if not chunks:
+        return []
+
+    result = []
+    for chunk in chunks:
+        content = chunk["content"]
+        matches = list(_BREAKING_CHANGE_PATTERNS.finditer(content))
+
+        if not matches:
+            result.append({"version": chunk["version"], "content": "(no breaking changes noted)"})
+            continue
+
+        # Extract paragraphs around each match.
+        extracted_sections: list[str] = []
+        for m in matches:
+            # Find start of the line containing the match.
+            line_start = content.rfind("\n", 0, m.start()) + 1
+            # Find the end of the section: next blank line or heading.
+            after = content[m.end() :]
+            boundary = _SECTION_BOUNDARY.search(after)
+            if boundary:
+                section_end = m.end() + boundary.start()
+            else:
+                section_end = len(content)
+            section = content[line_start:section_end].strip()
+            if section and section not in extracted_sections:
+                extracted_sections.append(section)
+
+        result.append({
+            "version": chunk["version"],
+            "content": "\n\n".join(extracted_sections) if extracted_sections else "(no breaking changes noted)",
+        })
+
+    return result
+
+
+def truncate_chunks(chunks: list[dict], max_chars: int) -> tuple[list[dict], bool]:
+    """Apply a hard character budget to changelog chunks.
+
+    Walks chunks from first (newest) to last (oldest). Returns
+    ``(kept_chunks, was_truncated)``.
+    """
+    if not chunks:
+        return [], False
+
+    kept: list[dict] = []
+    budget = max_chars
+    was_truncated = False
+
+    for chunk in chunks:
+        chunk_size = len(json.dumps(chunk))
+
+        if chunk_size <= budget:
+            kept.append(chunk)
+            budget -= chunk_size
+        elif budget > 0:
+            # Fit a truncated version of this chunk.
+            suffix = "... [truncated]"
+            # Reserve space for the JSON envelope minus the content.
+            envelope_size = len(json.dumps({"version": chunk["version"], "content": suffix}))
+            available = budget - envelope_size + len(suffix)
+            if available > 0:
+                truncated_content = chunk["content"][:available] + suffix
+            else:
+                truncated_content = suffix
+            kept.append({"version": chunk["version"], "content": truncated_content})
+            was_truncated = True
+            break
+        else:
+            was_truncated = True
+            break
+
+    return kept, was_truncated
