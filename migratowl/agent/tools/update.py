@@ -23,15 +23,15 @@ def create_update_dependencies_tool(
         folder_name: str,
         ecosystem: str,
         packages_json: str,
-        install_command: str,
     ) -> str:
         """Update specific packages to their latest versions in a working folder.
+
+        After this tool returns, call execute_project to install and run tests.
 
         Args:
             folder_name: Target folder name (e.g. "main", "requests").
             ecosystem: One of "python", "nodejs", "go", "rust".
             packages_json: JSON array of objects with "name" and "latest_version".
-            install_command: Command to run after updating (e.g. "pip install -e .").
         """
         backend = get_backend()
         folder_path = f"{workspace_path}/{folder_name}"
@@ -55,7 +55,7 @@ def create_update_dependencies_tool(
             if result.exit_code != 0:
                 has_failure = True
 
-        # Run post-update command (go mod tidy for Go, install_command for others)
+        # Go requires go mod tidy after go get to sync go.sum
         if ecosystem == "go":
             tidy = backend.execute(_sh(f"cd {folder_path} && go mod tidy"))
             results.append({
@@ -64,18 +64,6 @@ def create_update_dependencies_tool(
                 "output": tidy.output.strip(),
             })
             if tidy.exit_code != 0:
-                has_failure = True
-        elif ecosystem != "rust":
-            # Python/Node.js: run install command
-            install = backend.execute(
-                _sh(f"cd {folder_path} && {install_command}")
-            )
-            results.append({
-                "package": f"(install: {install_command})",
-                "exit_code": install.exit_code,
-                "output": install.output.strip(),
-            })
-            if install.exit_code != 0:
                 has_failure = True
 
         summary_lines = []
