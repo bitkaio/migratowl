@@ -79,7 +79,7 @@ def _cleanup() -> None:
         logger.warning("Failed to clean up sandbox.", exc_info=True)
 
 
-def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
+def _k8s_backend_factory(runtime: ToolRuntime | None = None) -> BackendProtocol:
     """Return cached K8s sandbox — raises if unavailable."""
     try:
         return _get_sandbox_backend()
