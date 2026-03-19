@@ -45,7 +45,47 @@ class TestBuildUserMessage:
 
 
 class TestExtractReport:
-    def test_extracts_from_final_message(self) -> None:
+    def test_extracts_structured_response_pydantic_model(self) -> None:
+        from migratowl.models.schemas import AnalysisReport, ScanAnalysisReport, ScanResult
+
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        structured = ScanAnalysisReport(
+            repo_url="https://github.com/x/y",
+            branch_name="main",
+            scan_result=ScanResult(
+                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=1.0
+            ),
+            reports=[],
+            total_duration_seconds=5.0,
+        )
+        agent_result = {"structured_response": structured, "messages": []}
+        report = extract_report(agent_result, payload)
+        assert report.repo_url == "https://github.com/x/y"
+        assert report.total_duration_seconds == 5.0
+
+    def test_extracts_structured_response_dict(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        agent_result = {
+            "structured_response": {
+                "repo_url": "https://github.com/x/y",
+                "branch_name": "main",
+                "scan_result": {
+                    "all_deps": [],
+                    "outdated": [],
+                    "manifests_found": [],
+                    "scan_duration_seconds": 1.0,
+                },
+                "reports": [],
+                "total_duration_seconds": 3.0,
+            },
+            "messages": [],
+        }
+        report = extract_report(agent_result, payload)
+        assert report.repo_url == "https://github.com/x/y"
+        assert report.total_duration_seconds == 3.0
+
+    def test_falls_back_to_json_in_message_dict(self) -> None:
+        """When structured_response is missing, parse JSON from message dicts."""
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
         agent_result = {
             "messages": [
@@ -56,15 +96,34 @@ class TestExtractReport:
                     '"branch_name": "main", '
                     '"scan_result": {"all_deps": [], "outdated": [], '
                     '"manifests_found": [], "scan_duration_seconds": 1.0}, '
-                    '"reports": [], "total_duration_seconds": 2.0}',
+                    '"reports": [], "total_duration_seconds": 7.0}',
                 },
             ]
         }
         report = extract_report(agent_result, payload)
-        assert report.repo_url == "https://github.com/x/y"
-        assert report.total_duration_seconds == 2.0
+        assert report.total_duration_seconds == 7.0
 
-    def test_returns_empty_report_on_missing_json(self) -> None:
+    def test_falls_back_to_json_in_langchain_message(self) -> None:
+        """When structured_response is missing, parse JSON from LangChain AIMessage."""
+        from langchain_core.messages import AIMessage
+
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        agent_result = {
+            "messages": [
+                AIMessage(content="Working on it..."),
+                AIMessage(
+                    content='{"repo_url": "https://github.com/x/y", '
+                    '"branch_name": "main", '
+                    '"scan_result": {"all_deps": [], "outdated": [], '
+                    '"manifests_found": [], "scan_duration_seconds": 1.0}, '
+                    '"reports": [], "total_duration_seconds": 9.0}'
+                ),
+            ]
+        }
+        report = extract_report(agent_result, payload)
+        assert report.total_duration_seconds == 9.0
+
+    def test_returns_empty_report_when_no_parseable_content(self) -> None:
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
         agent_result = {
             "messages": [

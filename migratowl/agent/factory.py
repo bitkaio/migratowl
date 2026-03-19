@@ -21,6 +21,7 @@ from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.config import Settings, get_settings
+from migratowl.models.schemas import ScanAnalysisReport
 from migratowl.observability import _langfuse_handler
 
 SYSTEM_PROMPT = """\
@@ -176,5 +177,6 @@ def create_migratowl_agent(
             tools=tools,
             backend=backend_factory,
             subagents=[package_analyzer],
+            response_format=ScanAnalysisReport,
         )
     )

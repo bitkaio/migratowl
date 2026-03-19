@@ -139,6 +139,23 @@ class TestCreateMigratowlAgent:
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs.get("base_url") == "https://proxy.example.com"
 
+    def test_passes_response_format_to_deep_agent(self) -> None:
+        from migratowl.models.schemas import ScanAnalysisReport
+
+        mock_backend = MagicMock()
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.create_deep_agent") as mock_create,
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_backend, settings=settings)
+
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs.get("response_format") is ScanAnalysisReport
+
     def test_no_base_url_when_not_set(self) -> None:
         mock_backend = MagicMock()
         settings = Settings(_env_file=None)
