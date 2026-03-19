@@ -23,6 +23,7 @@ from langchain_kubernetes import KubernetesProvider
 from migratowl.agent.factory import create_migratowl_agent  # noqa: F401 — re-export
 from migratowl.agent.sandbox import _blocking_init
 from migratowl.config import get_settings
+from migratowl.observability import get_invoke_config as get_invoke_config  # re-export
 from migratowl.patches import apply_patches
 
 apply_patches()
@@ -83,6 +84,7 @@ def _k8s_backend_factory(runtime: ToolRuntime) -> BackendProtocol:
     try:
         return _get_sandbox_backend()
     except Exception as exc:
+        logger.exception("Kubernetes sandbox initialization failed: %s", exc)
         raise RuntimeError("Kubernetes sandbox is required but failed to initialize.") from exc
 
 

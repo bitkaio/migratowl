@@ -7,10 +7,11 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
+from langchain.chat_models import init_chat_model
 from langchain.tools import ToolRuntime
-from langchain_anthropic import ChatAnthropic
 from langchain_core.rate_limiters import InMemoryRateLimiter
 
+from migratowl.agent.session_graph import apply_session_injection
 from migratowl.agent.subagents import create_package_analyzer_subagent
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
@@ -20,6 +21,7 @@ from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.config import Settings, get_settings
+from migratowl.observability import _langfuse_handler
 
 SYSTEM_PROMPT = """\
 You are MigratOwl, an AI-powered dependency migration analyzer.
@@ -139,13 +141,24 @@ def create_migratowl_agent(
         fetch_changelog,
     ]
 
-    # Model with rate limiter
+    # Model with rate limiter — supports anthropic and openai via init_chat_model
     rate_limiter = InMemoryRateLimiter(
         requests_per_second=settings.model_rate_limit_rps,
         check_every_n_seconds=0.1,
         max_bucket_size=1,
     )
-    model = ChatAnthropic(model=settings.model_name, rate_limiter=rate_limiter, max_retries=8)
+    base_url = (
+        settings.anthropic_base_url
+        if settings.model_provider == "anthropic"
+        else settings.openai_base_url
+    )
+    model = init_chat_model(
+        f"{settings.model_provider}:{settings.model_name}",
+        rate_limiter=rate_limiter,
+        max_retries=8,
+        callbacks=[_langfuse_handler] if _langfuse_handler else None,
+        **({"base_url": base_url} if base_url else {}),
+    )
 
     # Subagent
     package_analyzer = create_package_analyzer_subagent(
@@ -156,10 +169,12 @@ def create_migratowl_agent(
 
     system_prompt = SYSTEM_PROMPT.format(confidence_threshold=settings.confidence_threshold)
 
-    return create_deep_agent(
-        model=model,
-        system_prompt=system_prompt,
-        tools=tools,
-        backend=backend_factory,
-        subagents=[package_analyzer],
+    return apply_session_injection(
+        create_deep_agent(
+            model=model,
+            system_prompt=system_prompt,
+            tools=tools,
+            backend=backend_factory,
+            subagents=[package_analyzer],
+        )
     )

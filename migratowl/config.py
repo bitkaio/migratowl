@@ -1,14 +1,25 @@
 """Centralized configuration for MigratOwl."""
 
+from typing import Literal
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MIGRATOWL_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="MIGRATOWL_", extra="ignore")
 
-    # LLM (API key is read by langchain-anthropic directly from ANTHROPIC_API_KEY)
+    # LLM — API keys read directly from env: ANTHROPIC_API_KEY or OPENAI_API_KEY
+    model_provider: Literal["anthropic", "openai"] = "anthropic"
     model_name: str = "claude-sonnet-4-6"
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MIGRATOWL_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"),
+    )
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MIGRATOWL_OPENAI_BASE_URL", "OPENAI_BASE_URL"),
+    )
 
     # Kubernetes sandbox
     sandbox_template: str = "migratowl-sandbox-template"
@@ -26,7 +37,24 @@ class Settings(BaseSettings):
     max_output_chars: int = 30_000
 
     # GitHub
-    github_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_TOKEN"))
+    github_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIGRATOWL_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    )
+
+    # LangFuse — optional observability (keys read from standard LangFuse env vars)
+    langfuse_public_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIGRATOWL_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY"),
+    )
+    langfuse_secret_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIGRATOWL_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"),
+    )
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("MIGRATOWL_LANGFUSE_HOST", "LANGFUSE_HOST"),
+    )
 
     # Rate limiting
     model_rate_limit_rps: float = 0.1  # requests per second; 0.1 = 6 req/min
