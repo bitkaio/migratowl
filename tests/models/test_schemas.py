@@ -9,12 +9,15 @@ from migratowl.models.schemas import (
     Dependency,
     Ecosystem,
     ExecutionResult,
+    JobState,
+    JobStatus,
     MainExecutionAnalysis,
     OutdatedDependency,
     PackageConfidence,
     ScanAnalysisReport,
     ScanResult,
     ScanWebhookPayload,
+    WebhookAcceptedResponse,
 )
 
 
@@ -377,3 +380,72 @@ class TestMainExecutionAnalysis:
         )
         assert analysis.overall_test_passed is True
         assert len(analysis.packages_likely_breaking) == 0
+
+
+class TestJobState:
+    def test_valid_values(self) -> None:
+        assert JobState("pending") == JobState.PENDING
+        assert JobState("running") == JobState.RUNNING
+        assert JobState("completed") == JobState.COMPLETED
+        assert JobState("failed") == JobState.FAILED
+
+    def test_invalid_value(self) -> None:
+        with pytest.raises(ValueError):
+            JobState("cancelled")
+
+
+class TestJobStatus:
+    def test_construction(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        status = JobStatus(
+            job_id="abc-123",
+            state=JobState.PENDING,
+            payload=payload,
+        )
+        assert status.job_id == "abc-123"
+        assert status.state == JobState.PENDING
+        assert status.result is None
+        assert status.error is None
+        assert status.created_at is not None
+        assert status.updated_at is not None
+
+    def test_with_result(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        scan_result = ScanResult(
+            all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0
+        )
+        report = ScanAnalysisReport(
+            repo_url="https://github.com/x/y",
+            branch_name="main",
+            scan_result=scan_result,
+            reports=[],
+            total_duration_seconds=1.0,
+        )
+        status = JobStatus(
+            job_id="abc-123",
+            state=JobState.COMPLETED,
+            payload=payload,
+            result=report,
+        )
+        assert status.result is not None
+        assert status.result.repo_url == "https://github.com/x/y"
+
+    def test_with_error(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        status = JobStatus(
+            job_id="abc-123",
+            state=JobState.FAILED,
+            payload=payload,
+            error="Sandbox init failed",
+        )
+        assert status.error == "Sandbox init failed"
+
+
+class TestWebhookAcceptedResponse:
+    def test_construction(self) -> None:
+        resp = WebhookAcceptedResponse(
+            job_id="abc-123",
+            status_url="/jobs/abc-123",
+        )
+        assert resp.job_id == "abc-123"
+        assert resp.status_url == "/jobs/abc-123"

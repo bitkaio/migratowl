@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Registry output cap
     max_outdated_deps: int = 100
 
+    # API server
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+
     # HTTP client
     http_timeout: float = 30.0
     http_retry_count: int = 3

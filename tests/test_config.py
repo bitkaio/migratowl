@@ -52,6 +52,14 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.max_output_chars == 30_000
 
+    def test_default_api_host(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.api_host == "0.0.0.0"
+
+    def test_default_api_port(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.api_port == 8000
+
 
 class TestSettingsFromEnv:
     def test_env_override_model_name(self, monkeypatch: object) -> None:

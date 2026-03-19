@@ -1,6 +1,7 @@
 """Webhook and API schemas for MigratOwl."""
 
 import enum
+from datetime import UTC, datetime
 from typing import TypedDict
 
 from pydantic import BaseModel, Field
@@ -126,3 +127,31 @@ class ScanAnalysisReport(BaseModel):
     reports: list[AnalysisReport]
     skipped: list[str] = []
     total_duration_seconds: float
+
+
+class JobState(enum.StrEnum):
+    """Lifecycle states for an async scan job."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class JobStatus(BaseModel):
+    """Status record for an async scan job."""
+
+    job_id: str
+    state: JobState
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    payload: ScanWebhookPayload
+    result: ScanAnalysisReport | None = None
+    error: str | None = None
+
+
+class WebhookAcceptedResponse(BaseModel):
+    """202 response returned when a scan is accepted."""
+
+    job_id: str
+    status_url: str
