@@ -438,6 +438,8 @@ No additional code changes are needed — the `observability.py` module initiali
                           │  • update_dependencies      │
                           │  • execute_project          │
                           │  • fetch_changelog          │
+                          │  • read_manifest            │
+                          │  • patch_manifest           │
                           │                             │
                           │  Subagent:                  │
                           │  • package-analyzer         │
@@ -478,7 +480,8 @@ migratowl/
 │       ├── registry.py  # check_outdated_deps
 │       ├── update.py    # update_dependencies
 │       ├── execute.py   # execute_project (runs install + test in sandbox)
-│       └── changelog.py # fetch_changelog (PyPI / npm / GitHub / raw HTTP)
+│       ├── changelog.py # fetch_changelog (PyPI / npm / GitHub / raw HTTP)
+│       └── manifest.py  # read_manifest, patch_manifest (sandbox file I/O)
 ├── models/
 │   └── schemas.py       # All Pydantic models (ScanWebhookPayload, ScanAnalysisReport, …)
 ├── config.py            # pydantic-settings Settings class (MIGRATOWL_ prefix)
