@@ -51,8 +51,8 @@ class TestCreateMigratowlAgent:
             create_migratowl_agent(mock_backend, settings=settings)
 
         call_kwargs = mock_create.call_args[1]
-        # 10 tools: clone, copy, detect, scan, check_outdated, update, execute, changelog, read_manifest, patch_manifest
-        assert len(call_kwargs["tools"]) == 10  # noqa: PLR2004
+        # 11 tools: clone, copy, detect, scan, check_outdated, update, validate, execute, changelog, read_manifest, patch_manifest
+        assert len(call_kwargs["tools"]) == 11  # noqa: PLR2004
 
     def test_uses_init_chat_model_with_provider_and_name(self) -> None:
         mock_backend = MagicMock()

@@ -108,7 +108,11 @@ def get_invoke_config(session_id: str | None = None) -> dict[str, Any]:
 def _init() -> None:
     """Initialize the module-level handler from current settings."""
     global _langfuse_handler
-    _langfuse_handler = create_langfuse_handler()
+    try:
+        _langfuse_handler = create_langfuse_handler()
+    except ImportError as exc:
+        logger.warning("LangFuse disabled: %s", exc)
+        _langfuse_handler = None
 
 
 _init()

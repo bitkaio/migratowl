@@ -28,7 +28,7 @@ def create_update_dependencies_tool(
     ) -> str:
         """Update specific packages to their latest versions in a working folder.
 
-        After this tool returns, call execute_project to install and run tests.
+        After this tool returns, call validate_project to build and run tests.
 
         Args:
             folder_name: Target folder name (e.g. "main", "requests").

@@ -7,7 +7,8 @@ from migratowl.config import Settings, get_settings
 
 
 class TestSettingsDefaults:
-    def test_default_model_name(self) -> None:
+    def test_default_model_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MODEL_NAME", raising=False)
         settings = Settings(_env_file=None)
         assert settings.model_name == "claude-sonnet-4-6"
 
@@ -31,7 +32,9 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.scan_registry_concurrency == 10
 
-    def test_default_github_token(self) -> None:
+    def test_default_github_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("MIGRATOWL_GITHUB_TOKEN", raising=False)
         settings = Settings(_env_file=None)
         assert settings.github_token == ""
 

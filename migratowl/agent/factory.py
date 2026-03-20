@@ -21,6 +21,7 @@ from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_re
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
+from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
 from migratowl.models.schemas import ScanAnalysisReport
 from migratowl.observability import _langfuse_handler
@@ -50,7 +51,11 @@ You operate inside a Kubernetes sandbox with a workspace laid out as:
 5. Run copy_source("main") to create the main/ working copy.
 6. Run update_dependencies("main", ecosystem, all_outdated_packages) \
 to update every outdated dependency at once.
-7. Run execute_project("main", install_command, test_command) to install and run tests.
+7. Run validate_project("main", ecosystem) to build and run tests.
+   - Go/Rust: always compiles first (catches API-breaking dep changes), \
+then runs tests if test files are detected.
+   - Python: installs deps, then runs pytest if detected.
+   - Node.js: npm install, tsc --noEmit if TypeScript, then npm test if defined.
 
 ### Phase 3: Confidence Assessment
 After executing main/:
@@ -71,8 +76,7 @@ For packages with confidence ≥ {{confidence_threshold}}:
 
 For packages with confidence < {{confidence_threshold}}:
 - Delegate to the "package-analyzer" subagent via task() for isolated testing.
-  Provide: package name, current_version, latest_version, ecosystem, \
-install_command, test_command.
+  Provide: package name, current_version, latest_version, ecosystem.
 
 ### Phase 4: Compile Results
 Collect all AnalysisReports (from your own analysis + subagent results) \
@@ -92,8 +96,11 @@ serialization failures. Do NOT call them.
 Use these MigratOwl tools instead:
 - Read a file: read_manifest(path=<absolute sandbox path>)
 - Edit a file: patch_manifest(path=..., old_string=..., new_string=...)
-- Run a command: update_dependencies or execute_project handle their own
+- Run a command: update_dependencies or validate_project handle their own
   execution. Do not use a raw execute tool.
+- Use validate_project(folder_name, ecosystem) for post-update validation.
+  Only fall back to execute_project for custom commands not covered by the
+  standard validation workflow.
 
 ## Multi-manifest repos
 
@@ -113,7 +120,7 @@ Never retry the same tool with identical arguments after it fails. On failure:
 - Rust "ambiguous" error: manifest_path and current_version are missing —
   call read_manifest to inspect Cargo.toml, then retry with current_version.
 - Rust version constraint error: use patch_manifest to fix the constraint
-  in Cargo.toml, then call execute_project with "cargo check" as install_command.
+  in Cargo.toml, then call validate_project again.
 - Python pip failure: skip the package and record as unresolvable.
 - patch_manifest failure: log in error_summary and continue with other packages.
 """
@@ -167,6 +174,11 @@ def create_migratowl_agent(
     fetch_changelog = create_fetch_changelog_tool()
     read_manifest = create_read_manifest_tool(get_sandbox, workspace_path=workspace_path)
     patch_manifest = create_patch_manifest_tool(get_sandbox)
+    validate_project = create_validate_project_tool(
+        get_sandbox,
+        workspace_path=workspace_path,
+        max_output_chars=settings.max_output_chars,
+    )
 
     tools = [
         clone_repo,
@@ -175,6 +187,7 @@ def create_migratowl_agent(
         scan_dependencies,
         check_outdated_deps,
         update_dependencies,
+        validate_project,
         execute_project,
         fetch_changelog,
         read_manifest,
@@ -204,7 +217,10 @@ def create_migratowl_agent(
     package_analyzer = create_package_analyzer_subagent(
         model=model,
         backend_factory=backend_factory,
-        tools=[copy_source, update_dependencies, execute_project, fetch_changelog, read_manifest, patch_manifest],
+        tools=[
+            copy_source, update_dependencies, validate_project,
+            execute_project, fetch_changelog, read_manifest, patch_manifest,
+        ],
     )
 
     system_prompt = SYSTEM_PROMPT.format(confidence_threshold=settings.confidence_threshold)
