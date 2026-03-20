@@ -54,7 +54,8 @@ to update every outdated dependency at once.
 7. Run validate_project("main", ecosystem) to build and run tests.
    - Go/Rust: always compiles first (catches API-breaking dep changes), \
 then runs tests if test files are detected.
-   - Python: installs deps, then runs pytest if detected.
+   - Python: installs deps (tries .[tests] and .[test] extras before bare install), \
+then runs pytest if detected.
    - Node.js: npm install, tsc --noEmit if TypeScript, then npm test if defined.
 
 ### Phase 3: Confidence Assessment
@@ -122,6 +123,9 @@ Never retry the same tool with identical arguments after it fails. On failure:
 - Rust version constraint error: use patch_manifest to fix the constraint
   in Cargo.toml, then call validate_project again.
 - Python pip failure: skip the package and record as unresolvable.
+- Python validate_project skips tests (no pytest.ini / conftest.py / tests/): \
+  use execute_project with install_command="pip install -e '.[tests]'" and \
+  test_command="python3 -m pytest -x --tb=short" to force the correct extras.
 - patch_manifest failure: log in error_summary and continue with other packages.
 """
 

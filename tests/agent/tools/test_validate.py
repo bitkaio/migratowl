@@ -161,6 +161,29 @@ class TestValidatePython:
         test_step = next(s for s in result["steps"] if s["name"] == "test")
         assert test_step.get("skipped") is True
 
+    def test_uses_python_module_to_run_pytest(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),   # install
+            ExecResult(output="", exit_code=0),   # detect → found
+            ExecResult(output="5 passed\n", exit_code=0),
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"})
+
+        test_cmd = backend.execute.call_args_list[2][0][0]
+        assert "python3 -m pytest" in test_cmd  # must use python3, not python
+
+    def test_install_tries_test_extras_first(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),   # install
+            ExecResult(output="", exit_code=1),   # detect → not found (skip test)
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"})
+
+        install_cmd = backend.execute.call_args_list[0][0][0]
+        assert ".[tests]" in install_cmd  # RED: currently bare "pip install -e ."
+
 
 class TestValidateNodeJS:
     def test_runs_npm_install(self) -> None:

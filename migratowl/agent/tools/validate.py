@@ -140,15 +140,18 @@ def _validate_rust(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
 def _validate_python(backend: Any, folder_path: str, max_chars: int) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
 
-    # Step 1: Install — try editable install first, fall back to requirements.txt
+    # Step 1: Install — try test extras first, fall back to bare install, then requirements.txt
     install_cmd = (
         f"cd {folder_path} && "
-        f"pip install -e . 2>/dev/null || pip install -r requirements.txt"
+        f"pip install -e '.[tests]' 2>/dev/null || "
+        f"pip install -e '.[test]' 2>/dev/null || "
+        f"pip install -e . 2>/dev/null || "
+        f"pip install -r requirements.txt"
     )
     install_r = backend.execute(_sh(install_cmd))
     steps.append(_step(
         "install",
-        "pip install -e . || pip install -r requirements.txt",
+        "pip install -e '.[tests]' || pip install -e '.[test]' || pip install -e . || pip install -r requirements.txt",
         install_r,
         max_chars,
     ))
@@ -166,8 +169,8 @@ def _validate_python(backend: Any, folder_path: str, max_chars: int) -> dict[str
         return {"steps": steps, "passed": True}
 
     # Step 3: Run pytest
-    test_r = backend.execute(_sh(f"cd {folder_path} && pytest -x --tb=short"))
-    steps.append(_step("test", "pytest -x --tb=short", test_r, max_chars))
+    test_r = backend.execute(_sh(f"cd {folder_path} && python3 -m pytest -x --tb=short"))
+    steps.append(_step("test", "python3 -m pytest -x --tb=short", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 
 
