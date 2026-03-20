@@ -17,6 +17,7 @@ from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
 from migratowl.agent.tools.execute import create_execute_project_tool
+from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_read_manifest_tool
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
@@ -81,6 +82,40 @@ into a final ScanAnalysisReport.
 - NEVER execute code in source/ — it is the immutable reference.
 - Only call fetch_changelog_tool when a package causes errors or warnings.
 - Per-package folders share the same sandbox — isolation is by path, not by instance.
+
+## Sandbox Tool Restrictions
+
+The deepagents built-in `read_file`, `edit_file`, and `execute` tools are
+NOT functional in this K8s sandbox — they will return path errors or
+serialization failures. Do NOT call them.
+
+Use these MigratOwl tools instead:
+- Read a file: read_manifest(path=<absolute sandbox path>)
+- Edit a file: patch_manifest(path=..., old_string=..., new_string=...)
+- Run a command: update_dependencies or execute_project handle their own
+  execution. Do not use a raw execute tool.
+
+## Multi-manifest repos
+
+When scan_dependencies returns dependencies, each has a manifest_path field
+(relative to workspace/source/). Always include manifest_path and
+current_version in packages_json when calling update_dependencies:
+
+  {{"name": "clap", "current_version": "2.33.0",
+   "latest_version": "4.6.0", "manifest_path": "dotenv/Cargo.toml"}}
+
+This allows the tool to edit the correct sub-manifest for multi-manifest
+repos (Rust workspaces, monorepos, etc.).
+
+## Tool Failure Handling
+
+Never retry the same tool with identical arguments after it fails. On failure:
+- Rust "ambiguous" error: manifest_path and current_version are missing —
+  call read_manifest to inspect Cargo.toml, then retry with current_version.
+- Rust version constraint error: use patch_manifest to fix the constraint
+  in Cargo.toml, then call execute_project with "cargo check" as install_command.
+- Python pip failure: skip the package and record as unresolvable.
+- patch_manifest failure: log in error_summary and continue with other packages.
 """
 
 
@@ -130,6 +165,8 @@ def create_migratowl_agent(
         max_output_chars=settings.max_output_chars,
     )
     fetch_changelog = create_fetch_changelog_tool()
+    read_manifest = create_read_manifest_tool(get_sandbox, workspace_path=workspace_path)
+    patch_manifest = create_patch_manifest_tool(get_sandbox)
 
     tools = [
         clone_repo,
@@ -140,6 +177,8 @@ def create_migratowl_agent(
         update_dependencies,
         execute_project,
         fetch_changelog,
+        read_manifest,
+        patch_manifest,
     ]
 
     # Model with rate limiter — supports anthropic and openai via init_chat_model
@@ -165,7 +204,7 @@ def create_migratowl_agent(
     package_analyzer = create_package_analyzer_subagent(
         model=model,
         backend_factory=backend_factory,
-        tools=[copy_source, update_dependencies, execute_project, fetch_changelog],
+        tools=[copy_source, update_dependencies, execute_project, fetch_changelog, read_manifest, patch_manifest],
     )
 
     system_prompt = SYSTEM_PROMPT.format(confidence_threshold=settings.confidence_threshold)

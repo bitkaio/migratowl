@@ -3,7 +3,10 @@
 import json
 from unittest.mock import MagicMock
 
-from migratowl.agent.tools.update import create_update_dependencies_tool
+from migratowl.agent.tools.update import (
+    _is_major_bump,
+    create_update_dependencies_tool,
+)
 from tests.conftest import ExecResult
 
 DEFAULT_WORKSPACE = "/home/user/workspace"
@@ -211,3 +214,188 @@ class TestUpdateDependenciesTool:
         assert backend.execute.call_count == 1
         cmd = backend.execute.call_args_list[0][0][0]
         assert "express@5.0.0" in cmd
+
+
+class TestIsMajorBump:
+    def test_same_major_is_not_bump(self) -> None:
+        assert _is_major_bump("1.0.0", "1.9.0") is False
+
+    def test_different_major_is_bump(self) -> None:
+        assert _is_major_bump("2.33.0", "4.6.0") is True
+
+    def test_caret_prefix_stripped(self) -> None:
+        assert _is_major_bump("^2", "4.0.0") is True
+
+    def test_missing_current_returns_false(self) -> None:
+        assert _is_major_bump("", "4.0.0") is False
+
+
+class TestRustUpdateCommand:
+    def test_rust_uses_versioned_specifier_when_current_given(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "serde",
+            "current_version": "1.0.109",
+            "latest_version": "1.0.200",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "rust", "packages_json": packages})
+
+        cmd = backend.execute.call_args_list[0][0][0]
+        # Uses major version only (@1) to match any 1.x.y in the lockfile
+        assert "cargo update -p serde@1 --precise 1.0.200" in cmd
+
+    def test_rust_no_versioned_specifier_without_current(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{"name": "serde", "latest_version": "1.0.200"}])
+        tool.invoke({"folder_name": "main", "ecosystem": "rust", "packages_json": packages})
+
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "cargo update -p serde --precise 1.0.200" in cmd
+
+    def test_rust_major_bump_produces_two_commands(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # manifest patch
+            ExecResult(output="", exit_code=0),  # cargo check
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "clap",
+            "current_version": "2.33.0",
+            "latest_version": "4.6.0",
+            "manifest_path": "dotenv/Cargo.toml",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "rust", "packages_json": packages})
+
+        assert backend.execute.call_count == 2
+        first_cmd = backend.execute.call_args_list[0][0][0]
+        assert "python3 -c" in first_cmd
+        assert "replace" in first_cmd
+        second_cmd = backend.execute.call_args_list[1][0][0]
+        assert "cargo check" in second_cmd
+
+    def test_rust_major_bump_patch_targets_dependency_line(self) -> None:
+        """old_string must be the full TOML dependency line, not just the version.
+
+        Replacing bare "1" corrupts the first occurrence of that digit in the
+        file (e.g. inside version = "0.15.0"), so we must use `name = "ver"`.
+        """
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "syn",
+            "current_version": "1",
+            "latest_version": "2.0.117",
+            "manifest_path": "dotenv_codegen_implementation/Cargo.toml",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "rust", "packages_json": packages})
+
+        first_cmd = backend.execute.call_args_list[0][0][0]
+        assert 'syn = "1"' in first_cmd
+        assert 'syn = "2.0.117"' in first_cmd
+
+    def test_rust_minor_bump_stays_single_command(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "clap",
+            "current_version": "4.5.0",
+            "latest_version": "4.6.0",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "rust", "packages_json": packages})
+
+        assert backend.execute.call_count == 1
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "cargo update" in cmd
+
+
+class TestPythonUpdateCommand:
+    def test_python_with_manifest_path_patches_manifest_after_pip(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # pip install
+            ExecResult(output="", exit_code=0),  # manifest patch
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "requests",
+            "current_version": "2.28.0",
+            "latest_version": "2.31.0",
+            "manifest_path": "requirements.txt",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "python", "packages_json": packages})
+
+        assert backend.execute.call_count == 2
+        pip_cmd = backend.execute.call_args_list[0][0][0]
+        assert "pip install requests==2.31.0" in pip_cmd
+        patch_cmd = backend.execute.call_args_list[1][0][0]
+        assert "python3 -c" in patch_cmd
+
+    def test_python_without_manifest_path_skips_manifest_patch(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{"name": "requests", "latest_version": "2.31.0"}])
+        tool.invoke({"folder_name": "main", "ecosystem": "python", "packages_json": packages})
+
+        assert backend.execute.call_count == 1
+
+    def test_python_manifest_patch_targets_pip_line(self) -> None:
+        """old_string must be name==version, not bare version.
+
+        Replacing "2.28.0" alone could match any field containing that string;
+        using "requests==2.28.0" is scoped to the actual pip requirement line.
+        """
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "requests",
+            "current_version": "2.28.0",
+            "latest_version": "2.31.0",
+            "manifest_path": "requirements.txt",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "python", "packages_json": packages})
+
+        patch_cmd = backend.execute.call_args_list[1][0][0]
+        assert "requests==2.28.0" in patch_cmd
+        assert "requests==2.31.0" in patch_cmd
+
+    def test_python_manifest_patch_skipped_on_pip_failure(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="ERROR: no matching version", exit_code=1),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "requests",
+            "current_version": "2.28.0",
+            "latest_version": "2.31.0",
+            "manifest_path": "requirements.txt",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "python", "packages_json": packages})
+
+        assert backend.execute.call_count == 1

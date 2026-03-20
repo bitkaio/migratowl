@@ -1,6 +1,7 @@
 """Update dependencies tool for the MigratOwl agent."""
 
 import json
+import shlex
 from collections.abc import Callable
 from typing import Any
 
@@ -32,6 +33,7 @@ def create_update_dependencies_tool(
             folder_name: Target folder name (e.g. "main", "requests").
             ecosystem: One of "python", "nodejs", "go", "rust".
             packages_json: JSON array of objects with "name" and "latest_version".
+                Optional fields: "current_version", "manifest_path".
         """
         backend = get_backend()
         folder_path = f"{workspace_path}/{folder_name}"
@@ -43,17 +45,28 @@ def create_update_dependencies_tool(
         for pkg in packages:
             name = pkg["name"]
             version = pkg["latest_version"]
-            cmd = _build_update_cmd(ecosystem, name, version, folder_path)
-            result = backend.execute(cmd)
-            entry = {
-                "package": name,
-                "version": version,
-                "exit_code": result.exit_code,
-                "output": result.output.strip(),
-            }
-            results.append(entry)
-            if result.exit_code != 0:
-                has_failure = True
+            current_version = pkg.get("current_version")
+            manifest_rel = pkg.get("manifest_path")
+            manifest_abs = (
+                f"{workspace_path}/{folder_name}/{manifest_rel}"
+                if manifest_rel else None
+            )
+            cmds = _build_update_cmd(
+                ecosystem, name, version, folder_path,
+                current_version=current_version,
+                manifest_abs_path=manifest_abs,
+            )
+            for cmd in cmds:
+                result = backend.execute(cmd)
+                results.append({
+                    "package": name,
+                    "version": version,
+                    "exit_code": result.exit_code,
+                    "output": result.output.strip(),
+                })
+                if result.exit_code != 0:
+                    has_failure = True
+                    break  # skip manifest patch if pip/cargo step failed
 
         # Go requires go mod tidy after go get to sync go.sum
         if ecosystem == "go":
@@ -96,15 +109,126 @@ def _sh(cmd: str) -> str:
     return f"sh -c 'export PIP_BREAK_SYSTEM_PACKAGES=1 && {cmd}'"
 
 
-def _build_update_cmd(ecosystem: str, name: str, version: str, folder_path: str) -> str:
-    """Build the shell command to update a single package."""
+def _is_major_bump(current: str, latest: str) -> bool:
+    """Return True when latest has a higher major version than current.
+
+    Strips leading semver operators (^~>=<) before comparing.
+    Returns False when either string is empty or unparseable.
+    """
+    if not current or not latest:
+        return False
+    stripped_current = current.lstrip("^~>=<")
+    stripped_latest = latest.lstrip("^~>=<")
+    try:
+        major_current = int(stripped_current.split(".")[0])
+        major_latest = int(stripped_latest.split(".")[0])
+    except (ValueError, IndexError):
+        return False
+    return major_latest > major_current
+
+
+def _manifest_patch_cmd(
+    manifest_abs_path: str,
+    old_string: str,
+    new_string: str,
+) -> str:
+    """Build a python3 command that patches a manifest via a one-liner.
+
+    Calls python3 directly (no ``sh -c`` wrapper) to avoid nested single-quote
+    breakage: ``_sh()`` wraps in ``sh -c '...'`` and ``shlex.quote()`` also
+    produces ``'...'``, so the inner quotes close the outer ``sh -c`` context
+    prematurely when the sandbox parses the command with ``shlex.split()``.
+    """
+    py_script = (
+        'import sys; path,old,new=sys.argv[1:]; '
+        'c=open(path).read(); open(path,"w").write(c.replace(old,new,1))'
+    )
+    return (
+        f"python3 -c {shlex.quote(py_script)} "
+        f"{shlex.quote(manifest_abs_path)} "
+        f"{shlex.quote(old_string)} "
+        f"{shlex.quote(new_string)}"
+    )
+
+
+def _build_rust_manifest_patch_cmd(
+    manifest_abs_path: str,
+    name: str,
+    current_version: str,
+    latest_version: str,
+) -> str:
+    """Patch a Rust Cargo.toml dependency using the full TOML line as old_string.
+
+    Uses ``name = "current"`` instead of bare ``current`` to avoid matching the
+    version string as a substring elsewhere in the file (e.g. in [package].version).
+    Works for the simple string form (``syn = "1"``). For inline-table form
+    (``clap = { version = "2", ... }``), the pattern will not match and the
+    patch silently no-ops — cargo check then fails and the agent falls back to
+    ``patch_manifest`` with the full table line.
+    """
+    old_string = f'{name} = "{current_version}"'
+    new_string = f'{name} = "{latest_version}"'
+    return _manifest_patch_cmd(manifest_abs_path, old_string, new_string)
+
+
+def _build_python_manifest_patch_cmd(
+    manifest_abs_path: str,
+    name: str,
+    current_version: str,
+    latest_version: str,
+) -> str:
+    """Patch a Python requirements manifest using ``name==version`` as old_string.
+
+    Uses the full pip requirement line instead of bare version to avoid matching
+    the version string in unrelated fields (e.g. a comment or metadata entry).
+    """
+    old_string = f'{name}=={current_version}'
+    new_string = f'{name}=={latest_version}'
+    return _manifest_patch_cmd(manifest_abs_path, old_string, new_string)
+
+
+def _build_update_cmd(
+    ecosystem: str,
+    name: str,
+    version: str,
+    folder_path: str,
+    *,
+    current_version: str | None = None,
+    manifest_abs_path: str | None = None,
+) -> list[str]:
+    """Build the shell command(s) to update a single package.
+
+    Returns a list of commands to execute in order. Execution stops on first
+    non-zero exit code (the caller is responsible for the break).
+    """
     if ecosystem == "python":
-        return _sh(f"cd {folder_path} && pip install {name}=={version}")
+        cmds = [_sh(f"cd {folder_path} && pip install {name}=={version}")]
+        if current_version and manifest_abs_path:
+            cmds.append(
+                _build_python_manifest_patch_cmd(
+                    manifest_abs_path, name, current_version, version
+                )
+            )
+        return cmds
     elif ecosystem == "nodejs":
-        return _sh(f"cd {folder_path} && npm install {name}@{version}")
+        return [_sh(f"cd {folder_path} && npm install {name}@{version}")]
     elif ecosystem == "go":
-        return _sh(f"cd {folder_path} && go get {name}@v{version}")
+        return [_sh(f"cd {folder_path} && go get {name}@v{version}")]
     elif ecosystem == "rust":
-        return _sh(f"cd {folder_path} && cargo update -p {name} --precise {version}")
+        if current_version and _is_major_bump(current_version, version) and manifest_abs_path:
+            return [
+                _build_rust_manifest_patch_cmd(
+                    manifest_abs_path, name, current_version, version
+                ),
+                _sh(f"cd {folder_path} && cargo check"),
+            ]
+        elif current_version:
+            # Use only the major version as the @specifier so it matches the
+            # lockfile-resolved version (e.g. tempfile@3 matches 3.27.0, whereas
+            # tempfile@3.0.0 would fail when the lockfile has 3.27.0).
+            major = current_version.lstrip("^~>=<").split(".")[0]
+            return [_sh(f"cd {folder_path} && cargo update -p {name}@{major} --precise {version}")]
+        else:
+            return [_sh(f"cd {folder_path} && cargo update -p {name} --precise {version}")]
     else:
-        return f"echo 'Unsupported ecosystem: {ecosystem}'"
+        return [f"echo 'Unsupported ecosystem: {ecosystem}'"]
