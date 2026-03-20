@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "migratowl": "./migratowl/agent/__init__.py:graph"
+    "migratowl": "./migratowl/agent/graph.py:graph"
   },
   "env": ".env"
 }

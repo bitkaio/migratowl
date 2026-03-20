@@ -466,6 +466,7 @@ migratowl/
 │   ├── jobs.py          # In-memory JobStore (PENDING→RUNNING→COMPLETED|FAILED)
 │   └── helpers.py       # build_user_message, extract_report
 ├── agent/
+│   ├── graph.py         # graph singleton + sandbox lifecycle (langgraph.json entrypoint)
 │   ├── factory.py       # create_migratowl_agent() — builds the LangGraph
 │   ├── sandbox.py       # KubernetesProvider init/teardown helpers
 │   ├── subagents.py     # package-analyzer subagent definition
