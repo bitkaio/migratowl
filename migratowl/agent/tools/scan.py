@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -26,6 +27,12 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
 }
 
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]
+
+
+def _extract_go_module_name(content: str) -> str | None:
+    """Return the module path declared in a go.mod file, or None."""
+    m = re.search(r"^module\s+(\S+)", content, re.MULTILINE)
+    return m.group(1) if m else None
 
 
 def create_scan_dependencies_tool(
@@ -63,6 +70,7 @@ def create_scan_dependencies_tool(
             return json.dumps([])
 
         all_deps: list[Dependency] = []
+        go_module_names: set[str] = set()
 
         for filepath in lines:
             filename = os.path.basename(filepath)
@@ -76,9 +84,20 @@ def create_scan_dependencies_tool(
             if cat_result.exit_code != 0:
                 continue
 
+            if filename == "go.mod":
+                module_name = _extract_go_module_name(cat_result.output)
+                if module_name:
+                    go_module_names.add(module_name)
+
             rel_path = os.path.relpath(filepath, workspace_path)
             deps = parser_fn(cat_result.output, rel_path)
             all_deps.extend(deps)
+
+        if go_module_names:
+            all_deps = [
+                d for d in all_deps
+                if not (d.ecosystem == Ecosystem.GO and d.name in go_module_names)
+            ]
 
         return json.dumps([d.model_dump() for d in all_deps])
 

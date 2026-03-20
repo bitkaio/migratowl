@@ -331,6 +331,40 @@ class TestQueryGolang:
         assert result.repository_url is None
 
 
+class TestGoProxyEncode:
+    def test_lowercase_unchanged(self) -> None:
+        from migratowl.registry import _go_proxy_encode
+
+        assert _go_proxy_encode("github.com/gin-gonic/gin") == "github.com/gin-gonic/gin"
+
+    def test_uppercase_letter_encoded(self) -> None:
+        from migratowl.registry import _go_proxy_encode
+
+        assert _go_proxy_encode("github.com/Masterminds/squirrel") == "github.com/!masterminds/squirrel"
+
+    def test_multiple_uppercase_encoded(self) -> None:
+        from migratowl.registry import _go_proxy_encode
+
+        assert _go_proxy_encode("github.com/BurntSushi/toml") == "github.com/!burnt!sushi/toml"
+
+
+class TestQueryGolangCaseEncoding:
+    async def test_uppercase_module_uses_encoded_url(self) -> None:
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({
+            "/github.com/!masterminds/squirrel/@latest": httpx.Response(200, json={
+                "Version": "v1.5.0",
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            dep = _dep("github.com/Masterminds/squirrel", "v1.4.0", Ecosystem.GO, "go.mod")
+            result = await query_golang(client, dep)
+
+        assert result is not None
+        assert result.latest_version == "v1.5.0"
+
+
 # ===========================================================================
 # check_outdated (orchestrator)
 # ===========================================================================

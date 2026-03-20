@@ -323,6 +323,62 @@ class TestRustUpdateCommand:
         assert "cargo update" in cmd
 
 
+class TestGoSubModuleRouting:
+    def test_go_uses_manifest_dir_when_provided(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # go get
+            ExecResult(output="", exit_code=0),  # go mod tidy
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "github.com/some/dep",
+            "latest_version": "1.5.0",
+            "manifest_path": "integration/go.mod",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "go", "packages_json": packages})
+
+        go_cmd = backend.execute.call_args_list[0][0][0]
+        assert f"{DEFAULT_WORKSPACE}/main/integration" in go_cmd
+        assert "go get github.com/some/dep@v1.5.0" in go_cmd
+
+    def test_go_tidy_runs_in_manifest_dir(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # go get
+            ExecResult(output="", exit_code=0),  # go mod tidy
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "github.com/some/dep",
+            "latest_version": "1.5.0",
+            "manifest_path": "integration/go.mod",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "go", "packages_json": packages})
+
+        tidy_cmd = backend.execute.call_args_list[1][0][0]
+        assert f"{DEFAULT_WORKSPACE}/main/integration" in tidy_cmd
+        assert "go mod tidy" in tidy_cmd
+
+    def test_go_tidy_in_root_without_manifest_path(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # go get
+            ExecResult(output="", exit_code=0),  # go mod tidy
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{"name": "github.com/gin-gonic/gin", "latest_version": "1.9.1"}])
+        tool.invoke({"folder_name": "main", "ecosystem": "go", "packages_json": packages})
+
+        tidy_cmd = backend.execute.call_args_list[1][0][0]
+        assert f"{DEFAULT_WORKSPACE}/main" in tidy_cmd
+        assert "go mod tidy" in tidy_cmd
+        assert f"{DEFAULT_WORKSPACE}/main/integration" not in tidy_cmd
+
+
 class TestPythonUpdateCommand:
     def test_python_with_manifest_path_patches_manifest_after_pip(self) -> None:
         backend = MagicMock()

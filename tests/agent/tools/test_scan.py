@@ -140,3 +140,38 @@ class TestScanDependenciesTool:
 
         assert isinstance(parsed, list)
         assert all(isinstance(d, dict) for d in parsed)
+
+    def test_go_self_referential_dep_excluded(self) -> None:
+        """Go deps matching any module declaration in the repo should be filtered out."""
+        find_output = (
+            f"{DEFAULT_WORKSPACE}/go.mod\n"
+            f"{DEFAULT_WORKSPACE}/integration/go.mod\n"
+        )
+        root_go_mod = (
+            "module github.com/Masterminds/squirrel\n\n"
+            "require github.com/some/dep v1.0.0\n"
+        )
+        integration_go_mod = (
+            "module github.com/Masterminds/squirrel/integration\n\n"
+            "require (\n"
+            "\tgithub.com/Masterminds/squirrel v1.5.0\n"
+            "\tgithub.com/some/other v2.0.0\n"
+            ")\n"
+        )
+        backend = _make_backend_multi([
+            ExecResult(output=find_output, exit_code=0),
+            ExecResult(output=root_go_mod, exit_code=0),
+            ExecResult(output=integration_go_mod, exit_code=0),
+        ])
+        tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = json.loads(tool.invoke({}))
+
+        names = [d["name"] for d in result]
+        # Self-referential dep (root module name) should be excluded
+        assert "github.com/Masterminds/squirrel" not in names
+        # Sub-module self-ref should also be excluded
+        assert "github.com/Masterminds/squirrel/integration" not in names
+        # Real external deps should remain
+        assert "github.com/some/dep" in names
+        assert "github.com/some/other" in names

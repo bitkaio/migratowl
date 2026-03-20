@@ -74,6 +74,16 @@ def _extract_npm_repo_url(repository: dict[str, Any] | str | None) -> str | None
 _KNOWN_GO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
 
 
+def _go_proxy_encode(module_path: str) -> str:
+    """Encode a Go module path for the module proxy URL.
+
+    The Go module proxy spec requires uppercase letters to be escaped as
+    ``!lowercase`` (e.g. ``Masterminds`` → ``!masterminds``) so that paths
+    remain unambiguous on case-insensitive file systems.
+    """
+    return re.sub(r"[A-Z]", lambda m: "!" + m.group(0).lower(), module_path)
+
+
 def _go_module_to_repo_url(module_path: str) -> str | None:
     """Derive repository URL from Go module path for known hosts."""
     for host in _KNOWN_GO_HOSTS:
@@ -159,7 +169,7 @@ async def query_crates(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDe
 
 async def query_golang(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
     """Query Go module proxy for latest version."""
-    resp = await client.get(f"https://proxy.golang.org/{dep.name}/@latest")
+    resp = await client.get(f"https://proxy.golang.org/{_go_proxy_encode(dep.name)}/@latest")
     resp.raise_for_status()
     data = resp.json()
     latest = data["Version"]

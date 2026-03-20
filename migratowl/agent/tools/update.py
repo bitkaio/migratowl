@@ -1,6 +1,7 @@
 """Update dependencies tool for the MigratOwl agent."""
 
 import json
+import os
 import shlex
 from collections.abc import Callable
 from typing import Any
@@ -41,6 +42,7 @@ def create_update_dependencies_tool(
 
         results: list[dict[str, Any]] = []
         has_failure = False
+        go_tidy_dirs: set[str] = set()
 
         for pkg in packages:
             name = pkg["name"]
@@ -56,6 +58,7 @@ def create_update_dependencies_tool(
                 current_version=current_version,
                 manifest_abs_path=manifest_abs,
             )
+            pkg_succeeded = True
             for cmd in cmds:
                 result = backend.execute(cmd)
                 results.append({
@@ -66,18 +69,26 @@ def create_update_dependencies_tool(
                 })
                 if result.exit_code != 0:
                     has_failure = True
+                    pkg_succeeded = False
                     break  # skip manifest patch if pip/cargo step failed
+
+            if ecosystem == "go" and pkg_succeeded:
+                go_tidy_dirs.add(
+                    os.path.dirname(manifest_abs) if manifest_abs else folder_path
+                )
 
         # Go requires go mod tidy after go get to sync go.sum
         if ecosystem == "go":
-            tidy = backend.execute(_sh(f"cd {folder_path} && go mod tidy"))
-            results.append({
-                "package": "(go mod tidy)",
-                "exit_code": tidy.exit_code,
-                "output": tidy.output.strip(),
-            })
-            if tidy.exit_code != 0:
-                has_failure = True
+            dirs_to_tidy = go_tidy_dirs if go_tidy_dirs else {folder_path}
+            for tidy_dir in sorted(dirs_to_tidy):
+                tidy = backend.execute(_sh(f"cd {tidy_dir} && go mod tidy"))
+                results.append({
+                    "package": "(go mod tidy)",
+                    "exit_code": tidy.exit_code,
+                    "output": tidy.output.strip(),
+                })
+                if tidy.exit_code != 0:
+                    has_failure = True
 
         summary_lines = []
         for r in results:
@@ -213,7 +224,8 @@ def _build_update_cmd(
     elif ecosystem == "nodejs":
         return [_sh(f"cd {folder_path} && npm install {name}@{version}")]
     elif ecosystem == "go":
-        return [_sh(f"cd {folder_path} && go get {name}@v{version}")]
+        run_dir = os.path.dirname(manifest_abs_path) if manifest_abs_path else folder_path
+        return [_sh(f"cd {run_dir} && go get {name}@v{version}")]
     elif ecosystem == "rust":
         if current_version and _is_major_bump(current_version, version) and manifest_abs_path:
             return [
