@@ -156,6 +156,25 @@ class TestCreateMigratowlAgent:
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs.get("response_format") is ScanAnalysisReport
 
+    def test_system_prompt_directs_zero_confidence_packages_to_direct_report(self) -> None:
+        """Packages with confidence=0 must be directly reported as non-breaking.
+
+        They must NOT be delegated to the package-analyzer subagent: empirical
+        evidence from the combined validate_project run already proves they don't
+        break the build, so isolation testing is unnecessary and wastes sandbox capacity.
+        """
+        from migratowl.agent.factory import SYSTEM_PROMPT
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "confidence = 0" in prompt or "confidence=0" in prompt
+
+    def test_system_prompt_requires_sequential_subagent_dispatch(self) -> None:
+        """Parallel subagent dispatches each call backend.execute() concurrently,
+        overwhelming the sandbox.  The prompt must instruct sequential dispatch.
+        """
+        from migratowl.agent.factory import SYSTEM_PROMPT
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "one at a time" in prompt or "sequentially" in prompt
+
     def test_no_base_url_when_not_set(self) -> None:
         mock_backend = MagicMock()
         settings = Settings(_env_file=None)

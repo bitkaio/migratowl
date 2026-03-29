@@ -225,7 +225,8 @@ def _build_update_cmd(
         return [_sh(f"cd {folder_path} && npm install {name}@{version}")]
     elif ecosystem == "go":
         run_dir = os.path.dirname(manifest_abs_path) if manifest_abs_path else folder_path
-        return [_sh(f"cd {run_dir} && go get {name}@v{version}")]
+        clean_version = version.lstrip("v")
+        return [_sh(f"cd {run_dir} && go get {name}@v{clean_version}")]
     elif ecosystem == "rust":
         if current_version and _is_major_bump(current_version, version) and manifest_abs_path:
             return [

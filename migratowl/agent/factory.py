@@ -71,13 +71,20 @@ Confidence scoring guidelines:
 - Import/attribute errors for known package APIs → high confidence
 - Generic test failures with no clear link → low confidence (<0.5)
 
+For packages with confidence = 0 (no evidence linking them to any failure):
+- Directly produce AnalysisReport with is_breaking=false and confidence=1.0.
+  The combined validate_project already proved they don't break the build — \
+isolation testing is unnecessary and wastes sandbox capacity.
+
+For packages with 0 < confidence < {{confidence_threshold}} (some signal but ambiguous):
+- Delegate to the "package-analyzer" subagent via task() for isolated testing.
+  Dispatch ONE package at a time, sequentially — never in parallel — to avoid \
+overloading the sandbox with concurrent backend calls.
+  Provide: package name, current_version, latest_version, ecosystem.
+
 For packages with confidence ≥ {{confidence_threshold}}:
 - Fetch the changelog with fetch_changelog_tool.
 - Produce an AnalysisReport with error_summary, changelog_citation, and suggested_human_fix.
-
-For packages with confidence < {{confidence_threshold}}:
-- Delegate to the "package-analyzer" subagent via task() for isolated testing.
-  Provide: package name, current_version, latest_version, ecosystem.
 
 ### Phase 4: Compile Results
 Collect all AnalysisReports (from your own analysis + subagent results) \

@@ -323,6 +323,35 @@ class TestRustUpdateCommand:
         assert "cargo update" in cmd
 
 
+class TestGoVersionPrefix:
+    def test_go_version_with_v_prefix_does_not_produce_double_v(self) -> None:
+        """Go module proxy returns versions with 'v' prefix (e.g. 'v1.9.1').
+
+        update.py must strip any leading 'v' before building the go get command
+        so it produces '@v1.9.1', not '@vv1.9.1'.
+        """
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # go get
+            ExecResult(output="", exit_code=0),  # go mod tidy
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        packages = json.dumps([{
+            "name": "github.com/gin-gonic/gin",
+            "latest_version": "v1.9.1",  # registry-prefixed version
+        }])
+        tool.invoke({
+            "folder_name": "main",
+            "ecosystem": "go",
+            "packages_json": packages,
+        })
+
+        go_cmd = backend.execute.call_args_list[0][0][0]
+        assert "go get github.com/gin-gonic/gin@v1.9.1" in go_cmd
+        assert "vv" not in go_cmd
+
+
 class TestGoSubModuleRouting:
     def test_go_uses_manifest_dir_when_provided(self) -> None:
         backend = MagicMock()
