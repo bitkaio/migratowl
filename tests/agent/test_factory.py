@@ -167,6 +167,20 @@ class TestCreateMigratowlAgent:
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
         assert "confidence = 0" in prompt or "confidence=0" in prompt
 
+    def test_system_prompt_distinguishes_passing_vs_failing_combined_build(self) -> None:
+        """When the combined build FAILS, packages not mentioned in errors were never
+        compiled — their absence from the error output is not proof of safety.
+        The prompt must distinguish the two cases so the model doesn't mark packages
+        as confidence=0 simply because the failing build didn't reach them.
+        """
+        from migratowl.agent.factory import SYSTEM_PROMPT
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        # Must explicitly handle the "all pass" case separately from the "build fails" case
+        assert "all" in prompt.lower() and "pass" in prompt.lower()
+        # Must warn that a failing build does NOT prove unmentioned packages are safe —
+        # they may simply not have been compiled before the error stopped the build.
+        assert "not compiled" in prompt.lower() or "not reached" in prompt.lower() or "stopped" in prompt.lower()
+
     def test_system_prompt_requires_sequential_subagent_dispatch(self) -> None:
         """Parallel subagent dispatches each call backend.execute() concurrently,
         overwhelming the sandbox.  The prompt must instruct sequential dispatch.

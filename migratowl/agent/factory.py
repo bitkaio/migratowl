@@ -72,9 +72,13 @@ Confidence scoring guidelines:
 - Generic test failures with no clear link → low confidence (<0.5)
 
 For packages with confidence = 0 (no evidence linking them to any failure):
-- Directly produce AnalysisReport with is_breaking=false and confidence=1.0.
-  The combined validate_project already proved they don't break the build — \
-isolation testing is unnecessary and wastes sandbox capacity.
+- If validate_project PASSED (all tests pass): the combined run already proved \
+these packages don't break the build. Directly produce AnalysisReport with \
+is_breaking=false and confidence=1.0 — isolation testing is unnecessary.
+- If validate_project FAILED: a package absent from the error output is NOT \
+automatically safe. The build stopped at the first error; packages not yet \
+compiled were never reached. Apply version-gap heuristics (major bump → \
+confidence ≥ 0.3) rather than assuming confidence = 0.
 
 For packages with 0 < confidence < {{confidence_threshold}} (some signal but ambiguous):
 - Delegate to the "package-analyzer" subagent via task() for isolated testing.
