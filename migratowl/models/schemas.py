@@ -14,6 +14,7 @@ class Ecosystem(enum.StrEnum):
     NODEJS = "nodejs"
     GO = "go"
     RUST = "rust"
+    JAVA = "java"
 
 
 class LanguageDetection(BaseModel):
