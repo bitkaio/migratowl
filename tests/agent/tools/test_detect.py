@@ -159,3 +159,28 @@ class TestDetectLanguagesTool:
         assert detections[Ecosystem.GO]["default_install_command"] == "go mod download"
         assert detections[Ecosystem.RUST]["default_test_command"] == "cargo test"
         assert detections[Ecosystem.RUST]["default_install_command"] == "cargo build"
+
+
+class TestDetectJava:
+    def test_detects_maven_pom_xml(self) -> None:
+        backend = make_backend(output=f"{DEFAULT_WORKSPACE}/pom.xml\n")
+        tool = create_detect_languages_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        result = tool.invoke({})
+        detections = json.loads(result)
+
+        assert len(detections) == 1
+        assert detections[0]["ecosystem"] == Ecosystem.JAVA
+        assert detections[0]["marker_file"] == "pom.xml"
+        assert "mvn" in detections[0]["default_test_command"]
+        assert "mvn" in detections[0]["default_install_command"]
+
+    def test_detects_gradle_build_file(self) -> None:
+        backend = make_backend(output=f"{DEFAULT_WORKSPACE}/build.gradle\n")
+        tool = create_detect_languages_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        result = tool.invoke({})
+        detections = json.loads(result)
+
+        assert len(detections) == 1
+        assert detections[0]["ecosystem"] == Ecosystem.JAVA
+        assert detections[0]["marker_file"] == "build.gradle"
+        assert "gradle" in detections[0]["default_test_command"]

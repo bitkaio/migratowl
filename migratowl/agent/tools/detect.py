@@ -16,6 +16,8 @@ _MARKER_MAP: list[tuple[str, Ecosystem, str, str]] = [
     ("package.json", Ecosystem.NODEJS, "npm test", "npm install"),
     ("go.mod", Ecosystem.GO, "go test ./...", "go mod download"),
     ("Cargo.toml", Ecosystem.RUST, "cargo test", "cargo build"),
+    ("pom.xml", Ecosystem.JAVA, "mvn test", "mvn install -DskipTests -q"),
+    ("build.gradle", Ecosystem.JAVA, "gradle test", "gradle build -x test"),
 ]
 
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]
