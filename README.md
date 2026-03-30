@@ -56,6 +56,7 @@ The result tells developers:
 | Node.js | `package.json` | npm |
 | Go | `go.mod` | proxy.golang.org |
 | Rust | `Cargo.toml` | crates.io |
+| Java | `pom.xml` (Maven), `build.gradle` (Gradle) | Maven Central |
 
 ---
 
@@ -185,7 +186,7 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `callback_url` | `string \| null` | `null` | URL to POST `ScanAnalysisReport` on completion |
 | `exclude_deps` | `string[]` | `[]` | Dependency names to skip |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |
-| `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`. `null` = auto-detect all |
+| `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
 
 **Example:**
 
