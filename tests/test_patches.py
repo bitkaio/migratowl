@@ -188,3 +188,27 @@ class TestSubagentRecursionLimitPatch:
         _subagents_mod._build_task_tool(specs)
 
         mock_runnable.with_config.assert_called_once_with({"recursion_limit": 500})
+
+
+class TestLangchainKubernetesAnnotatedPatch:
+    def test_required_symbols_in_manager_globals(self) -> None:
+        import langchain_kubernetes.manager as lk_manager
+        from typing import Annotated
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from typing_extensions import TypedDict
+
+        apply_patches()
+        assert getattr(lk_manager, "Annotated", None) is Annotated
+        assert getattr(lk_manager, "AnyMessage", None) is AnyMessage
+        assert getattr(lk_manager, "TypedDict", None) is TypedDict
+        assert getattr(lk_manager, "add_messages", None) is add_messages
+
+    def test_idempotent(self) -> None:
+        import langchain_kubernetes.manager as lk_manager
+
+        apply_patches()
+        apply_patches()
+        assert hasattr(lk_manager, "Annotated")
+        assert hasattr(lk_manager, "AnyMessage")

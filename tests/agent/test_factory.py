@@ -1,159 +1,160 @@
 """Tests for agent graph factory."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from migratowl.agent.factory import create_migratowl_agent
 from migratowl.config import Settings
 
 
+def _make_mock_manager(mock_graph: MagicMock | None = None) -> MagicMock:
+    """Return a mock KubernetesSandboxManager with sensible defaults."""
+    from langchain_kubernetes import KubernetesSandboxManager
+
+    mgr = MagicMock(spec=KubernetesSandboxManager)
+    mgr._make_backend_factory.return_value = lambda _: MagicMock()
+    mgr.create_agent.return_value = mock_graph or MagicMock()
+    return mgr
+
+
 class TestCreateMigratowlAgent:
     def test_returns_compiled_graph(self) -> None:
-        mock_backend = MagicMock()
-        settings = Settings(_env_file=None)
         mock_graph = MagicMock()
+        mock_manager = _make_mock_manager(mock_graph)
+        settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent", return_value=mock_graph),
             patch("migratowl.agent.factory.init_chat_model"),
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", return_value=mock_graph),
         ):
-            graph = create_migratowl_agent(mock_backend, settings=settings)
+            graph = create_migratowl_agent(mock_manager, settings=settings)
 
         assert graph is mock_graph
 
-    def test_passes_backend_factory_to_deep_agent(self) -> None:
-        mock_backend = MagicMock()
+    def test_makes_backend_factory_from_manager(self) -> None:
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent") as mock_create,
             patch("migratowl.agent.factory.init_chat_model"),
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
-        call_kwargs = mock_create.call_args[1]
-        assert callable(call_kwargs["backend"])
+        mock_manager._make_backend_factory.assert_called_once()
 
     def test_creates_expected_tool_count(self) -> None:
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent") as mock_create,
             patch("migratowl.agent.factory.init_chat_model"),
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
-        call_kwargs = mock_create.call_args[1]
+        call_kwargs = mock_manager.create_agent.call_args[1]
         # 11 tools: clone, copy, detect, scan, check_outdated, update, validate, execute, changelog, read_manifest, patch_manifest
         assert len(call_kwargs["tools"]) == 11  # noqa: PLR2004
 
     def test_uses_init_chat_model_with_provider_and_name(self) -> None:
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent"),
             patch("migratowl.agent.factory.init_chat_model") as mock_init,
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
         mock_init.assert_called_once()
         model_id = mock_init.call_args[0][0]
         assert model_id == f"{settings.model_provider}:{settings.model_name}"
 
     def test_applies_session_injection(self) -> None:
-        mock_backend = MagicMock()
-        settings = Settings(_env_file=None)
         raw_graph = MagicMock()
         patched_graph = MagicMock()
+        mock_manager = _make_mock_manager(raw_graph)
+        settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent", return_value=raw_graph),
             patch("migratowl.agent.factory.init_chat_model"),
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch(
                 "migratowl.agent.factory.apply_session_injection", return_value=patched_graph
             ) as mock_inject,
         ):
-            result = create_migratowl_agent(mock_backend, settings=settings)
+            result = create_migratowl_agent(mock_manager, settings=settings)
 
         mock_inject.assert_called_once_with(raw_graph)
         assert result is patched_graph
 
     def test_passes_langfuse_handler_as_callback_when_configured(self) -> None:
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
         mock_handler = MagicMock()
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent"),
             patch("migratowl.agent.factory.init_chat_model") as mock_init,
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
             patch("migratowl.agent.factory._langfuse_handler", mock_handler),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs["callbacks"] == [mock_handler]
 
     def test_no_langfuse_callback_when_not_configured(self) -> None:
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent"),
             patch("migratowl.agent.factory.init_chat_model") as mock_init,
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
             patch("migratowl.agent.factory._langfuse_handler", None),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs.get("callbacks") is None
 
     def test_passes_base_url_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent"),
             patch("migratowl.agent.factory.init_chat_model") as mock_init,
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
             patch("migratowl.agent.factory._langfuse_handler", None),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs.get("base_url") == "https://proxy.example.com"
 
-    def test_passes_response_format_to_deep_agent(self) -> None:
+    def test_passes_response_format_to_manager_create_agent(self) -> None:
         from migratowl.models.schemas import ScanAnalysisReport
 
-        mock_backend = MagicMock()
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent") as mock_create,
             patch("migratowl.agent.factory.init_chat_model"),
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
-        call_kwargs = mock_create.call_args[1]
+        call_kwargs = mock_manager.create_agent.call_args[1]
         assert call_kwargs.get("response_format") is ScanAnalysisReport
 
     def test_system_prompt_directs_zero_confidence_packages_to_direct_report(self) -> None:
@@ -164,6 +165,7 @@ class TestCreateMigratowlAgent:
         break the build, so isolation testing is unnecessary and wastes sandbox capacity.
         """
         from migratowl.agent.factory import SYSTEM_PROMPT
+
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
         assert "confidence = 0" in prompt or "confidence=0" in prompt
 
@@ -174,33 +176,37 @@ class TestCreateMigratowlAgent:
         as confidence=0 simply because the failing build didn't reach them.
         """
         from migratowl.agent.factory import SYSTEM_PROMPT
+
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
-        # Must explicitly handle the "all pass" case separately from the "build fails" case
         assert "all" in prompt.lower() and "pass" in prompt.lower()
-        # Must warn that a failing build does NOT prove unmentioned packages are safe —
-        # they may simply not have been compiled before the error stopped the build.
-        assert "not compiled" in prompt.lower() or "not reached" in prompt.lower() or "stopped" in prompt.lower()
+        assert (
+            "not compiled" in prompt.lower()
+            or "not reached" in prompt.lower()
+            or "stopped" in prompt.lower()
+        )
 
     def test_system_prompt_requires_sequential_subagent_dispatch(self) -> None:
         """Parallel subagent dispatches each call backend.execute() concurrently,
         overwhelming the sandbox.  The prompt must instruct sequential dispatch.
         """
         from migratowl.agent.factory import SYSTEM_PROMPT
+
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
         assert "one at a time" in prompt or "sequentially" in prompt
 
-    def test_no_base_url_when_not_set(self) -> None:
-        mock_backend = MagicMock()
+    def test_no_base_url_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
         with (
-            patch("migratowl.agent.factory.create_deep_agent"),
             patch("migratowl.agent.factory.init_chat_model") as mock_init,
             patch("migratowl.agent.factory.create_package_analyzer_subagent"),
             patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
             patch("migratowl.agent.factory._langfuse_handler", None),
         ):
-            create_migratowl_agent(mock_backend, settings=settings)
+            create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_init.call_args[1]
         assert "base_url" not in call_kwargs

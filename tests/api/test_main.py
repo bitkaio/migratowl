@@ -18,26 +18,18 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def mock_sandbox() -> MagicMock:
-    sandbox = MagicMock()
-    sandbox.id = "sandbox-test-123"
-    return sandbox
+def mock_manager() -> MagicMock:
+    from langchain_kubernetes import KubernetesSandboxManager
+
+    return MagicMock(spec=KubernetesSandboxManager)
 
 
 @pytest.fixture
-def mock_provider() -> MagicMock:
-    return MagicMock()
-
-
-@pytest.fixture
-def app(settings: Settings, mock_sandbox: MagicMock, mock_provider: MagicMock):
-    """Create app with pre-initialized sandbox (skip lifespan K8s init)."""
-    application = create_app(
-        settings=settings, sandbox=mock_sandbox, provider=mock_provider
-    )
+def app(settings: Settings, mock_manager: MagicMock):
+    """Create app with pre-initialized manager (skip lifespan K8s init)."""
+    application = create_app(settings=settings, manager=mock_manager)
     # Manually set state that lifespan would set (ASGITransport doesn't trigger lifespan)
-    application.state.sandbox = mock_sandbox
-    application.state.provider = mock_provider
+    application.state.manager = mock_manager
     application.state.job_store = JobStore()
     application.state.settings = settings
     return application

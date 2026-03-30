@@ -28,7 +28,8 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.workspace_path == "/home/user/workspace"
 
-    def test_default_scan_registry_concurrency(self) -> None:
+    def test_default_scan_registry_concurrency(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SCAN_REGISTRY_CONCURRENCY", raising=False)
         settings = Settings(_env_file=None)
         assert settings.scan_registry_concurrency == 10
 
@@ -38,7 +39,8 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.github_token == ""
 
-    def test_default_http_timeout(self) -> None:
+    def test_default_http_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_HTTP_TIMEOUT", raising=False)
         settings = Settings(_env_file=None)
         assert settings.http_timeout == 30.0
 
@@ -54,7 +56,8 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.confidence_threshold == 0.7
 
-    def test_default_max_output_chars(self) -> None:
+    def test_default_max_output_chars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MAX_OUTPUT_CHARS", raising=False)
         settings = Settings(_env_file=None)
         assert settings.max_output_chars == 30_000
 

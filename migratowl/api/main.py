@@ -12,16 +12,15 @@ from dotenv import load_dotenv
 
 load_dotenv()  # inject .env into os.environ so third-party SDKs (anthropic, etc.) can read it
 
-from deepagents.backends.protocol import BackendProtocol
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from langchain_kubernetes import KubernetesProvider
+from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
-from migratowl.api.helpers import build_user_message, extract_report
-from migratowl.api.jobs import JobStore
-from migratowl.config import Settings, get_settings
-from migratowl.http import close_http_client
-from migratowl.models.schemas import (
+from migratowl.api.helpers import build_user_message, extract_report  # noqa: E402
+from migratowl.api.jobs import JobStore  # noqa: E402
+from migratowl.config import Settings, get_settings  # noqa: E402
+from migratowl.http import close_http_client  # noqa: E402
+from migratowl.models.schemas import (  # noqa: E402
     JobState,
     JobStatus,
     ScanWebhookPayload,
@@ -37,13 +36,12 @@ _scan_semaphore: asyncio.Semaphore | None = None
 def create_app(
     *,
     settings: Settings | None = None,
-    sandbox: BackendProtocol | None = None,
-    provider: KubernetesProvider | None = None,
+    manager: KubernetesSandboxManager | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
-    When ``sandbox`` and ``provider`` are supplied (e.g. in tests), the lifespan
-    handler skips K8s init and uses them directly.
+    When ``manager`` is supplied (e.g. in tests), the lifespan handler skips
+    K8s init and uses it directly.
     """
     if settings is None:
         settings = get_settings()
@@ -53,14 +51,13 @@ def create_app(
         global _scan_semaphore
         _scan_semaphore = asyncio.Semaphore(1)
 
-        if sandbox is not None and provider is not None:
+        if manager is not None:
             # Pre-initialized (tests or external setup)
-            app.state.sandbox = sandbox
-            app.state.provider = provider
+            app.state.manager = manager
         else:
-            from migratowl.agent.sandbox import create_sandbox
+            from migratowl.agent.sandbox import create_sandbox_manager
 
-            app.state.provider, app.state.sandbox = await create_sandbox(settings)
+            app.state.manager = create_sandbox_manager(settings)
 
         app.state.job_store = JobStore()
         app.state.settings = settings
@@ -69,10 +66,8 @@ def create_app(
 
         # Shutdown
         await close_http_client()
-        if hasattr(app.state, "provider") and hasattr(app.state, "sandbox"):
-            from migratowl.agent.sandbox import destroy_sandbox
-
-            await destroy_sandbox(app.state.provider, app.state.sandbox)
+        if hasattr(app.state, "manager"):
+            await app.state.manager.ashutdown()
 
     app = FastAPI(title="MigratOwl", lifespan=lifespan)
 
@@ -116,7 +111,7 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
             from migratowl.agent.factory import create_migratowl_agent
 
             graph = create_migratowl_agent(
-                app.state.sandbox, settings=app.state.settings
+                app.state.manager, settings=app.state.settings
             )
             user_msg = build_user_message(job.payload)
             result = await graph.ainvoke(
