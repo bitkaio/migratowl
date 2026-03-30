@@ -10,9 +10,11 @@ from langchain.tools import tool
 
 from migratowl.models.schemas import Dependency, Ecosystem
 from migratowl.parsers import (
+    parse_build_gradle,
     parse_cargo_toml,
     parse_go_mod,
     parse_package_json,
+    parse_pom_xml,
     parse_pyproject_toml,
     parse_requirements_txt,
 )
@@ -24,6 +26,8 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
     "package.json": (parse_package_json, Ecosystem.NODEJS),
     "go.mod": (parse_go_mod, Ecosystem.GO),
     "Cargo.toml": (parse_cargo_toml, Ecosystem.RUST),
+    "pom.xml": (parse_pom_xml, Ecosystem.JAVA),
+    "build.gradle": (parse_build_gradle, Ecosystem.JAVA),
 }
 
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]
@@ -55,9 +59,9 @@ def create_scan_dependencies_tool(
     def scan_dependencies() -> str:
         """Scan manifest files in the workspace and extract all declared dependencies.
 
-        Reads requirements.txt, pyproject.toml, package.json, go.mod, and Cargo.toml
-        files, parses them, and returns a JSON array of dependency objects with name,
-        current_version, ecosystem, and manifest_path.
+        Reads requirements.txt, pyproject.toml, package.json, go.mod, Cargo.toml,
+        pom.xml, and build.gradle files, parses them, and returns a JSON array of
+        dependency objects with name, current_version, ecosystem, and manifest_path.
         """
         backend = get_backend()
         result = backend.execute(find_cmd)

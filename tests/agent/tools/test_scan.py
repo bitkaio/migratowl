@@ -175,3 +175,42 @@ class TestScanDependenciesTool:
         # Real external deps should remain
         assert "github.com/some/dep" in names
         assert "github.com/some/other" in names
+
+
+class TestScanJava:
+    def test_scans_pom_xml(self) -> None:
+        pom_content = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>library</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>"""
+        backend = _make_backend_multi([
+            ExecResult(output=f"{DEFAULT_WORKSPACE}/pom.xml\n", exit_code=0),
+            ExecResult(output=pom_content, exit_code=0),
+        ])
+        tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = json.loads(tool.invoke({}))
+
+        assert len(result) == 1
+        assert result[0]["name"] == "com.example:library"
+        assert result[0]["ecosystem"] == "java"
+        assert result[0]["manifest_path"] == "pom.xml"
+
+    def test_scans_build_gradle(self) -> None:
+        gradle_content = "dependencies {\n    implementation 'com.example:lib:1.0.0'\n}\n"
+        backend = _make_backend_multi([
+            ExecResult(output=f"{DEFAULT_WORKSPACE}/build.gradle\n", exit_code=0),
+            ExecResult(output=gradle_content, exit_code=0),
+        ])
+        tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = json.loads(tool.invoke({}))
+
+        assert len(result) == 1
+        assert result[0]["ecosystem"] == "java"
