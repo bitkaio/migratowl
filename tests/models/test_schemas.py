@@ -30,7 +30,7 @@ class TestEcosystem:
 
     def test_invalid_value(self) -> None:
         with pytest.raises(ValueError):
-            Ecosystem("java")
+            Ecosystem("kotlin")
 
     def test_serializes_as_string(self) -> None:
         assert Ecosystem.PYTHON.value == "python"
