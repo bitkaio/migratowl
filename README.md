@@ -8,7 +8,10 @@
   <img src="https://img.shields.io/badge/license-BSD%203--Clause-green" alt="License" />
 </p>
 
-<p align="center">AI-powered dependency migration analyzer — discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.</p>
+<p align="center">
+  <strong>AI-powered dependency migration analyzer.</strong><br>
+  Discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.
+</p>
 
 ---
 
