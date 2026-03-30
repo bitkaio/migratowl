@@ -27,6 +27,7 @@ class TestEcosystem:
         assert Ecosystem("nodejs") == Ecosystem.NODEJS
         assert Ecosystem("go") == Ecosystem.GO
         assert Ecosystem("rust") == Ecosystem.RUST
+        assert Ecosystem("java") == Ecosystem.JAVA
 
     def test_invalid_value(self) -> None:
         with pytest.raises(ValueError):
