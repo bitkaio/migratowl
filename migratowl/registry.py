@@ -187,6 +187,39 @@ async def query_golang(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDe
     )
 
 
+async def query_maven_central(
+    client: httpx.AsyncClient, dep: Dependency
+) -> OutdatedDependency | None:
+    """Query Maven Central Search API for latest version of a Java package.
+
+    Expects dep.name in ``groupId:artifactId`` format.
+    """
+    if ":" not in dep.name:
+        return None
+    group_id, artifact_id = dep.name.split(":", 1)
+    url = (
+        f"https://search.maven.org/solrsearch/select"
+        f"?q=g:{group_id}+AND+a:{artifact_id}&rows=1&wt=json"
+    )
+    resp = await client.get(url)
+    resp.raise_for_status()
+    docs = resp.json()["response"]["docs"]
+    if not docs:
+        return None
+    latest = docs[0]["latestVersion"]
+
+    if not _is_outdated(dep.current_version, latest):
+        return None
+
+    return OutdatedDependency(
+        name=dep.name,
+        current_version=dep.current_version,
+        latest_version=latest,
+        ecosystem=dep.ecosystem,
+        manifest_path=dep.manifest_path,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -199,6 +232,7 @@ _ECOSYSTEM_QUERIES: dict[
     Ecosystem.NODEJS: query_npm,
     Ecosystem.RUST: query_crates,
     Ecosystem.GO: query_golang,
+    Ecosystem.JAVA: query_maven_central,
 }
 
 

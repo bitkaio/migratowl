@@ -3,11 +3,13 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.config import Settings
-from migratowl.models.schemas import Ecosystem, OutdatedDependency
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedDependency
+from migratowl.registry import query_maven_central
 
 
 def _make_outdated(name: str, current: str, latest: str) -> OutdatedDependency:
@@ -127,3 +129,86 @@ class TestCheckOutdatedDepsTool:
         assert returned_names[1] == "dep_a"
         # third must be dep_b or dep_d (both gap=1), not dep_e (gap=0)
         assert returned_names[2] in ("dep_b", "dep_d")
+
+
+class TestQueryMavenCentral:
+    @pytest.mark.asyncio
+    async def test_returns_outdated_when_newer_available(self) -> None:
+        dep = Dependency(
+            name="org.springframework.boot:spring-boot-starter",
+            current_version="3.2.0",
+            ecosystem=Ecosystem.JAVA,
+            manifest_path="pom.xml",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "response": {
+                "docs": [{"latestVersion": "3.3.0"}]
+            }
+        }
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        result = await query_maven_central(client, dep)
+
+        assert result is not None
+        assert result.latest_version == "3.3.0"
+        assert result.current_version == "3.2.0"
+        assert result.ecosystem == Ecosystem.JAVA
+        assert "search.maven.org" in client.get.call_args[0][0]
+        assert "org.springframework.boot" in client.get.call_args[0][0]
+        assert "spring-boot-starter" in client.get.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_up_to_date(self) -> None:
+        dep = Dependency(
+            name="com.example:library",
+            current_version="2.0.0",
+            ecosystem=Ecosystem.JAVA,
+            manifest_path="pom.xml",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "response": {"docs": [{"latestVersion": "2.0.0"}]}
+        }
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        result = await query_maven_central(client, dep)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_not_found(self) -> None:
+        dep = Dependency(
+            name="com.example:unknown",
+            current_version="1.0.0",
+            ecosystem=Ecosystem.JAVA,
+            manifest_path="pom.xml",
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"response": {"docs": []}}
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = mock_response
+
+        result = await query_maven_central(client, dep)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_malformed_name(self) -> None:
+        dep = Dependency(
+            name="no-colon-here",
+            current_version="1.0.0",
+            ecosystem=Ecosystem.JAVA,
+            manifest_path="pom.xml",
+        )
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        result = await query_maven_central(client, dep)
+
+        assert result is None
+        client.get.assert_not_called()
