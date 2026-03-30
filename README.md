@@ -1,16 +1,17 @@
-
 <p align="center">
   <img src="assets/migratowl-logo.png" alt="Migratowl" height="320" />
+</p>
+
+<h1 align="center">Migratowl</h1>
+
+<p align="center">
+  <strong>AI-powered dependency migration analyzer.</strong><br>
+  Discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.13%2B-blue" alt="Python 3.13+" />
   <img src="https://img.shields.io/badge/license-BSD%203--Clause-green" alt="License" />
-</p>
-
-<p align="center">
-  <strong>AI-powered dependency migration analyzer.</strong><br>
-  Discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.
 </p>
 
 ---
