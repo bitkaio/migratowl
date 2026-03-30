@@ -32,7 +32,7 @@ def create_update_dependencies_tool(
 
         Args:
             folder_name: Target folder name (e.g. "main", "requests").
-            ecosystem: One of "python", "nodejs", "go", "rust".
+            ecosystem: One of "python", "nodejs", "go", "rust", "java".
             packages_json: JSON array of objects with "name" and "latest_version".
                 Optional fields: "current_version", "manifest_path".
         """
@@ -243,5 +243,26 @@ def _build_update_cmd(
             return [_sh(f"cd {folder_path} && cargo update -p {name}@{major} --precise {version}")]
         else:
             return [_sh(f"cd {folder_path} && cargo update -p {name} --precise {version}")]
+    elif ecosystem == "java":
+        if manifest_abs_path and os.path.basename(manifest_abs_path) == "pom.xml":
+            group_id, artifact_id = name.split(":", 1) if ":" in name else (name, "")
+            run_dir = os.path.dirname(manifest_abs_path)
+            return [_sh(
+                f"cd {run_dir} && mvn versions:use-dep-version"
+                f" -DdepVersion={version}"
+                f" -Dincludes={group_id}:{artifact_id}"
+                f" -DforceVersion=true"
+                f" -DgenerateBackupPoms=false"
+                f" -q"
+            )]
+        elif manifest_abs_path and current_version:
+            # build.gradle: patch 'groupId:artifactId:old' → 'groupId:artifactId:new'
+            return [_manifest_patch_cmd(
+                manifest_abs_path,
+                f"{name}:{current_version}",
+                f"{name}:{version}",
+            )]
+        else:
+            return [f"echo 'Cannot update {name}: missing manifest path or current version'"]
     else:
         return [f"echo 'Unsupported ecosystem: {ecosystem}'"]

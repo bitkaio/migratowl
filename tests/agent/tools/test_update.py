@@ -484,3 +484,61 @@ class TestPythonUpdateCommand:
         tool.invoke({"folder_name": "main", "ecosystem": "python", "packages_json": packages})
 
         assert backend.execute.call_count == 1
+
+
+class TestUpdateJava:
+    def test_maven_uses_mvn_versions_plugin(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        packages = json.dumps([{
+            "name": "org.springframework.boot:spring-boot-starter",
+            "latest_version": "3.3.0",
+            "current_version": "3.2.0",
+            "manifest_path": "pom.xml",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "java", "packages_json": packages})
+
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "mvn versions:use-dep-version" in cmd
+        assert "3.3.0" in cmd
+        assert "org.springframework.boot:spring-boot-starter" in cmd
+        assert "generateBackupPoms=false" in cmd
+
+    def test_gradle_patches_manifest(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        packages = json.dumps([{
+            "name": "com.example:library",
+            "latest_version": "2.0.0",
+            "current_version": "1.0.0",
+            "manifest_path": "build.gradle",
+        }])
+        tool.invoke({"folder_name": "main", "ecosystem": "java", "packages_json": packages})
+
+        cmd = backend.execute.call_args_list[0][0][0]
+        # python3 manifest patch command
+        assert "python3" in cmd
+        assert "com.example:library:1.0.0" in cmd
+        assert "com.example:library:2.0.0" in cmd
+
+    def test_gradle_skips_patch_without_current_version(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+        ]
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        packages = json.dumps([{
+            "name": "com.example:library",
+            "latest_version": "2.0.0",
+            "manifest_path": "build.gradle",
+        }])
+        result = tool.invoke({"folder_name": "main", "ecosystem": "java", "packages_json": packages})
+
+        # Should still attempt something and not crash
+        assert "com.example:library" in result
