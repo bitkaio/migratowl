@@ -1,14 +1,20 @@
-# MigratOwl
 
-![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue) ![License](https://img.shields.io/badge/license-BSD%203--Clause-green)
+<p align="center">
+  <img src="assets/migratowl-logo.png" alt="Migratowl" height="320" />
+</p>
 
-AI-powered dependency migration analyzer — discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.13%2B-blue" alt="Python 3.13+" />
+  <img src="https://img.shields.io/badge/license-BSD%203--Clause-green" alt="License" />
+</p>
+
+<p align="center">AI-powered dependency migration analyzer — discovers breaking upgrades, explains exactly what failed, and tells you how to fix it.</p>
 
 ---
 
 ## What It Does
 
-MigratOwl answers one question: **"If I upgrade this dependency, will anything break — and how do I fix it?"**
+Migratowl answers one question: **"If I upgrade this dependency, will anything break — and how do I fix it?"**
 
 It receives a webhook, clones the target repository, scans all dependency manifests, queries package registries for newer versions, and runs the project inside an isolated Kubernetes sandbox with every dependency bumped. An AI agent executes the test suite, reads the error output, fetches the relevant changelog, and produces a structured report per dependency.
 
@@ -55,7 +61,7 @@ The result tells developers:
 
 ## How It Works
 
-MigratOwl runs a four-phase agent workflow inside an ephemeral Kubernetes sandbox.
+Migratowl runs a four-phase agent workflow inside an ephemeral Kubernetes sandbox.
 
 ```
 POST /webhook
@@ -359,7 +365,7 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 
 ## Kubernetes Setup
 
-MigratOwl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kubernetes) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and gVisor/Kata isolation.
+Migratowl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kubernetes) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and gVisor/Kata isolation.
 
 ```bash
 # Install controller + CRDs (one-time)
@@ -396,7 +402,7 @@ Then install `langchain-kubernetes[raw]` instead of `langchain-kubernetes[agent-
 
 ## Observability
 
-MigratOwl integrates with [LangFuse](https://langfuse.com) for trace-level observability. Tracing is off by default and activates when both keys are present.
+Migratowl integrates with [LangFuse](https://langfuse.com) for trace-level observability. Tracing is off by default and activates when both keys are present.
 
 ```bash
 # .env
@@ -426,7 +432,7 @@ No additional code changes are needed — the `observability.py` module initiali
                                          │ asyncio.create_task
                                          ▼
                           ┌─────────────────────────────┐
-                          │     MigratOwl Agent         │
+                          │     Migratowl Agent         │
                           │  (deepagents / LangGraph)   │
                           │                             │
                           │  Tools:                     │
