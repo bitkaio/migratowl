@@ -2,9 +2,11 @@
 
 from migratowl.models.schemas import Ecosystem
 from migratowl.parsers import (
+    parse_build_gradle,
     parse_cargo_toml,
     parse_go_mod,
     parse_package_json,
+    parse_pom_xml,
     parse_pyproject_toml,
     parse_requirements_txt,
 )
@@ -348,3 +350,95 @@ pretty_assertions = "1.4"
 
         assert len(deps) == 1
         assert deps[0].name == "pretty_assertions"
+
+
+class TestParsePomXml:
+    def test_parses_single_dependency(self) -> None:
+        content = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+      <version>3.2.0</version>
+    </dependency>
+  </dependencies>
+</project>"""
+        deps = parse_pom_xml(content, "pom.xml")
+
+        assert len(deps) == 1
+        assert deps[0].name == "org.springframework.boot:spring-boot-starter"
+        assert deps[0].current_version == "3.2.0"
+        assert deps[0].ecosystem == Ecosystem.JAVA
+        assert deps[0].manifest_path == "pom.xml"
+
+    def test_parses_multiple_dependencies(self) -> None:
+        content = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>lib-a</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+    </dependency>
+  </dependencies>
+</project>"""
+        deps = parse_pom_xml(content, "pom.xml")
+
+        assert len(deps) == 2
+        assert deps[0].name == "com.example:lib-a"
+        assert deps[1].name == "junit:junit"
+
+    def test_skips_dependency_without_version(self) -> None:
+        content = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-core</artifactId>
+    </dependency>
+  </dependencies>
+</project>"""
+        deps = parse_pom_xml(content, "pom.xml")
+
+        assert len(deps) == 0
+
+    def test_skips_property_placeholder(self) -> None:
+        content = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>library</artifactId>
+      <version>${library.version}</version>
+    </dependency>
+  </dependencies>
+</project>"""
+        deps = parse_pom_xml(content, "pom.xml")
+
+        assert len(deps) == 0
+
+    def test_handles_maven_namespace(self) -> None:
+        content = """\
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>library</artifactId>
+      <version>2.0.0</version>
+    </dependency>
+  </dependencies>
+</project>"""
+        deps = parse_pom_xml(content, "pom.xml")
+
+        assert len(deps) == 1
+        assert deps[0].name == "com.example:library"
+        assert deps[0].current_version == "2.0.0"
+
+    def test_empty_content(self) -> None:
+        assert parse_pom_xml("", "pom.xml") == []

@@ -3,6 +3,7 @@
 import json
 import re
 import tomllib
+import xml.etree.ElementTree as ET
 
 from migratowl.models.schemas import Dependency, Ecosystem
 
@@ -195,3 +196,37 @@ def parse_cargo_toml(content: str, manifest_path: str) -> list[Dependency]:
             )
 
     return deps
+
+
+def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:
+    """Parse a Maven pom.xml file."""
+    if not content.strip():
+        return []
+
+    root = ET.fromstring(content)
+    ns = ""
+    if root.tag.startswith("{"):
+        ns = root.tag.split("}")[0] + "}"
+
+    deps: list[Dependency] = []
+    for dep in root.iter(f"{ns}dependency"):
+        group_id = (dep.findtext(f"{ns}groupId") or "").strip()
+        artifact_id = (dep.findtext(f"{ns}artifactId") or "").strip()
+        version = (dep.findtext(f"{ns}version") or "").strip()
+        if not group_id or not artifact_id or not version or version.startswith("${"):
+            continue
+        deps.append(
+            Dependency(
+                name=f"{group_id}:{artifact_id}",
+                current_version=version,
+                ecosystem=Ecosystem.JAVA,
+                manifest_path=manifest_path,
+            )
+        )
+    return deps
+
+
+def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
+    """Parse a Gradle build.gradle file."""
+    # TODO: Implement in Task 3
+    return []
