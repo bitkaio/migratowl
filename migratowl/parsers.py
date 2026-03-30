@@ -232,12 +232,12 @@ def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
         return []
 
     deps: list[Dependency] = []
-    pattern = re.compile(r"""['"]([a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-]+):([^'"\s]+)['"]""")
+    pattern = re.compile(r"""(['"])([a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-]+):([^'"\s]+)\1""")
     for m in pattern.finditer(content):
         deps.append(
             Dependency(
-                name=m.group(1),
-                current_version=m.group(2),
+                name=m.group(2),
+                current_version=m.group(3),
                 ecosystem=Ecosystem.JAVA,
                 manifest_path=manifest_path,
             )
