@@ -227,6 +227,19 @@ def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:
 
 
 def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
-    """Parse a Gradle build.gradle file."""
-    # TODO: Implement in Task 3
-    return []
+    """Parse a Gradle build.gradle file (string-form dependencies only)."""
+    if not content.strip():
+        return []
+
+    deps: list[Dependency] = []
+    pattern = re.compile(r"""['"]([a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-]+):([^'"\s]+)['"]""")
+    for m in pattern.finditer(content):
+        deps.append(
+            Dependency(
+                name=m.group(1),
+                current_version=m.group(2),
+                ecosystem=Ecosystem.JAVA,
+                manifest_path=manifest_path,
+            )
+        )
+    return deps

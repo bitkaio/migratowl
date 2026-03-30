@@ -442,3 +442,42 @@ class TestParsePomXml:
 
     def test_empty_content(self) -> None:
         assert parse_pom_xml("", "pom.xml") == []
+
+
+class TestParseBuildGradle:
+    def test_parses_single_quoted_dependency(self) -> None:
+        content = "dependencies {\n    implementation 'com.example:library:1.0.0'\n}\n"
+        deps = parse_build_gradle(content, "build.gradle")
+
+        assert len(deps) == 1
+        assert deps[0].name == "com.example:library"
+        assert deps[0].current_version == "1.0.0"
+        assert deps[0].ecosystem == Ecosystem.JAVA
+        assert deps[0].manifest_path == "build.gradle"
+
+    def test_parses_double_quoted_dependency(self) -> None:
+        content = 'dependencies {\n    implementation("org.springframework.boot:spring-boot-starter:3.2.0")\n}\n'
+        deps = parse_build_gradle(content, "build.gradle")
+
+        assert len(deps) == 1
+        assert deps[0].name == "org.springframework.boot:spring-boot-starter"
+        assert deps[0].current_version == "3.2.0"
+
+    def test_parses_multiple_configurations(self) -> None:
+        content = (
+            "dependencies {\n"
+            "    implementation 'com.example:lib-a:1.0.0'\n"
+            "    testImplementation 'junit:junit:4.13.2'\n"
+            "    api(\"com.example:lib-b:2.0.0\")\n"
+            "}\n"
+        )
+        deps = parse_build_gradle(content, "build.gradle")
+
+        assert len(deps) == 3
+        names = [d.name for d in deps]
+        assert "com.example:lib-a" in names
+        assert "junit:junit" in names
+        assert "com.example:lib-b" in names
+
+    def test_empty_content(self) -> None:
+        assert parse_build_gradle("", "build.gradle") == []
