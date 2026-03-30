@@ -42,7 +42,7 @@ def create_validate_project_tool(
 
         Args:
             folder_name: Target folder name (e.g. "main", "requests").
-            ecosystem: One of "python", "nodejs", "go", "rust".
+            ecosystem: One of "python", "nodejs", "go", "rust", "java".
         """
         backend = get_backend()
         folder_path = f"{workspace_path}/{folder_name}"
@@ -55,6 +55,8 @@ def create_validate_project_tool(
             result = _validate_python(backend, folder_path, max_output_chars)
         elif ecosystem == "nodejs":
             result = _validate_nodejs(backend, folder_path, max_output_chars)
+        elif ecosystem == "java":
+            result = _validate_java(backend, folder_path, max_output_chars)
         else:
             return json.dumps({"error": f"Unsupported ecosystem: {ecosystem}"})
 
@@ -207,4 +209,38 @@ def _validate_nodejs(backend: Any, folder_path: str, max_chars: int) -> dict[str
 
     test_r = backend.execute(_sh(f"cd {folder_path} && npm test"))
     steps.append(_step("test", "npm test", test_r, max_chars))
+    return {"steps": steps, "passed": _is_passing(steps)}
+
+
+def _validate_java(backend: Any, folder_path: str, max_chars: int) -> dict[str, Any]:
+    steps: list[dict[str, Any]] = []
+
+    # Detect build system: Maven (pom.xml) takes priority over Gradle
+    has_pom = backend.execute(_sh(f"test -f {folder_path}/pom.xml"))
+    use_maven = has_pom.exit_code == 0
+
+    if use_maven:
+        build_cmd = "mvn compile -q"
+        test_cmd = "mvn test"
+    else:
+        build_cmd = "gradle compileJava -q"
+        test_cmd = "gradle test"
+
+    # Step 1: Compile — catches API-breaking dep changes
+    build_r = backend.execute(_sh(f"cd {folder_path} && {build_cmd}"))
+    steps.append(_step("build", build_cmd, build_r, max_chars))
+    if build_r.exit_code != 0:
+        return {"steps": steps, "passed": False}
+
+    # Step 2: Detect test sources (src/test is the Maven/Gradle standard layout)
+    detect_r = backend.execute(_sh(
+        f'find {folder_path}/src/test -name "*.java" -maxdepth 5 2>/dev/null | head -1'
+    ))
+    if not detect_r.output.strip():
+        steps.append(_skipped("test", "no Java test sources found in src/test"))
+        return {"steps": steps, "passed": True}
+
+    # Step 3: Run tests
+    test_r = backend.execute(_sh(f"cd {folder_path} && {test_cmd}"))
+    steps.append(_step("test", test_cmd, test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}

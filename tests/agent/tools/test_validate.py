@@ -254,6 +254,83 @@ class TestValidateNodeJS:
         assert test_step.get("skipped") is True
 
 
+class TestValidateJava:
+    def test_maven_build_is_first_step(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="yes", exit_code=0),   # test -f pom.xml
+            ExecResult(output="", exit_code=0),       # mvn compile
+            ExecResult(output="", exit_code=0),       # find src/test → empty
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"})
+
+        build_cmd = backend.execute.call_args_list[1][0][0]
+        assert "mvn compile" in build_cmd
+
+    def test_maven_stops_after_build_failure(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="yes", exit_code=0),    # test -f pom.xml
+            ExecResult(output="BUILD FAILURE\n", exit_code=1),  # mvn compile
+        ]
+        result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"}))
+
+        assert backend.execute.call_count == 2
+        assert result["passed"] is False
+
+    def test_maven_runs_tests_when_src_test_found(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="yes", exit_code=0),   # test -f pom.xml
+            ExecResult(output="", exit_code=0),       # mvn compile
+            ExecResult(output=f"{DEFAULT_WORKSPACE}/main/src/test/java/FooTest.java\n", exit_code=0),
+            ExecResult(output="Tests run: 3\n", exit_code=0),  # mvn test
+        ]
+        result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"}))
+
+        assert backend.execute.call_count == 4
+        test_cmd = backend.execute.call_args_list[3][0][0]
+        assert "mvn test" in test_cmd
+        assert result["passed"] is True
+
+    def test_maven_skips_test_when_no_src_test(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="yes", exit_code=0),   # test -f pom.xml
+            ExecResult(output="", exit_code=0),       # mvn compile
+            ExecResult(output="", exit_code=0),       # find src/test → empty
+        ]
+        result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"}))
+
+        assert result["passed"] is True
+        test_step = next(s for s in result["steps"] if s["name"] == "test")
+        assert test_step.get("skipped") is True
+
+    def test_gradle_build_used_when_no_pom(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=1),   # test -f pom.xml → not found
+            ExecResult(output="", exit_code=0),   # gradle compileJava
+            ExecResult(output="", exit_code=0),   # find src/test → empty
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"})
+
+        build_cmd = backend.execute.call_args_list[1][0][0]
+        assert "gradle compileJava" in build_cmd
+
+    def test_failed_tests_mark_passed_false(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="yes", exit_code=0),
+            ExecResult(output="", exit_code=0),
+            ExecResult(output=f"{DEFAULT_WORKSPACE}/main/src/test/java/FooTest.java\n", exit_code=0),
+            ExecResult(output="BUILD FAILURE\n", exit_code=1),
+        ]
+        result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "java"}))
+
+        assert result["passed"] is False
+
+
 class TestValidateProjectOutput:
     def test_returns_valid_json_with_steps_and_passed(self) -> None:
         backend = MagicMock()
