@@ -22,6 +22,7 @@ def apply_patches() -> None:
     _patch_filesystem_middleware_eviction()
     _patch_summarization_threshold()
     _patch_subagent_recursion_limit()
+    _patch_langchain_kubernetes_annotated()
     _applied = True
 
 
@@ -155,3 +156,39 @@ def _patch_subagent_recursion_limit() -> None:
 
     _subagents_mod._build_task_tool = _patched_build_task_tool
     logger.info("Patched _build_task_tool to inject recursion_limit=500 for subagents")
+
+
+def _patch_langchain_kubernetes_annotated() -> None:
+    """Inject missing symbols into langchain_kubernetes.manager module globals.
+
+    manager.py (0.3.0.dev26) defines _AgentState inside create_agent() and
+    imports Annotated, TypedDict, AnyMessage, and add_messages locally (not at
+    module level), but from __future__ import annotations causes all annotations
+    to be stored as strings.  When LangGraph calls
+    get_type_hints(_AgentState, include_extras=True) during StateGraph
+    construction, Python resolves strings against the class's *module* globals —
+    not the enclosing method scope — so all four symbols must be present there.
+    """
+    from typing import Annotated
+
+    import langchain_kubernetes.manager as _lk_manager
+    from langchain_core.messages import AnyMessage
+    from langgraph.graph.message import add_messages
+    from typing_extensions import TypedDict
+
+    needed = {
+        "Annotated": Annotated,
+        "AnyMessage": AnyMessage,
+        "TypedDict": TypedDict,
+        "add_messages": add_messages,
+    }
+    injected = []
+    for name, val in needed.items():
+        if not hasattr(_lk_manager, name):
+            setattr(_lk_manager, name, val)
+            injected.append(name)
+    if injected:
+        logger.info(
+            "Patched langchain_kubernetes.manager: injected %s into module globals",
+            ", ".join(injected),
+        )

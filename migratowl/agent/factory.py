@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from deepagents import create_deep_agent
-from deepagents.backends.protocol import BackendProtocol
 from langchain.chat_models import init_chat_model
-from langchain.tools import ToolRuntime
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_kubernetes import KubernetesSandboxManager
 
 from migratowl.agent.session_graph import apply_session_injection
 from migratowl.agent.subagents import create_package_analyzer_subagent
@@ -142,32 +139,24 @@ Never retry the same tool with identical arguments after it fails. On failure:
 
 
 def create_migratowl_agent(
-    sandbox_or_factory: BackendProtocol | Callable[..., BackendProtocol],
+    manager: KubernetesSandboxManager,
     *,
     settings: Settings | None = None,
 ) -> Any:
     """Build the MigratOwl agent graph.
 
     Args:
-        sandbox_or_factory: Either a concrete sandbox (from lifespan init)
-            or a callable that returns one (for lazy langgraph.json init).
+        manager: KubernetesSandboxManager that handles per-thread sandbox
+            acquisition via LangGraph's create_setup_node() mechanism.
         settings: Optional settings override; defaults to ``get_settings()``.
     """
     if settings is None:
         settings = get_settings()
 
-    # Normalize to callables for tool factories and deepagents backend
-    if callable(sandbox_or_factory) and not isinstance(sandbox_or_factory, BackendProtocol):
-        get_sandbox = sandbox_or_factory
-        backend_factory = sandbox_or_factory
-    else:
-        sandbox = sandbox_or_factory
+    backend_factory = manager._make_backend_factory()
 
-        def get_sandbox() -> BackendProtocol:
-            return sandbox
-
-        def backend_factory(runtime: ToolRuntime) -> BackendProtocol:
-            return sandbox
+    def get_sandbox():
+        return backend_factory(None)
 
     workspace_path = settings.workspace_path
     source_path = f"{workspace_path}/source"
@@ -241,11 +230,10 @@ def create_migratowl_agent(
     system_prompt = SYSTEM_PROMPT.format(confidence_threshold=settings.confidence_threshold)
 
     return apply_session_injection(
-        create_deep_agent(
+        manager.create_agent(
             model=model,
             system_prompt=system_prompt,
             tools=tools,
-            backend=backend_factory,
             subagents=[package_analyzer],
             response_format=ScanAnalysisReport,
         )

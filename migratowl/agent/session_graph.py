@@ -1,6 +1,7 @@
 """In-place session-ID injection for LangGraph compiled graphs."""
 
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from migratowl.observability import inject_session_id
 

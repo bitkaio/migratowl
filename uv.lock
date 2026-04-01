@@ -751,14 +751,14 @@ wheels = [
 
 [[package]]
 name = "langchain-kubernetes"
-version = "0.2.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deepagents" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/5e/a10d068c7f0d8d10a485a06eebf077c8ff5a6eb32f5e4d5a577b21896d7f/langchain_kubernetes-0.2.0.tar.gz", hash = "sha256:9ed9addefac3c3487297de81bf1c1f7307fabaf52114b833b2fd298b4c4fcd48", size = 24965, upload-time = "2026-03-14T13:09:46.374Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/8a/36bac269e886d257c937f220679205f57c56173d2ba93b4ed18ca7cd5428/langchain_kubernetes-0.4.0.tar.gz", hash = "sha256:5ce1ace10c5ff2019e673541631c10db42f076d203fa097a5350275fad0b88c3", size = 46456, upload-time = "2026-04-01T19:21:36.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/6e/eb4cd2c722d39bd12b21f4f8a7fe541357c9e506c56d8b1a3eb7de792033/langchain_kubernetes-0.2.0-py3-none-any.whl", hash = "sha256:8152ed22ad694751aea30e98fb50b9c65830c6d6c2378a340f6159a58b530e6a", size = 28083, upload-time = "2026-03-14T13:09:45.414Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/da/e19309b97d450d2ab62bc1cd717e551740e8cb1a302204a9e46dae701550/langchain_kubernetes-0.4.0-py3-none-any.whl", hash = "sha256:e407522fe5038aea8b41e5b8f17f8e4bb284fa185cabfa0c8324e1ac12d0207c", size = 48538, upload-time = "2026-04-01T19:21:35.808Z" },
 ]
 
 [package.optional-dependencies]
@@ -995,7 +995,7 @@ requires-dist = [
     { name = "html2text", specifier = ">=2024.2.26" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic" },
-    { name = "langchain-kubernetes", extras = ["agent-sandbox"], specifier = ">=0.2.0" },
+    { name = "langchain-kubernetes", extras = ["agent-sandbox"], specifier = "==0.4.0" },
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "packaging", specifier = ">=24.0" },
