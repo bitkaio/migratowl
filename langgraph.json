@@ -3,5 +3,6 @@
   "graphs": {
     "migratowl": "./migratowl/agent/graph.py:graph"
   },
-  "env": ".env"
+  "env": ".env",
+  "python_version": "3.13"
 }
