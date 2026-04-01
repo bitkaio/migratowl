@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "deepagents>=0.2.5",
     "fastapi>=0.115.0",
-    "langchain-kubernetes[agent-sandbox]==0.3.0.dev26",
+    "langchain-kubernetes[agent-sandbox]>=0.4.0",
     "langchain-anthropic",
     "langchain-openai",
     "pydantic>=2.0",
@@ -30,13 +30,6 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[tool.uv.sources]
-langchain-kubernetes = { index = "gitlab-langchain-kubernetes" }
-
-[[tool.uv.index]]
-name = "gitlab-langchain-kubernetes"
-url = "https://gitlab.com/api/v4/projects/80070570/packages/pypi/simple"
 
 [tool.ruff]
 target-version = "py313"
