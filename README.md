@@ -33,17 +33,25 @@ The result tells developers:
 
 ## Table of Contents
 
+- [What It Does](#what-it-does)
+- [Table of Contents](#table-of-contents)
 - [Supported Ecosystems](#supported-ecosystems)
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
   - [POST /webhook](#post-webhook)
-  - [GET /jobs/{job_id}](#get-jobsjob_id)
+  - [GET /jobs/{job\_id}](#get-jobsjob_id)
   - [GET /healthz](#get-healthz)
 - [Response Schema](#response-schema)
 - [Configuration](#configuration)
+  - [LLM](#llm)
+  - [Kubernetes Sandbox](#kubernetes-sandbox)
+  - [Analysis](#analysis)
+  - [HTTP Client](#http-client)
+  - [API Server](#api-server)
+  - [Observability](#observability)
 - [Kubernetes Setup](#kubernetes-setup)
-- [Observability](#observability)
+- [Observability](#observability-1)
 - [Architecture](#architecture)
 - [Project Layout](#project-layout)
 - [Development](#development)
@@ -429,10 +437,10 @@ No additional code changes are needed — the `observability.py` module initiali
 
 ```
                           ┌─────────────────────────────┐
-  HTTP client             │          FastAPI             │
-  ─────────────────────► │  POST /webhook               │
-                          │  GET  /jobs/{id}             │
-                          │  GET  /healthz               │
+  HTTP client             │          FastAPI            │
+  ─────────────────────►  │  POST /webhook              │
+                          │  GET  /jobs/{id}            │
+                          │  GET  /healthz              │
                           └──────────────┬──────────────┘
                                          │ asyncio.create_task
                                          ▼
