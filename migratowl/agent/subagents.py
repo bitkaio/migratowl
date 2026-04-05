@@ -1,4 +1,4 @@
-"""Subagent factories for the MigratOwl agent."""
+"""Subagent factories for the Migratowl agent."""
 
 from collections.abc import Callable
 from typing import Any

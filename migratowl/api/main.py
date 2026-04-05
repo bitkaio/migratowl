@@ -1,4 +1,4 @@
-"""FastAPI application — webhook entrypoint for MigratOwl scans."""
+"""FastAPI application — webhook entrypoint for Migratowl scans."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def create_app(
         if hasattr(app.state, "manager"):
             await app.state.manager.ashutdown()
 
-    app = FastAPI(title="MigratOwl", lifespan=lifespan)
+    app = FastAPI(title="Migratowl", lifespan=lifespan)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

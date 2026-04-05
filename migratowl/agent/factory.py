@@ -1,4 +1,4 @@
-"""Agent graph factory — builds the MigratOwl agent graph."""
+"""Agent graph factory — builds the Migratowl agent graph."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from migratowl.models.schemas import ScanAnalysisReport
 from migratowl.observability import _langfuse_handler
 
 SYSTEM_PROMPT = """\
-You are MigratOwl, an AI-powered dependency migration analyzer.
+You are Migratowl, an AI-powered dependency migration analyzer.
 
 You operate inside a Kubernetes sandbox with a workspace laid out as:
 
@@ -102,7 +102,7 @@ The deepagents built-in `read_file`, `edit_file`, and `execute` tools are
 NOT functional in this K8s sandbox — they will return path errors or
 serialization failures. Do NOT call them.
 
-Use these MigratOwl tools instead:
+Use these Migratowl tools instead:
 - Read a file: read_manifest(path=<absolute sandbox path>)
 - Edit a file: patch_manifest(path=..., old_string=..., new_string=...)
 - Run a command: update_dependencies or validate_project handle their own
@@ -143,7 +143,7 @@ def create_migratowl_agent(
     *,
     settings: Settings | None = None,
 ) -> Any:
-    """Build the MigratOwl agent graph.
+    """Build the Migratowl agent graph.
 
     Args:
         manager: KubernetesSandboxManager that handles per-thread sandbox

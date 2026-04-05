@@ -1,30 +1,30 @@
 # docs/examples/dependabot-scan.yml
 #
-# Drop this file into .github/workflows/ in any repo you want MigratOwl to scan.
+# Drop this file into .github/workflows/ in any repo you want Migratowl to scan.
 #
 # Requirements:
 #   - Set MIGRATOWL_URL as a repository variable (Settings → Variables → Actions)
 #     e.g. https://migratowl.internal.yourcompany.com
-#   - MigratOwl must be configured with a GitHub token that has:
+#   - Migratowl must be configured with a GitHub token that has:
 #       repo:status  — to set commit statuses
 #       public_repo  — to post PR comments (or full "repo" for private repos)
 #
 # For GitHub Enterprise Server:
-#   - Set MIGRATOWL_URL to point at your MigratOwl instance
-#   - Set GITHUB_API_URL in MigratOwl's .env to your GHES API URL
+#   - Set MIGRATOWL_URL to point at your Migratowl instance
+#   - Set GITHUB_API_URL in Migratowl's .env to your GHES API URL
 #     e.g. GITHUB_API_URL=https://github.corp.com/api/v3
 #
 # For GitLab (self-hosted or gitlab.com):
 #   - Change git_provider to "gitlab"
-#   - Set GITLAB_TOKEN and GITLAB_API_URL in MigratOwl's .env
+#   - Set GITLAB_TOKEN and GITLAB_API_URL in Migratowl's .env
 
-name: MigratOwl Dependency Scan
+name: Migratowl Dependency Scan
 
 on:
   pull_request:
     types: [opened, synchronize]
 
-# Minimal permissions — MigratOwl uses its own token to post comments and statuses.
+# Minimal permissions — Migratowl uses its own token to post comments and statuses.
 permissions:
   contents: read
 
@@ -34,7 +34,7 @@ jobs:
     if: github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger MigratOwl scan
+      - name: Trigger Migratowl scan
         run: |
           curl --fail-with-body -X POST "${{ vars.MIGRATOWL_URL }}/webhook" \
             -H "Content-Type: application/json" \

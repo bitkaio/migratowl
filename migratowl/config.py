@@ -1,4 +1,4 @@
-"""Centralized configuration for MigratOwl."""
+"""Centralized configuration for Migratowl."""
 
 from typing import Literal
 

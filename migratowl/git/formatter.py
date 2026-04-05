@@ -5,7 +5,7 @@ from migratowl.models.schemas import ScanAnalysisReport
 
 def format_pr_comment(report: ScanAnalysisReport) -> str:
     """Return a markdown string suitable for posting as a PR/MR comment."""
-    lines: list[str] = ["## MigratOwl Dependency Analysis", ""]
+    lines: list[str] = ["## Migratowl Dependency Analysis", ""]
 
     if not report.reports:
         lines.append("_No outdated dependencies found to analyze._")

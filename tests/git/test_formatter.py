@@ -49,7 +49,7 @@ def _make_analysis(
 class TestFormatPrComment:
     def test_contains_header(self) -> None:
         comment = format_pr_comment(_make_report([]))
-        assert "## MigratOwl Dependency Analysis" in comment
+        assert "## Migratowl Dependency Analysis" in comment
 
     def test_no_reports_shows_empty_message(self) -> None:
         comment = format_pr_comment(_make_report([]))

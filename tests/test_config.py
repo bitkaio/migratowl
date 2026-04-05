@@ -1,4 +1,4 @@
-"""Tests for MigratOwl configuration."""
+"""Tests for Migratowl configuration."""
 
 import pytest
 from pydantic import ValidationError

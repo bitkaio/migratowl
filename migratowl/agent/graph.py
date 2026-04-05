@@ -1,4 +1,4 @@
-"""MigratOwl agent — module-level graph for ``langgraph.json`` / deep-agents-ui.
+"""Migratowl agent — module-level graph for ``langgraph.json`` / deep-agents-ui.
 
 The ``graph`` singleton is built eagerly at import time.  Sandbox acquisition
 is deferred to the first invocation per ``thread_id`` by

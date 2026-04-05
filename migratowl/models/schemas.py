@@ -1,4 +1,4 @@
-"""Webhook and API schemas for MigratOwl."""
+"""Webhook and API schemas for Migratowl."""
 
 import enum
 from datetime import UTC, datetime

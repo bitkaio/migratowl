@@ -20,12 +20,12 @@ async def notify_pr_start(payload: ScanWebhookPayload, settings: Settings) -> No
             owner, repo = parse_github_repo(payload.repo_url)
             gh = GitHubClient(settings.github_token, settings.github_api_url)
             await gh.set_commit_status(
-                owner, repo, payload.commit_sha, "pending", "MigratOwl: scanning dependencies…"
+                owner, repo, payload.commit_sha, "pending", "Migratowl: scanning dependencies…"
             )
         elif payload.git_provider == "gitlab":
             gl = GitLabClient(settings.gitlab_token, settings.gitlab_api_url)
             await gl.set_commit_status(
-                payload.repo_url, payload.commit_sha, "running", "MigratOwl: scanning dependencies…"
+                payload.repo_url, payload.commit_sha, "running", "Migratowl: scanning dependencies…"
             )
     except Exception:
         logger.warning("Failed to post pending status for %s", payload.repo_url, exc_info=True)
@@ -49,9 +49,9 @@ async def notify_pr_done(
             if payload.commit_sha:
                 state = "failure" if breaking_count > 0 else "success"
                 desc = (
-                    f"MigratOwl: {breaking_count} breaking upgrade(s) found"
+                    f"Migratowl: {breaking_count} breaking upgrade(s) found"
                     if breaking_count
-                    else "MigratOwl: all upgrades safe"
+                    else "Migratowl: all upgrades safe"
                 )
                 await gh.set_commit_status(owner, repo, payload.commit_sha, state, desc)
         elif payload.git_provider == "gitlab":
@@ -60,9 +60,9 @@ async def notify_pr_done(
             if payload.commit_sha:
                 state = "failed" if breaking_count > 0 else "success"
                 desc = (
-                    f"MigratOwl: {breaking_count} breaking upgrade(s) found"
+                    f"Migratowl: {breaking_count} breaking upgrade(s) found"
                     if breaking_count
-                    else "MigratOwl: all upgrades safe"
+                    else "Migratowl: all upgrades safe"
                 )
                 await gl.set_commit_status(payload.repo_url, payload.commit_sha, state, desc)
     except Exception:
@@ -83,12 +83,12 @@ async def notify_pr_failed(payload: ScanWebhookPayload, settings: Settings) -> N
             owner, repo = parse_github_repo(payload.repo_url)
             gh = GitHubClient(settings.github_token, settings.github_api_url)
             await gh.set_commit_status(
-                owner, repo, payload.commit_sha, "error", "MigratOwl: scan failed"
+                owner, repo, payload.commit_sha, "error", "Migratowl: scan failed"
             )
         elif payload.git_provider == "gitlab":
             gl = GitLabClient(settings.gitlab_token, settings.gitlab_api_url)
             await gl.set_commit_status(
-                payload.repo_url, payload.commit_sha, "canceled", "MigratOwl: scan failed"
+                payload.repo_url, payload.commit_sha, "canceled", "Migratowl: scan failed"
             )
     except Exception:
         logger.warning("Failed to post error status for %s", payload.repo_url, exc_info=True)

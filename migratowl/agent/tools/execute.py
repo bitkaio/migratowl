@@ -1,4 +1,4 @@
-"""Execute project tool for the MigratOwl agent."""
+"""Execute project tool for the Migratowl agent."""
 
 import json
 from collections.abc import Callable
