@@ -2,7 +2,7 @@
 
 import enum
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -32,8 +32,9 @@ class ScanWebhookPayload(BaseModel):
 
     repo_url: str
     branch_name: str = "main"
-    git_provider: str = "github"
+    git_provider: Literal["github", "gitlab"] = "github"
     pr_number: int | None = None
+    commit_sha: str | None = None
     callback_url: str | None = None
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)

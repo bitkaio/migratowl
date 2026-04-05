@@ -19,6 +19,7 @@ from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 from migratowl.api.helpers import build_user_message, extract_report  # noqa: E402
 from migratowl.api.jobs import JobStore  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
+from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
 from migratowl.http import close_http_client  # noqa: E402
 from migratowl.models.schemas import (  # noqa: E402
     JobState,
@@ -107,6 +108,7 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
     assert _scan_semaphore is not None
     async with _scan_semaphore:
         store.update_state(job_id, JobState.RUNNING)
+        await notify_pr_start(job.payload, app.state.settings)
         try:
             from migratowl.agent.factory import create_migratowl_agent
 
@@ -125,9 +127,12 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
             if job.payload.callback_url:
                 await _post_callback(job.payload.callback_url, report)
 
+            await notify_pr_done(job.payload, report, app.state.settings)
+
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
             store.set_error(job_id, "Internal scan error")
+            await notify_pr_failed(job.payload, app.state.settings)
 
 
 async def _post_callback(callback_url: str, report: Any) -> None:

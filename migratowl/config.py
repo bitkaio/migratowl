@@ -36,10 +36,22 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.7
     max_output_chars: int = 30_000
 
-    # GitHub
+    # Git providers
     github_token: str = Field(
         default="",
         validation_alias=AliasChoices("MIGRATOWL_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    )
+    gitlab_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIGRATOWL_GITLAB_TOKEN", "GITLAB_TOKEN"),
+    )
+    github_api_url: str = Field(
+        default="https://api.github.com",
+        validation_alias=AliasChoices("MIGRATOWL_GITHUB_API_URL", "GITHUB_API_URL"),
+    )
+    gitlab_api_url: str = Field(
+        default="https://gitlab.com/api/v4",
+        validation_alias=AliasChoices("MIGRATOWL_GITLAB_API_URL", "GITLAB_API_URL"),
     )
 
     # LangFuse — optional observability (keys read from standard LangFuse env vars)

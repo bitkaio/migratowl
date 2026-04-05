@@ -39,6 +39,24 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.github_token == ""
 
+    def test_default_gitlab_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("MIGRATOWL_GITLAB_TOKEN", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.gitlab_token == ""
+
+    def test_default_github_api_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_API_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_GITHUB_API_URL", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.github_api_url == "https://api.github.com"
+
+    def test_default_gitlab_api_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITLAB_API_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_GITLAB_API_URL", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.gitlab_api_url == "https://gitlab.com/api/v4"
+
     def test_default_http_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_HTTP_TIMEOUT", raising=False)
         settings = Settings(_env_file=None)
@@ -115,6 +133,27 @@ class TestSettingsFromEnv:
         settings = Settings()
         assert settings.http_timeout == 60.0
 
+    def test_gitlab_token_from_standard_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "glpat-abc123")
+        settings = Settings(_env_file=None)
+        assert settings.gitlab_token == "glpat-abc123"
+
+    def test_gitlab_token_from_migratowl_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_GITLAB_TOKEN", "glpat-xyz")
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.gitlab_token == "glpat-xyz"
+
+    def test_github_api_url_for_ghes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_API_URL", "https://github.corp.com/api/v3")
+        settings = Settings(_env_file=None)
+        assert settings.github_api_url == "https://github.corp.com/api/v3"
+
+    def test_gitlab_api_url_for_self_hosted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_GITLAB_API_URL", "https://gitlab.internal.com/api/v4")
+        settings = Settings(_env_file=None)
+        assert settings.gitlab_api_url == "https://gitlab.internal.com/api/v4"
+
     def test_env_override_model_provider_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "openai")
         settings = Settings()
@@ -186,6 +225,12 @@ class TestMigraTOwlPrefixedAliases:
         monkeypatch.delenv("LANGFUSE_HOST", raising=False)
         settings = Settings()
         assert settings.langfuse_host == "https://langfuse.internal"
+
+    def test_migratowl_github_api_url_takes_precedence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_GITHUB_API_URL", "https://github.corp.com/api/v3")
+        monkeypatch.delenv("GITHUB_API_URL", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.github_api_url == "https://github.corp.com/api/v3"
 
 
 class TestGetSettings:

@@ -48,6 +48,7 @@ class TestScanWebhookPayload:
             ecosystems=[Ecosystem.PYTHON],
             exclude_deps=["setuptools"],
             max_deps=10,
+            commit_sha="deadbeef1234",
         )
         assert payload.repo_url == "https://github.com/psf/requests"
         assert payload.branch_name == "develop"
@@ -57,6 +58,7 @@ class TestScanWebhookPayload:
         assert payload.ecosystems == [Ecosystem.PYTHON]
         assert payload.exclude_deps == ["setuptools"]
         assert payload.max_deps == 10
+        assert payload.commit_sha == "deadbeef1234"
 
     def test_defaults(self) -> None:
         payload = ScanWebhookPayload(repo_url="https://github.com/psf/requests")
@@ -67,6 +69,7 @@ class TestScanWebhookPayload:
         assert payload.ecosystems is None
         assert payload.exclude_deps == []
         assert payload.max_deps == 50
+        assert payload.commit_sha is None
 
     def test_repo_url_required(self) -> None:
         with pytest.raises(ValidationError):
@@ -450,3 +453,28 @@ class TestWebhookAcceptedResponse:
         )
         assert resp.job_id == "abc-123"
         assert resp.status_url == "/jobs/abc-123"
+
+
+class TestScanWebhookPayloadGitFields:
+    def test_commit_sha_defaults_to_none(self) -> None:
+        p = ScanWebhookPayload(repo_url="https://github.com/a/b")
+        assert p.commit_sha is None
+
+    def test_commit_sha_accepted(self) -> None:
+        p = ScanWebhookPayload(
+            repo_url="https://github.com/a/b",
+            commit_sha="abc123def456",
+        )
+        assert p.commit_sha == "abc123def456"
+
+    def test_git_provider_defaults_to_github(self) -> None:
+        p = ScanWebhookPayload(repo_url="https://github.com/a/b")
+        assert p.git_provider == "github"
+
+    def test_git_provider_gitlab_accepted(self) -> None:
+        p = ScanWebhookPayload(repo_url="https://gitlab.com/a/b", git_provider="gitlab")
+        assert p.git_provider == "gitlab"
+
+    def test_git_provider_unknown_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://bitbucket.org/a/b", git_provider="bitbucket")
