@@ -20,10 +20,13 @@ assignees: ''
 <!-- A clear and concise description of what you expected to happen. -->
 
 **Environment**
-codesteward version: <!-- version -->
-Backend: <!-- Neo4j / stub -->
-Transport: <!-- sse / stdio / http -->
+migratowl version: <!-- version -->
+Sandbox mode: <!-- agent-sandbox / raw -->
+LLM model: <!-- e.g. claude-sonnet-4-6 -->
 OS:
+
+**Logs / Agent output**
+<!-- Paste relevant agent trace, LangFuse trace ID, or error output here. -->
 
 **Additional context**
 <!-- Any other context about the problem here. -->
