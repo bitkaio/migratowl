@@ -159,6 +159,17 @@ class TestNotifyPrDone:
         mock_gh.post_pr_comment.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_no_op_when_pr_number_missing_gitlab(self) -> None:
+        mock_gl = AsyncMock()
+        payload = ScanWebhookPayload(
+            repo_url="https://gitlab.com/g/r", git_provider="gitlab"
+        )
+        with patch("migratowl.git.notify.GitLabClient", return_value=mock_gl):
+            await notify_pr_done(payload, _report(), _settings())
+        mock_gl.post_mr_comment.assert_not_awaited()
+        mock_gl.set_commit_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_swallows_exception(self) -> None:
         mock_gh = AsyncMock()
         mock_gh.post_pr_comment.side_effect = RuntimeError("API error")

@@ -3,7 +3,8 @@
 # Drop this file into .github/workflows/ in any repo you want Migratowl to scan.
 #
 # Requirements:
-#   - Set MIGRATOWL_URL as a repository variable (Settings → Variables → Actions)
+#   - Set MIGRATOWL_URL as a repository Actions variable
+#     (Settings → Secrets and variables → Actions → Variables)
 #     e.g. https://migratowl.internal.yourcompany.com
 #   - Migratowl must be configured with a GitHub token that has:
 #       repo:status  — to set commit statuses
@@ -35,13 +36,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Migratowl scan
+        env:
+          MIGRATOWL_URL: ${{ vars.MIGRATOWL_URL }}
+          REPO_URL: ${{ github.event.repository.clone_url }}
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          curl --fail-with-body -X POST "${{ vars.MIGRATOWL_URL }}/webhook" \
+          payload=$(jq -n \
+            --arg     repo_url     "$REPO_URL" \
+            --arg     branch_name  "$BRANCH_NAME" \
+            --arg     commit_sha   "$COMMIT_SHA" \
+            --argjson pr_number    "$PR_NUMBER" \
+            '{
+              repo_url:     $repo_url,
+              branch_name:  $branch_name,
+              git_provider: "github",
+              pr_number:    $pr_number,
+              commit_sha:   $commit_sha
+            }')
+          curl --fail-with-body -X POST "$MIGRATOWL_URL/webhook" \
             -H "Content-Type: application/json" \
-            -d '{
-              "repo_url": "${{ github.event.repository.clone_url }}",
-              "branch_name": "${{ github.head_ref }}",
-              "git_provider": "github",
-              "pr_number": ${{ github.event.pull_request.number }},
-              "commit_sha": "${{ github.event.pull_request.head.sha }}"
-            }'
+            -d "$payload"
