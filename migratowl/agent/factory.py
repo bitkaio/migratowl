@@ -20,8 +20,9 @@ from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
-from migratowl.models.schemas import ScanAnalysisReport
+from migratowl.models.schemas import OutdatedCheckMode, ScanAnalysisReport
 from migratowl.observability import _langfuse_handler
+from migratowl.registry import CheckOptions
 
 SYSTEM_PROMPT = """\
 You are Migratowl, an AI-powered dependency migration analyzer.
@@ -142,6 +143,8 @@ def create_migratowl_agent(
     manager: KubernetesSandboxManager,
     *,
     settings: Settings | None = None,
+    mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
+    include_prerelease: bool = False,
 ) -> Any:
     """Build the Migratowl agent graph.
 
@@ -149,6 +152,10 @@ def create_migratowl_agent(
         manager: KubernetesSandboxManager that handles per-thread sandbox
             acquisition via LangGraph's create_setup_node() mechanism.
         settings: Optional settings override; defaults to ``get_settings()``.
+        mode: How to resolve the latest version — SAFE respects declared semver
+            constraints, NORMAL compares against the global maximum version.
+        include_prerelease: When True, pre-release versions are considered when
+            determining whether a dependency is outdated.
     """
     if settings is None:
         settings = get_settings()
@@ -166,7 +173,10 @@ def create_migratowl_agent(
     copy_source = create_copy_source_tool(get_sandbox, workspace_path=workspace_path)
     detect_languages = create_detect_languages_tool(get_sandbox, workspace_path=source_path)
     scan_dependencies = create_scan_dependencies_tool(get_sandbox, workspace_path=source_path)
-    check_outdated_deps = create_check_outdated_tool(concurrency=settings.scan_registry_concurrency)
+    check_outdated_deps = create_check_outdated_tool(
+        concurrency=settings.scan_registry_concurrency,
+        options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
+    )
     update_dependencies = create_update_dependencies_tool(
         get_sandbox, workspace_path=workspace_path
     )

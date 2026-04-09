@@ -113,7 +113,10 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
             from migratowl.agent.factory import create_migratowl_agent
 
             graph = create_migratowl_agent(
-                app.state.manager, settings=app.state.settings
+                app.state.manager,
+                settings=app.state.settings,
+                mode=job.payload.mode,
+                include_prerelease=job.payload.include_prerelease,
             )
             user_msg = build_user_message(job.payload)
             result = await graph.ainvoke(

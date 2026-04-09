@@ -17,6 +17,21 @@ class Ecosystem(enum.StrEnum):
     JAVA = "java"
 
 
+class OutdatedCheckMode(enum.StrEnum):
+    """Controls how the latest available version is resolved.
+
+    SAFE   — respect the declared semver constraint; only flag if a newer
+             version exists *within* the declared range (e.g. ^4.21.2 → look
+             for newer 4.x only).
+    NORMAL — ignore the constraint entirely; compare the bare version against
+             the globally highest published version (e.g. ^4.21.2 → compare
+             4.21.2 against 5.x if it exists).
+    """
+
+    SAFE = "safe"
+    NORMAL = "normal"
+
+
 class LanguageDetection(BaseModel):
     """Detected language ecosystem in a repository."""
 
@@ -39,6 +54,8 @@ class ScanWebhookPayload(BaseModel):
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
     ecosystems: list[Ecosystem] | None = None
+    mode: OutdatedCheckMode = OutdatedCheckMode.SAFE
+    include_prerelease: bool = False
 
 
 class Dependency(BaseModel):

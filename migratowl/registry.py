@@ -4,17 +4,41 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from migratowl.config import get_settings
-from migratowl.models.schemas import Dependency, Ecosystem, OutdatedDependency
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency
 
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = "migratowl/0.1.0 (https://github.com/bitkaio/migratowl)"
+
+
+# ---------------------------------------------------------------------------
+# Check options
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CheckOptions:
+    """Configuration for how the latest available version is resolved.
+
+    mode: SAFE  — respect the declared semver constraint; only flag if a newer
+                  version exists *within* the declared range.
+          NORMAL — ignore the constraint; compare bare version against the
+                   globally highest published version.
+    include_prerelease: when True, pre-release versions (alpha/beta/rc) are
+                        considered when picking the latest version.
+    """
+
+    mode: OutdatedCheckMode = field(default=OutdatedCheckMode.SAFE)
+    include_prerelease: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -29,6 +53,108 @@ def _clean_version(raw: str) -> str:
     raw = _RANGE_PREFIX_RE.sub("", raw)
     raw = raw.lstrip("v")
     return raw.strip()
+
+
+def _constraint_to_specifier(raw: str) -> SpecifierSet | None:
+    """Convert a declared version string into a SpecifierSet for safe-mode filtering.
+
+    Returns None for bare/exact versions (no range to filter within).
+
+    Handles:
+      - npm/Cargo caret:  ^4.21.2  →  >=4.21.2,<5.0.0  (0.x/0.0.x special cases)
+      - npm/Cargo tilde:  ~4.21.2  →  >=4.21.2,<4.22.0
+      - Python operators: >=4.0.0,<5.0.0  (passed through to SpecifierSet directly)
+      - Bare / exact (=): returns None
+    """
+    raw = raw.strip()
+    if not raw or raw == "*":
+        return None
+
+    # Caret operator — npm/Cargo compatible-release semantics
+    if raw.startswith("^"):
+        base = _clean_version(raw)
+        try:
+            parts = [int(p) for p in base.split(".")[:3]]
+        except ValueError:
+            return None
+        major, minor, patch = (parts + [0, 0])[:3]
+        if major != 0:
+            return SpecifierSet(f">={base},<{major + 1}.0.0")
+        if minor != 0:
+            return SpecifierSet(f">={base},<{major}.{minor + 1}.0")
+        return SpecifierSet(f">={base},<{major}.{minor}.{patch + 1}")
+
+    # Tilde operator — npm/Cargo patch-level compatible
+    if raw.startswith("~") and not raw.startswith("~="):
+        base = _clean_version(raw)
+        try:
+            parts = [int(p) for p in base.split(".")[:2]]
+        except ValueError:
+            return None
+        major, minor = (parts + [0])[:2]
+        return SpecifierSet(f">={base},<{major}.{minor + 1}.0")
+
+    # Python-style operators (>=, <=, >, <, ==, !=, ~=) — pass through
+    if re.match(r"^[><=!~]", raw):
+        try:
+            return SpecifierSet(raw)
+        except InvalidSpecifier:
+            return None
+
+    # Bare version or single = (exact pin) → no range
+    return None
+
+
+def _max_version(versions: list[str], include_prerelease: bool) -> str | None:
+    """Return the maximum version string from a list, optionally excluding pre-releases.
+
+    Strips leading 'v' before parsing. Invalid version strings are silently skipped.
+    Returns the normalized PEP 440 string of the maximum version, or None if the
+    list is empty or all entries are invalid/excluded.
+    """
+    parsed: list[Version] = []
+    for raw in versions:
+        try:
+            ver = Version(raw.lstrip("v"))
+        except InvalidVersion:
+            continue
+        if not include_prerelease and ver.is_prerelease:
+            continue
+        parsed.append(ver)
+    if not parsed:
+        return None
+    return str(max(parsed))
+
+
+def _resolve_latest(
+    current_version: str,
+    all_versions: list[str],
+    options: CheckOptions,
+) -> str | None:
+    """Return the target version to compare against given the mode and options.
+
+    SAFE:   filter all_versions to those satisfying the declared constraint,
+            then return the max of that filtered list.
+    NORMAL: return the global max of all_versions (ignoring the constraint).
+
+    Returns None when no suitable version is found.
+    """
+    if options.mode == OutdatedCheckMode.SAFE:
+        specifier = _constraint_to_specifier(current_version)
+        if specifier is not None:
+            candidates = []
+            for v in all_versions:
+                cleaned = _clean_version(v)
+                try:
+                    if cleaned in specifier:
+                        candidates.append(v)
+                except InvalidVersion:
+                    continue
+            return _max_version(candidates, options.include_prerelease)
+        # Bare/exact version: fall through to global max (nothing to constrain)
+        return _max_version(all_versions, options.include_prerelease)
+    # NORMAL: global max, ignore constraint
+    return _max_version(all_versions, options.include_prerelease)
 
 
 def _is_outdated(current: str, latest: str) -> bool:
@@ -99,23 +225,32 @@ def _go_module_to_repo_url(module_path: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-async def query_pypi(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
+_DEFAULT_OPTIONS = CheckOptions()
+
+
+async def query_pypi(
+    client: httpx.AsyncClient,
+    dep: Dependency,
+    options: CheckOptions = _DEFAULT_OPTIONS,
+) -> OutdatedDependency | None:
     """Query PyPI for latest version of a Python package."""
     name = dep.name.split("[")[0]  # strip extras
     resp = await client.get(f"https://pypi.org/pypi/{name}/json")
     resp.raise_for_status()
     data = resp.json()
     info = data["info"]
-    latest = info["version"]
 
-    if not _is_outdated(dep.current_version, latest):
+    all_versions = list(data.get("releases", {}).keys())
+    target = _resolve_latest(dep.current_version, all_versions, options)
+
+    if target is None or not _is_outdated(dep.current_version, target):
         return None
 
     project_urls = info.get("project_urls")
     return OutdatedDependency(
         name=dep.name,
         current_version=dep.current_version,
-        latest_version=latest,
+        latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         homepage_url=info.get("home_page") or None,
@@ -124,20 +259,26 @@ async def query_pypi(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDepe
     )
 
 
-async def query_npm(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
+async def query_npm(
+    client: httpx.AsyncClient,
+    dep: Dependency,
+    options: CheckOptions = _DEFAULT_OPTIONS,
+) -> OutdatedDependency | None:
     """Query npm registry for latest version of a Node.js package."""
     resp = await client.get(f"https://registry.npmjs.org/{dep.name}")
     resp.raise_for_status()
     data = resp.json()
-    latest = data["dist-tags"]["latest"]
 
-    if not _is_outdated(dep.current_version, latest):
+    all_versions = list(data.get("versions", {}).keys())
+    target = _resolve_latest(dep.current_version, all_versions, options)
+
+    if target is None or not _is_outdated(dep.current_version, target):
         return None
 
     return OutdatedDependency(
         name=dep.name,
         current_version=dep.current_version,
-        latest_version=latest,
+        latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         homepage_url=data.get("homepage") or None,
@@ -145,20 +286,27 @@ async def query_npm(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDepen
     )
 
 
-async def query_crates(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
+async def query_crates(
+    client: httpx.AsyncClient,
+    dep: Dependency,
+    options: CheckOptions = _DEFAULT_OPTIONS,
+) -> OutdatedDependency | None:
     """Query crates.io for latest version of a Rust crate."""
     resp = await client.get(f"https://crates.io/api/v1/crates/{dep.name}")
     resp.raise_for_status()
-    crate = resp.json()["crate"]
-    latest = crate["newest_version"]
+    data = resp.json()
+    crate = data["crate"]
 
-    if not _is_outdated(dep.current_version, latest):
+    all_versions = [v["num"] for v in data.get("versions", []) if not v.get("yanked", False)]
+    target = _resolve_latest(dep.current_version, all_versions, options)
+
+    if target is None or not _is_outdated(dep.current_version, target):
         return None
 
     return OutdatedDependency(
         name=dep.name,
         current_version=dep.current_version,
-        latest_version=latest,
+        latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         homepage_url=crate.get("homepage") or None,
@@ -167,20 +315,30 @@ async def query_crates(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDe
     )
 
 
-async def query_golang(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
+async def query_golang(
+    client: httpx.AsyncClient,
+    dep: Dependency,
+    options: CheckOptions = _DEFAULT_OPTIONS,
+) -> OutdatedDependency | None:
     """Query Go module proxy for latest version."""
-    resp = await client.get(f"https://proxy.golang.org/{_go_proxy_encode(dep.name)}/@latest")
+    encoded = _go_proxy_encode(dep.name)
+    resp = await client.get(f"https://proxy.golang.org/{encoded}/@v/list")
     resp.raise_for_status()
-    data = resp.json()
-    latest = data["Version"]
+    all_versions = [v for v in resp.text.splitlines() if v.strip()]
 
-    if not _is_outdated(dep.current_version, latest):
+    target = _resolve_latest(dep.current_version, all_versions, options)
+
+    if target is None or not _is_outdated(dep.current_version, target):
         return None
+
+    # Re-attach 'v' prefix that packaging normalizes away, if the original had it
+    if not target.startswith("v") and any(v.startswith("v") for v in all_versions):
+        target = f"v{target}"
 
     return OutdatedDependency(
         name=dep.name,
         current_version=dep.current_version,
-        latest_version=latest,
+        latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         repository_url=_go_module_to_repo_url(dep.name),
@@ -188,33 +346,38 @@ async def query_golang(client: httpx.AsyncClient, dep: Dependency) -> OutdatedDe
 
 
 async def query_maven_central(
-    client: httpx.AsyncClient, dep: Dependency
+    client: httpx.AsyncClient,
+    dep: Dependency,
+    options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
     """Query Maven Central Search API for latest version of a Java package.
 
     Expects dep.name in ``groupId:artifactId`` format.
+    Uses core=gav to retrieve all available versions in one request.
     """
     if ":" not in dep.name:
         return None
     group_id, artifact_id = dep.name.split(":", 1)
     url = (
         f"https://search.maven.org/solrsearch/select"
-        f"?q=g:{group_id}+AND+a:{artifact_id}&rows=1&wt=json"
+        f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
     )
     resp = await client.get(url)
     resp.raise_for_status()
     docs = resp.json()["response"]["docs"]
     if not docs:
         return None
-    latest = docs[0]["latestVersion"]
 
-    if not _is_outdated(dep.current_version, latest):
+    all_versions = [d["v"] for d in docs if "v" in d]
+    target = _resolve_latest(dep.current_version, all_versions, options)
+
+    if target is None or not _is_outdated(dep.current_version, target):
         return None
 
     return OutdatedDependency(
         name=dep.name,
         current_version=dep.current_version,
-        latest_version=latest,
+        latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
     )
@@ -243,6 +406,7 @@ _ECOSYSTEM_QUERIES: dict[
 
 async def check_outdated(
     deps: list[Dependency],
+    options: CheckOptions | None = None,
     concurrency: int = 10,
     client: httpx.AsyncClient | None = None,
 ) -> list[OutdatedDependency]:
@@ -253,6 +417,7 @@ async def check_outdated(
     if not deps:
         return []
 
+    _options = options if options is not None else CheckOptions()
     sem = asyncio.Semaphore(concurrency)
 
     async def _query_one(c: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
@@ -262,7 +427,7 @@ async def check_outdated(
             return None
         async with sem:
             try:
-                return await query_fn(c, dep)
+                return await query_fn(c, dep, _options)
             except Exception:
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)
                 return None
