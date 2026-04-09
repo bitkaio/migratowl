@@ -54,7 +54,7 @@ class ScanWebhookPayload(BaseModel):
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
     ecosystems: list[Ecosystem] | None = None
-    mode: OutdatedCheckMode = OutdatedCheckMode.SAFE
+    mode: OutdatedCheckMode = OutdatedCheckMode.NORMAL
     include_prerelease: bool = False
 
 

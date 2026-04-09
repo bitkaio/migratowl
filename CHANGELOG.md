@@ -38,11 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`GITHUB_API_URL` config** — new setting (default `https://api.github.com`) to support GitHub
   Enterprise Server without code changes.
 - **`mode` field on `POST /webhook`** — controls how the latest available version is resolved
-  when checking for outdated dependencies. `"safe"` (default) respects the declared semver
-  constraint (e.g. `^4.21.2` only flags a newer version if one exists within `>=4.21.2,<5.0.0`).
-  `"normal"` ignores the operator and compares the bare version against the globally highest
-  published version, surfacing major-version bumps such as `express 4.x → 5.x` that the registry's
-  own `latest` tag would otherwise hide.
+  when checking for outdated dependencies. `"normal"` (default) ignores the constraint operator
+  and compares the bare version against the globally highest published version. `"safe"` respects
+  the declared semver constraint (e.g. `^4.21.2` only flags a newer version if one exists within
+  `>=4.21.2,<5.0.0`).
+  `"normal"` (default) ignores the operator and compares the bare version against the globally
+  highest published version, surfacing major-version bumps such as `express 4.x → 5.x` that the
+  registry's own `latest` tag would otherwise hide.
 - **`include_prerelease` field on `POST /webhook`** — when `true`, pre-release versions
   (alpha, beta, RC, dev) are included when determining the latest available version. Defaults to
   `false`; orthogonal to `mode` and can be combined with either value.

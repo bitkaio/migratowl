@@ -36,7 +36,7 @@ class CheckOptions:
                         considered when picking the latest version.
     """
 
-    mode: OutdatedCheckMode = field(default=OutdatedCheckMode.SAFE)
+    mode: OutdatedCheckMode = field(default=OutdatedCheckMode.NORMAL)
     include_prerelease: bool = False
 
 

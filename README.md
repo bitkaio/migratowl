@@ -202,7 +202,7 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `exclude_deps` | `string[]` | `[]` | Dependency names to skip |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |
 | `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
-| `mode` | `string` | `"safe"` | Version resolution mode — see below |
+| `mode` | `string` | `"normal"` | Version resolution mode — see below |
 | `include_prerelease` | `boolean` | `false` | When `true`, pre-release versions (alpha, beta, RC) are considered when finding the latest version |
 
 **Version resolution modes (`mode`):**

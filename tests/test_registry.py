@@ -909,8 +909,8 @@ class TestQueryMavenCentralModes:
 
 
 class TestCheckOutdatedWithOptions:
-    async def test_default_options_uses_safe_mode(self) -> None:
-        """Calling check_outdated with no options defaults to safe mode."""
+    async def test_default_options_uses_normal_mode(self) -> None:
+        """Calling check_outdated with no options defaults to normal mode."""
         from migratowl.registry import check_outdated
 
         transport = _mock_transport({
@@ -925,7 +925,8 @@ class TestCheckOutdatedWithOptions:
         async with httpx.AsyncClient(transport=transport) as client:
             result = await check_outdated(deps, concurrency=1, client=client)
 
-        assert result == []  # safe mode: 4.21.2 is max within ^4.21.2
+        assert len(result) == 1  # normal mode: 5.0.0 exists → outdated
+        assert result[0].latest_version == "5.0.0"
 
     async def test_normal_options_flags_major_bump(self) -> None:
         from migratowl.registry import check_outdated
