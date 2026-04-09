@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-09
+
 ### Added
 
 - **GitLab support** — `git_provider: "gitlab"` is now a valid value on `POST /webhook`.
@@ -127,5 +129,6 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bitkaio/migratowl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bitkaio/migratowl/releases/tag/v0.1.0
