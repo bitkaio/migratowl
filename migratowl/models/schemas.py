@@ -52,6 +52,7 @@ class ScanWebhookPayload(BaseModel):
     commit_sha: str | None = None
     callback_url: str | None = None
     exclude_deps: list[str] = []
+    check_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
     ecosystems: list[Ecosystem] | None = None
     mode: OutdatedCheckMode = OutdatedCheckMode.NORMAL

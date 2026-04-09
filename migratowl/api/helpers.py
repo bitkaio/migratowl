@@ -20,6 +20,8 @@ def build_user_message(payload: ScanWebhookPayload) -> str:
     ]
     if payload.exclude_deps:
         parts.append(f"Exclude these dependencies: {', '.join(payload.exclude_deps)}.")
+    if payload.check_deps:
+        parts.append(f"Only check these dependencies: {', '.join(payload.check_deps)}.")
     if payload.ecosystems:
         eco_names = ", ".join(e.value for e in payload.ecosystems)
         parts.append(f"Only scan these ecosystems: {eco_names}.")

@@ -36,6 +36,20 @@ class TestBuildUserMessage:
         assert "python" in msg
         assert "nodejs" in msg
 
+    def test_includes_check_deps(self) -> None:
+        payload = ScanWebhookPayload(
+            repo_url="https://github.com/x/y",
+            check_deps=["requests", "flask"],
+        )
+        msg = build_user_message(payload)
+        assert "requests" in msg
+        assert "flask" in msg
+
+    def test_check_deps_not_in_message_when_empty(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        msg = build_user_message(payload)
+        assert "Only check" not in msg
+
     def test_includes_max_deps(self) -> None:
         payload = ScanWebhookPayload(
             repo_url="https://github.com/x/y", max_deps=10

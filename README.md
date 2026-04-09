@@ -199,7 +199,8 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result |
 | `commit_sha` | `string \| null` | `null` | Full commit SHA — when set, Migratowl posts a pending status at scan start and a success/failure status on completion |
 | `callback_url` | `string \| null` | `null` | URL to POST `ScanAnalysisReport` on completion |
-| `exclude_deps` | `string[]` | `[]` | Dependency names to skip |
+| `exclude_deps` | `string[]` | `[]` | Dependency names to skip entirely |
+| `check_deps` | `string[]` | `[]` | When non-empty, only these dependencies are checked (all others are ignored) |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |
 | `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
 | `mode` | `string` | `"normal"` | Version resolution mode — see below |
@@ -223,6 +224,7 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
   "commit_sha": "abc123...",
   "callback_url": "https://yourservice.example.com/results",
   "exclude_deps": ["boto3"],
+  "check_deps": [],
   "max_deps": 20,
   "ecosystems": ["python"],
   "mode": "normal",

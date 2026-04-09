@@ -47,6 +47,7 @@ class TestScanWebhookPayload:
             pr_number=42,
             ecosystems=[Ecosystem.PYTHON],
             exclude_deps=["setuptools"],
+            check_deps=["requests"],
             max_deps=10,
             commit_sha="deadbeef1234",
         )
@@ -57,6 +58,7 @@ class TestScanWebhookPayload:
         assert payload.pr_number == 42
         assert payload.ecosystems == [Ecosystem.PYTHON]
         assert payload.exclude_deps == ["setuptools"]
+        assert payload.check_deps == ["requests"]
         assert payload.max_deps == 10
         assert payload.commit_sha == "deadbeef1234"
 
@@ -68,8 +70,20 @@ class TestScanWebhookPayload:
         assert payload.pr_number is None
         assert payload.ecosystems is None
         assert payload.exclude_deps == []
+        assert payload.check_deps == []
         assert payload.max_deps == 50
         assert payload.commit_sha is None
+
+    def test_check_deps_defaults_to_empty(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        assert payload.check_deps == []
+
+    def test_check_deps_accepted(self) -> None:
+        payload = ScanWebhookPayload(
+            repo_url="https://github.com/x/y",
+            check_deps=["requests", "flask"],
+        )
+        assert payload.check_deps == ["requests", "flask"]
 
     def test_repo_url_required(self) -> None:
         with pytest.raises(ValidationError):

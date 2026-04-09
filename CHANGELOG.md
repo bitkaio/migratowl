@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include_prerelease`; threaded from the webhook payload through the agent factory and tool
   factory to every per-ecosystem registry query function
 
+- **`check_deps` field on `POST /webhook`** — allowlist counterpart to `exclude_deps`. When
+  non-empty, only the listed dependency names are checked; all other dependencies are ignored.
+  Defaults to `[]` (check everything). Useful for targeted scans when only a specific subset of
+  dependencies is of interest.
+
 ### Fixed
 
 - Standardized casing of "Migratowl" (previously inconsistently written as "MigratOwl") across
