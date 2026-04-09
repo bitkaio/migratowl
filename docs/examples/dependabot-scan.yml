@@ -39,15 +39,21 @@ jobs:
         env:
           MIGRATOWL_URL: ${{ vars.MIGRATOWL_URL }}
           REPO_URL: ${{ github.event.repository.clone_url }}
-          BRANCH_NAME: ${{ github.head_ref }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          # Extract the single dependency name from "Bump <name> from X to Y".
-          # Grouped Dependabot PRs ("Bump the npm group with N updates") won't match,
-          # so DEP_NAME will be empty and check_deps falls back to [] (scan everything).
-          DEP_NAME=$(echo "$PR_TITLE" | sed -n 's/^Bump \([^ ]*\) from .*/\1/p')
+          # Scan the base branch (e.g. main), not the Dependabot branch.
+          # On the base branch the dependency is still at the old version, so
+          # Migratowl will detect it as outdated and analyze it. The Dependabot
+          # branch already has the bump applied, so scanning it would cause
+          # Migratowl to skip the updated package entirely.
+
+          # Extract dep name from the branch: dependabot/<ecosystem>/<name>-<version>
+          # Grouped PRs ("Bump the npm group with N updates") produce no match,
+          # so check_deps falls back to [] and Migratowl scans everything.
+          DEP_NAME=$(echo "$HEAD_BRANCH" | sed -n 's|dependabot/[^/]*/\(.*\)-[0-9][0-9.]*$|\1|p')
           if [ -n "$DEP_NAME" ]; then
             CHECK_DEPS=$(jq -n --arg dep "$DEP_NAME" '[$dep]')
           else
@@ -56,7 +62,7 @@ jobs:
 
           payload=$(jq -n \
             --arg     repo_url     "$REPO_URL" \
-            --arg     branch_name  "$BRANCH_NAME" \
+            --arg     branch_name  "$BASE_BRANCH" \
             --arg     commit_sha   "$COMMIT_SHA" \
             --argjson pr_number    "$PR_NUMBER" \
             --argjson check_deps   "$CHECK_DEPS" \
