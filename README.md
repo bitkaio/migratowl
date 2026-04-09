@@ -49,9 +49,11 @@ The result tells developers:
   - [Analysis](#analysis)
   - [HTTP Client](#http-client)
   - [API Server](#api-server)
+  - [Git Providers](#git-providers)
   - [Observability](#observability)
 - [Kubernetes Setup](#kubernetes-setup)
 - [Observability](#observability-1)
+- [GitHub Actions / Dependabot](#github-actions--dependabot)
 - [Architecture](#architecture)
 - [Project Layout](#project-layout)
 - [Development](#development)
@@ -193,12 +195,22 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 |-------|------|---------|-------------|
 | `repo_url` | `string` | **required** | Git repository URL to scan |
 | `branch_name` | `string` | `"main"` | Branch to clone and analyze |
-| `git_provider` | `string` | `"github"` | Git provider (currently informational) |
-| `pr_number` | `integer \| null` | `null` | Pull request number (informational) |
+| `git_provider` | `"github" \| "gitlab"` | `"github"` | Git provider — determines which API is used for PR/MR comments and commit statuses |
+| `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result |
+| `commit_sha` | `string \| null` | `null` | Full commit SHA — when set, Migratowl posts a pending status at scan start and a success/failure status on completion |
 | `callback_url` | `string \| null` | `null` | URL to POST `ScanAnalysisReport` on completion |
 | `exclude_deps` | `string[]` | `[]` | Dependency names to skip |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |
 | `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
+| `mode` | `string` | `"normal"` | Version resolution mode — see below |
+| `include_prerelease` | `boolean` | `false` | When `true`, pre-release versions (alpha, beta, RC) are considered when finding the latest version |
+
+**Version resolution modes (`mode`):**
+
+| Mode | Behaviour |
+|------|-----------|
+| `"safe"` | Respects the declared semver constraint. `^4.21.2` only reports a newer version if one exists **within** the `>=4.21.2,<5.0.0` range. A package already at the top of its pinned range is reported as up-to-date even when a new major exists. |
+| `"normal"` | Ignores the constraint operator. `^4.21.2` compares the bare version `4.21.2` against the **globally highest** published version — including major bumps like `5.x`. |
 
 **Example:**
 
@@ -207,10 +219,14 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
   "repo_url": "https://github.com/org/repo",
   "branch_name": "main",
   "git_provider": "github",
+  "pr_number": 42,
+  "commit_sha": "abc123...",
   "callback_url": "https://yourservice.example.com/results",
   "exclude_deps": ["boto3"],
   "max_deps": 20,
-  "ecosystems": ["python"]
+  "ecosystems": ["python"],
+  "mode": "normal",
+  "include_prerelease": false
 }
 ```
 
@@ -366,6 +382,15 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | `MIGRATOWL_API_HOST` | `0.0.0.0` | Bind address |
 | `MIGRATOWL_API_PORT` | `8000` | Bind port |
 
+### Git Providers
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_TOKEN` | — | GitHub personal access token; needs `repo:status` and `public_repo` (or `repo` for private repos) scopes to post PR comments and commit statuses |
+| `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server (e.g. `https://github.corp.com/api/v3`) |
+| `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses |
+| `GITLAB_API_URL` | `https://gitlab.com/api/v4` | Override for self-hosted GitLab |
+
 ### Observability
 
 | Variable | Default | Description |
@@ -430,6 +455,38 @@ When enabled, every scan produces a LangFuse session (keyed by `job_id`) contain
 - **Subagent spans** — `package-analyzer` subagent runs nested under the parent trace
 
 No additional code changes are needed — the `observability.py` module initializes the handler at startup and patches the LangGraph graph to inject session IDs automatically.
+
+---
+
+## GitHub Actions / Dependabot
+
+Migratowl can be triggered automatically from a GitHub Actions workflow whenever Dependabot opens or updates a PR. A ready-to-use workflow is provided at [`docs/examples/dependabot-scan.yml`](docs/examples/dependabot-scan.yml) — copy it into `.github/workflows/` in any repo you want to scan.
+
+**What the workflow does:**
+1. Fires on `pull_request` events from `dependabot[bot]`
+2. POSTs to your Migratowl instance with the repo URL, branch, PR number, and commit SHA
+3. Migratowl sets a `pending` commit status immediately, then posts a PR comment with the full analysis table and sets a `success` or `failure` status when done
+
+**Setup:**
+```bash
+# 1. Set MIGRATOWL_URL as a repository Actions variable
+#    (Settings → Secrets and variables → Actions → Variables)
+#    e.g. https://migratowl.internal.yourcompany.com
+
+# 2. Ensure Migratowl is configured with a GitHub token:
+GITHUB_TOKEN=ghp_...   # needs repo:status + public_repo (or repo for private)
+```
+
+**For GitLab**, change `"git_provider": "github"` to `"gitlab"` in the `curl` payload and configure:
+```bash
+GITLAB_TOKEN=glpat-...
+GITLAB_API_URL=https://gitlab.com/api/v4   # or your self-hosted URL
+```
+
+**GitHub Enterprise Server** — set `GITHUB_API_URL` to your GHES API endpoint:
+```bash
+GITHUB_API_URL=https://github.corp.com/api/v3
+```
 
 ---
 

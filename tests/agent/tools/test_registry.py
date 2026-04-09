@@ -8,8 +8,8 @@ import pytest
 
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.config import Settings
-from migratowl.models.schemas import Dependency, Ecosystem, OutdatedDependency
-from migratowl.registry import query_maven_central
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency
+from migratowl.registry import CheckOptions, query_maven_central
 
 
 def _make_outdated(name: str, current: str, latest: str) -> OutdatedDependency:
@@ -130,6 +130,21 @@ class TestCheckOutdatedDepsTool:
         # third must be dep_b or dep_d (both gap=1), not dep_e (gap=0)
         assert returned_names[2] in ("dep_b", "dep_d")
 
+    async def test_check_outdated_called_with_options(self) -> None:
+        """CheckOptions passed to the factory are forwarded to check_outdated."""
+        deps_json = json.dumps([
+            {"name": "requests", "current_version": "2.31.0", "ecosystem": "python", "manifest_path": "requirements.txt"},
+        ])
+        opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=True)
+
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=[]) as mock_check:
+            tool = create_check_outdated_tool(concurrency=5, options=opts)
+            await tool.ainvoke({"dependencies_json": deps_json})
+
+        mock_check.assert_called_once()
+        _, kwargs = mock_check.call_args
+        assert kwargs["options"] == opts
+
 
 class TestQueryMavenCentral:
     @pytest.mark.asyncio
@@ -144,7 +159,7 @@ class TestQueryMavenCentral:
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {
             "response": {
-                "docs": [{"latestVersion": "3.3.0"}]
+                "docs": [{"v": "3.2.0"}, {"v": "3.3.0"}]
             }
         }
         client = AsyncMock(spec=httpx.AsyncClient)
@@ -159,6 +174,7 @@ class TestQueryMavenCentral:
         assert "search.maven.org" in client.get.call_args[0][0]
         assert "org.springframework.boot" in client.get.call_args[0][0]
         assert "spring-boot-starter" in client.get.call_args[0][0]
+        assert "core=gav" in client.get.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_returns_none_when_up_to_date(self) -> None:
@@ -171,7 +187,7 @@ class TestQueryMavenCentral:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {
-            "response": {"docs": [{"latestVersion": "2.0.0"}]}
+            "response": {"docs": [{"v": "2.0.0"}]}
         }
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.return_value = mock_response

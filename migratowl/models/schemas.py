@@ -1,8 +1,8 @@
-"""Webhook and API schemas for MigratOwl."""
+"""Webhook and API schemas for Migratowl."""
 
 import enum
 from datetime import UTC, datetime
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,21 @@ class Ecosystem(enum.StrEnum):
     GO = "go"
     RUST = "rust"
     JAVA = "java"
+
+
+class OutdatedCheckMode(enum.StrEnum):
+    """Controls how the latest available version is resolved.
+
+    SAFE   — respect the declared semver constraint; only flag if a newer
+             version exists *within* the declared range (e.g. ^4.21.2 → look
+             for newer 4.x only).
+    NORMAL — ignore the constraint entirely; compare the bare version against
+             the globally highest published version (e.g. ^4.21.2 → compare
+             4.21.2 against 5.x if it exists).
+    """
+
+    SAFE = "safe"
+    NORMAL = "normal"
 
 
 class LanguageDetection(BaseModel):
@@ -32,12 +47,15 @@ class ScanWebhookPayload(BaseModel):
 
     repo_url: str
     branch_name: str = "main"
-    git_provider: str = "github"
+    git_provider: Literal["github", "gitlab"] = "github"
     pr_number: int | None = None
+    commit_sha: str | None = None
     callback_url: str | None = None
     exclude_deps: list[str] = []
     max_deps: int = Field(default=50, gt=0)
     ecosystems: list[Ecosystem] | None = None
+    mode: OutdatedCheckMode = OutdatedCheckMode.NORMAL
+    include_prerelease: bool = False
 
 
 class Dependency(BaseModel):

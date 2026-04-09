@@ -1,4 +1,4 @@
-"""Agent graph factory — builds the MigratOwl agent graph."""
+"""Agent graph factory — builds the Migratowl agent graph."""
 
 from __future__ import annotations
 
@@ -20,11 +20,12 @@ from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
-from migratowl.models.schemas import ScanAnalysisReport
+from migratowl.models.schemas import OutdatedCheckMode, ScanAnalysisReport
 from migratowl.observability import _langfuse_handler
+from migratowl.registry import CheckOptions
 
 SYSTEM_PROMPT = """\
-You are MigratOwl, an AI-powered dependency migration analyzer.
+You are Migratowl, an AI-powered dependency migration analyzer.
 
 You operate inside a Kubernetes sandbox with a workspace laid out as:
 
@@ -102,7 +103,7 @@ The deepagents built-in `read_file`, `edit_file`, and `execute` tools are
 NOT functional in this K8s sandbox — they will return path errors or
 serialization failures. Do NOT call them.
 
-Use these MigratOwl tools instead:
+Use these Migratowl tools instead:
 - Read a file: read_manifest(path=<absolute sandbox path>)
 - Edit a file: patch_manifest(path=..., old_string=..., new_string=...)
 - Run a command: update_dependencies or validate_project handle their own
@@ -142,13 +143,19 @@ def create_migratowl_agent(
     manager: KubernetesSandboxManager,
     *,
     settings: Settings | None = None,
+    mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
+    include_prerelease: bool = False,
 ) -> Any:
-    """Build the MigratOwl agent graph.
+    """Build the Migratowl agent graph.
 
     Args:
         manager: KubernetesSandboxManager that handles per-thread sandbox
             acquisition via LangGraph's create_setup_node() mechanism.
         settings: Optional settings override; defaults to ``get_settings()``.
+        mode: How to resolve the latest version — SAFE respects declared semver
+            constraints, NORMAL compares against the global maximum version.
+        include_prerelease: When True, pre-release versions are considered when
+            determining whether a dependency is outdated.
     """
     if settings is None:
         settings = get_settings()
@@ -166,7 +173,10 @@ def create_migratowl_agent(
     copy_source = create_copy_source_tool(get_sandbox, workspace_path=workspace_path)
     detect_languages = create_detect_languages_tool(get_sandbox, workspace_path=source_path)
     scan_dependencies = create_scan_dependencies_tool(get_sandbox, workspace_path=source_path)
-    check_outdated_deps = create_check_outdated_tool(concurrency=settings.scan_registry_concurrency)
+    check_outdated_deps = create_check_outdated_tool(
+        concurrency=settings.scan_registry_concurrency,
+        options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
+    )
     update_dependencies = create_update_dependencies_tool(
         get_sandbox, workspace_path=workspace_path
     )

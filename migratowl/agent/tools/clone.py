@@ -1,4 +1,4 @@
-"""Clone repository and copy source tools for the MigratOwl agent."""
+"""Clone repository and copy source tools for the Migratowl agent."""
 
 from collections.abc import Callable
 from typing import Any

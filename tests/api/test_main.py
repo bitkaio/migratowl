@@ -1,7 +1,7 @@
 """Tests for FastAPI webhook app."""
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -97,3 +97,72 @@ class TestGetJob:
     async def test_returns_404_for_unknown_job(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/jobs/nonexistent-id")
         assert resp.status_code == 404
+
+
+class TestWebhookNotifyIntegration:
+    @pytest.mark.asyncio
+    async def test_notify_pr_start_called_when_pr_and_sha_provided(
+        self, app, client: httpx.AsyncClient
+    ) -> None:
+        import migratowl.api.main as main_mod
+        main_mod._scan_semaphore = asyncio.Semaphore(1)
+        with patch("migratowl.api.main.notify_pr_start") as mock_start, \
+             patch("migratowl.api.main.notify_pr_done"), \
+             patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
+            mock_agent.return_value.ainvoke = AsyncMock(return_value={"messages": []})
+            mock_start.return_value = None
+
+            await client.post(
+                "/webhook",
+                json={
+                    "repo_url": "https://github.com/x/y",
+                    "pr_number": 5,
+                    "commit_sha": "abc123",
+                },
+            )
+            await asyncio.sleep(0.05)
+
+        mock_start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_pr_done_called_on_success(
+        self, app, client: httpx.AsyncClient
+    ) -> None:
+        import migratowl.api.main as main_mod
+        main_mod._scan_semaphore = asyncio.Semaphore(1)
+        with patch("migratowl.api.main.notify_pr_start"), \
+             patch("migratowl.api.main.notify_pr_done") as mock_done, \
+             patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
+            mock_agent.return_value.ainvoke = AsyncMock(return_value={"messages": []})
+
+            await client.post(
+                "/webhook",
+                json={"repo_url": "https://github.com/x/y", "pr_number": 5},
+            )
+            await asyncio.sleep(0.05)
+
+        mock_done.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_pr_failed_called_on_scan_error(
+        self, app, client: httpx.AsyncClient
+    ) -> None:
+        import migratowl.api.main as main_mod
+        main_mod._scan_semaphore = asyncio.Semaphore(1)
+        with patch("migratowl.api.main.notify_pr_start"), \
+             patch("migratowl.api.main.notify_pr_done"), \
+             patch("migratowl.api.main.notify_pr_failed") as mock_failed, \
+             patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
+            mock_agent.return_value.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+
+            await client.post(
+                "/webhook",
+                json={
+                    "repo_url": "https://github.com/x/y",
+                    "pr_number": 5,
+                    "commit_sha": "abc123",
+                },
+            )
+            await asyncio.sleep(0.05)
+
+        mock_failed.assert_awaited_once()

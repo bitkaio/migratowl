@@ -7,7 +7,7 @@ from langchain.tools import tool
 
 from migratowl.config import get_settings
 from migratowl.models.schemas import Dependency, OutdatedDependency
-from migratowl.registry import check_outdated
+from migratowl.registry import CheckOptions, check_outdated
 
 
 def _major_version_gap(dep: OutdatedDependency) -> int:
@@ -20,8 +20,12 @@ def _major_version_gap(dep: OutdatedDependency) -> int:
         return 0
 
 
-def create_check_outdated_tool(concurrency: int = 10) -> Any:
-    """Create a check_outdated_deps tool with the given concurrency limit."""
+def create_check_outdated_tool(
+    concurrency: int = 10,
+    options: CheckOptions | None = None,
+) -> Any:
+    """Create a check_outdated_deps tool with the given concurrency limit and check options."""
+    _options = options if options is not None else CheckOptions()
 
     @tool
     async def check_outdated_deps(dependencies_json: str) -> str:
@@ -33,7 +37,7 @@ def create_check_outdated_tool(concurrency: int = 10) -> Any:
           - "warning": null, or a message if the list was capped to the largest version gaps
         """
         deps = [Dependency(**d) for d in json.loads(dependencies_json)]
-        outdated = await check_outdated(deps, concurrency=concurrency)
+        outdated = await check_outdated(deps, options=_options, concurrency=concurrency)
         settings = get_settings()
         if len(outdated) > settings.max_outdated_deps:
             outdated = sorted(outdated, key=_major_version_gap, reverse=True)[: settings.max_outdated_deps]

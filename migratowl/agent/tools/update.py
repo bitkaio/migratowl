@@ -1,4 +1,4 @@
-"""Update dependencies tool for the MigratOwl agent."""
+"""Update dependencies tool for the Migratowl agent."""
 
 import json
 import os
