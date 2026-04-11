@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 590" width="100%"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">
+
+  <!-- card -->
+  <rect x="24" y="24" width="812" height="542" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+
+  <!-- ══ HEADER ══ -->
+  <circle cx="56" cy="48" r="12" fill="#2d333b" stroke="#444c56" stroke-width="1"/>
+  <text x="56" y="53" text-anchor="middle" font-size="13">🦉</text>
+  <text x="74" y="53" font-size="13" font-weight="bold" fill="#e6edf3">migratowl-bot</text>
+  <text x="182" y="53" font-size="12" fill="#8b949e">commented on this pull request</text>
+  <rect x="779" y="35" width="41" height="18" rx="9" fill="#238636"/>
+  <text x="800" y="48" text-anchor="middle" font-size="10" font-weight="bold" fill="white">bot</text>
+
+  <!-- header / body separator -->
+  <line x1="24" y1="72" x2="836" y2="72" stroke="#21262d" stroke-width="1"/>
+
+  <!-- ══ BODY ══ -->
+
+  <!-- title -->
+  <text x="40" y="106" font-size="15" font-weight="bold" fill="#e6edf3">🦉 Migratowl — Dependency Analysis</text>
+
+  <!-- meta: Scanned org/repo · branch <badge> · 4 analyzed -->
+  <text x="40"  y="126" font-size="12" fill="#8b949e">Scanned</text>
+  <text x="93"  y="126" font-size="12" font-weight="bold" fill="#e6edf3">org/repo</text>
+  <text x="153" y="126" font-size="12" fill="#8b949e"> · branch</text>
+  <rect x="218" y="113" width="202" height="18" rx="3" fill="#21262d"/>
+  <text x="223" y="126" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#79c0ff">dependabot/pip/requests-3.0.0</text>
+  <text x="424" y="126" font-size="12" fill="#8b949e"> · 4 analyzed</text>
+
+  <!-- ══ TABLE ══ -->
+
+  <!-- column headers -->
+  <text x="40"  y="156" font-size="12" font-weight="600" fill="#8b949e">Package</text>
+  <text x="220" y="156" font-size="12" font-weight="600" fill="#8b949e">Current</text>
+  <text x="320" y="156" font-size="12" font-weight="600" fill="#8b949e">Latest</text>
+  <text x="420" y="156" font-size="12" font-weight="600" fill="#8b949e">Breaking</text>
+  <text x="560" y="156" font-size="12" font-weight="600" fill="#8b949e">Confidence</text>
+  <line x1="40" y1="168" x2="820" y2="168" stroke="#21262d" stroke-width="1"/>
+
+  <!-- row: requests (breaking) -->
+  <text x="40"  y="188" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#e6edf3">requests</text>
+  <text x="220" y="188" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#8b949e">2.28.0</text>
+  <text x="320" y="188" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="600" fill="#3fb950">3.0.0</text>
+  <text x="420" y="188" font-size="12" font-weight="600" fill="#f85149">✗ breaking</text>
+  <text x="560" y="188" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#3fb950">0.95</text>
+  <line x1="40" y1="200" x2="820" y2="200" stroke="#21262d" stroke-width="1"/>
+
+  <!-- row: pydantic (breaking) -->
+  <text x="40"  y="220" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#e6edf3">pydantic</text>
+  <text x="220" y="220" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#8b949e">1.10.0</text>
+  <text x="320" y="220" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="600" fill="#3fb950">2.7.0</text>
+  <text x="420" y="220" font-size="12" font-weight="600" fill="#f85149">✗ breaking</text>
+  <text x="560" y="220" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#3fb950">0.92</text>
+  <line x1="40" y1="232" x2="820" y2="232" stroke="#21262d" stroke-width="1"/>
+
+  <!-- row: fastapi (safe) -->
+  <text x="40"  y="252" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#e6edf3">fastapi</text>
+  <text x="220" y="252" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#8b949e">0.95.0</text>
+  <text x="320" y="252" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="600" fill="#3fb950">0.115.0</text>
+  <text x="420" y="252" font-size="12" font-weight="600" fill="#3fb950">✓ safe</text>
+  <text x="560" y="252" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#3fb950">0.98</text>
+  <line x1="40" y1="264" x2="820" y2="264" stroke="#21262d" stroke-width="1"/>
+
+  <!-- row: httpx (safe) -->
+  <text x="40"  y="284" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#e6edf3">httpx</text>
+  <text x="220" y="284" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#8b949e">0.24.0</text>
+  <text x="320" y="284" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="600" fill="#3fb950">0.28.0</text>
+  <text x="420" y="284" font-size="12" font-weight="600" fill="#3fb950">✓ safe</text>
+  <text x="560" y="284" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#3fb950">0.88</text>
+
+  <!-- ══ BREAKING DETAIL: requests ══ -->
+  <rect x="40"  y="306" width="780" height="116" rx="4" fill="#1a0a0a" stroke="#3d1a1a" stroke-width="1"/>
+  <rect x="40"  y="306" width="3"   height="116" rx="1" fill="#f85149"/>
+
+  <text x="54"  y="323" font-size="13" font-weight="bold"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#ffa198">requests 3.0.0</text>
+  <text x="172" y="323" font-size="11" fill="#f85149">breaking · conf. 0.95</text>
+
+  <text x="54"  y="341" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#cdd9e5">ImportError: cannot import name 'PreparedRequest' from 'requests'</text>
+
+  <rect x="54"  y="350" width="752" height="30" rx="3" fill="#120606" stroke="#3d1a1a" stroke-width="1"/>
+  <text x="62"  y="370" font-size="11" font-style="italic" fill="#8b949e">"3.0.0 — Removed PreparedRequest from the public API."</text>
+
+  <text x="54"  y="398" font-size="11" fill="#8b949e">Fix: replace</text>
+  <rect x="122" y="384" width="248" height="16" rx="3" fill="#2d1010"/>
+  <text x="127" y="396" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#ffa198">from requests import PreparedRequest</text>
+  <text x="374" y="398" font-size="11" fill="#8b949e">with</text>
+  <rect x="400" y="384" width="213" height="16" rx="3" fill="#2d1010"/>
+  <text x="405" y="396" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#ffa198">requests.models.PreparedRequest</text>
+
+  <!-- ══ BREAKING DETAIL: pydantic ══ -->
+  <rect x="40"  y="430" width="780" height="116" rx="4" fill="#1a0a0a" stroke="#3d1a1a" stroke-width="1"/>
+  <rect x="40"  y="430" width="3"   height="116" rx="1" fill="#f85149"/>
+
+  <text x="54"  y="447" font-size="13" font-weight="bold"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#ffa198">pydantic 2.7.0</text>
+  <text x="172" y="447" font-size="11" fill="#f85149">breaking · conf. 0.92</text>
+
+  <text x="54"  y="465" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#cdd9e5">PydanticUserError: @validator is no longer supported, use @field_validator</text>
+
+  <rect x="54"  y="474" width="752" height="30" rx="3" fill="#120606" stroke="#3d1a1a" stroke-width="1"/>
+  <text x="62"  y="494" font-size="11" font-style="italic" fill="#8b949e">"v2.0 — @validator replaced by @field_validator with updated signature."</text>
+
+  <text x="54"  y="522" font-size="11" fill="#8b949e">Fix: migrate validators to</text>
+  <rect x="216" y="508" width="114" height="16" rx="3" fill="#2d1010"/>
+  <text x="221" y="520" font-size="11"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="#ffa198">@field_validator</text>
+  <text x="334" y="522" font-size="11" fill="#8b949e"> — see Pydantic v2 migration guide.</text>
+
+</svg>

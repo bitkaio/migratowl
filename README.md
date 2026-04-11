@@ -16,6 +16,12 @@
 
 ---
 
+<p align="center">
+  <img src="assets/pr-comment-preview.svg" alt="Migratowl PR comment example" width="820" />
+</p>
+
+---
+
 ## What It Does
 
 Migratowl answers one question: **"If I upgrade this dependency, will anything break — and how do I fix it?"**
