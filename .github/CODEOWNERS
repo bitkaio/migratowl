@@ -1,0 +1,8 @@
+# Global owner for all files
+*                               @bitkaio/maintainers
+
+# CI/CD workflows — require explicit owner review
+.github/workflows/              @bitkaio/maintainers
+.github/CODEOWNERS              @bitkaio/maintainers
+renovate.json                   @bitkaio/maintainers
+.licenserc.yaml                 @bitkaio/maintainers

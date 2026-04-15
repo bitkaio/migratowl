@@ -1,0 +1,157 @@
+name: Scheduled Security Scans
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+
+  # ── Dependency vulnerability scan ────────────────────────────────────────
+  dep-scan:
+    name: Dependency Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pip-audit
+        run: pip install "pip-audit==2.9.0"
+
+      - name: Run pip-audit
+        id: pip_audit
+        run: |
+          uv export --frozen --no-dev --format requirements-txt > /tmp/reqs.txt
+          pip-audit --requirement /tmp/reqs.txt --strict --format json -o pip-audit-report.json
+        continue-on-error: true
+
+      - name: Open issue on vulnerability findings
+        if: steps.pip_audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Weekly scan: new Python dependency vulnerabilities found ($(date -u +%Y-%m-%d))" \
+            --body "$(cat pip-audit-report.json)" \
+            --label "security" || true
+
+  # ── Container image scan ─────────────────────────────────────────────────
+  image-scan:
+    name: Container Image Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      issues: write
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Trivy CLI
+        run: |
+          TRIVY_VERSION="0.61.0"
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.61.0/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+
+      - name: Scan latest image
+        id: trivy
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format json \
+            -o trivy-scheduled-report.json \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        continue-on-error: true
+
+      - name: Open issue on new CVEs
+        if: steps.trivy.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VULN_COUNT=$(python3 -c "
+          import json, sys
+          data = json.load(open('trivy-scheduled-report.json'))
+          total = sum(len(r.get('Vulnerabilities') or []) for r in data.get('Results', []))
+          print(total)
+          ")
+          gh issue create \
+            --title "Weekly scan: ${VULN_COUNT} container CVE(s) found in latest image ($(date -u +%Y-%m-%d))" \
+            --body "Trivy found HIGH/CRITICAL CVEs in \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`. See attached artifact for details." \
+            --label "security" || true
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: trivy-scheduled-${{ github.run_id }}
+          path: trivy-scheduled-report.json
+          retention-days: 30
+
+  # ── CodeQL weekly ────────────────────────────────────────────────────────
+  codeql-weekly:
+    name: CodeQL Weekly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3
+        with:
+          languages: python
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3

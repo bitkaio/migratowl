@@ -8,7 +8,10 @@ Only the latest release of migratowl receives security fixes.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Please report vulnerabilities by emailing the maintainers directly or using GitHub's private [Security Advisory](../../security/advisories/new) feature.
+Please report vulnerabilities using one of these channels:
+
+- **Email:** security@kun.co.hu
+- **GitHub Security Advisory:** [Open a private advisory](../../security/advisories/new)
 
 Include as much of the following as possible:
 
@@ -17,7 +20,16 @@ Include as much of the following as possible:
 - Affected component (e.g. sandbox execution, API, agent planning)
 - Any suggested mitigations
 
-You can expect an acknowledgement within **72 hours** and a resolution timeline within **14 days** for critical issues.
+**Response SLA:**
+
+| Severity | Acknowledgement | Resolution target |
+|----------|----------------|-------------------|
+| Critical | 48 hours | 5 business days |
+| High     | 48 hours | 7 days |
+| Medium   | 5 business days | 30 days |
+| Low      | 10 business days | Next release |
+
+We follow coordinated disclosure: we ask that you give us the above resolution window before public disclosure.
 
 ## Scope
 

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "security:openssf-scorecard",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Group minor + patch Python updates to reduce PR noise",
+      "matchManagers": ["pip_requirements", "pyproject"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "Python dependencies (minor/patch)",
+      "automerge": false
+    },
+    {
+      "description": "Group minor + patch npm updates",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm dependencies (minor/patch)",
+      "automerge": false
+    },
+    {
+      "description": "Auto-pin GitHub Actions to commit SHA and keep pinned SHAs updated",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "automerge": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": false
+  },
+  "osvVulnerabilityAlerts": true
+}

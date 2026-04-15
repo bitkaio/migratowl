@@ -23,7 +23,10 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio",
+    "pytest-cov>=5.0",
     "ruff",
+    "mypy>=1.10",
+    "bandit[toml]>=1.7",
     "langgraph-cli[inmem]",
 ]
 
@@ -40,3 +43,6 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
