@@ -443,6 +443,20 @@ class TestParsePomXml:
     def test_empty_content(self) -> None:
         assert parse_pom_xml("", "pom.xml") == []
 
+    def test_rejects_xml_entity_expansion(self) -> None:
+        """parse_pom_xml must reject XML entity-definition attacks (defusedxml DTDForbidden)."""
+        import pytest
+
+        content = """\
+<?xml version="1.0"?>
+<!DOCTYPE lolz [<!ENTITY lol "lol">]>
+<project>
+  <dependencies>
+  </dependencies>
+</project>"""
+        with pytest.raises(Exception):
+            parse_pom_xml(content, "pom.xml")
+
 
 class TestParseBuildGradle:
     def test_parses_single_quoted_dependency(self) -> None:
