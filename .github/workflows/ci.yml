@@ -78,10 +78,12 @@ jobs:
       - name: Set up Python (for tool installs)
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
-          python-version: "3.12"  # semgrep's otel deps need pkg_resources (removed in 3.13)
+          python-version: "3.13"
 
       - name: Install Semgrep
-        run: pip install "semgrep==1.136.0"
+        # setuptools<80 required: semgrep's opentelemetry deps use pkg_resources,
+        # which setuptools>=80 removed. Pin together so the resolver sees the constraint.
+        run: pip install "semgrep==1.136.0" "setuptools<80"
 
       - name: Run Semgrep
         run: |
