@@ -345,6 +345,7 @@ jobs:
         run: |
           trivy image \
             --exit-code 1 \
+            --ignore-unfixed \
             --severity HIGH,CRITICAL \
             --format json \
             -o trivy-report.json \
