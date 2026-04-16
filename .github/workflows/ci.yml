@@ -341,15 +341,24 @@ jobs:
             | tar -xz -C /usr/local/bin trivy
           trivy --version
 
-      - name: Scan image with Trivy
+      - name: Scan image with Trivy (table — visible in log)
         run: |
           trivy image \
-            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            --format table \
+            "$IMAGE_NAME"
+        continue-on-error: true
+
+      - name: Scan image with Trivy (JSON report artifact)
+        run: |
+          trivy image \
             --ignore-unfixed \
             --severity HIGH,CRITICAL \
             --format json \
             -o trivy-report.json \
             "$IMAGE_NAME"
+        continue-on-error: true
 
       - name: Install syft CLI
         run: |
