@@ -80,14 +80,14 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install setuptools (required by semgrep on Python 3.13)
-        run: pip install setuptools
-
       - name: Install Semgrep
         run: pip install "semgrep==1.136.0"
 
       - name: Run Semgrep
         run: |
+          # semgrep's opentelemetry deps use pkg_resources (removed in Python 3.13 stdlib).
+          # Re-install setuptools *after* semgrep so pip can't downgrade it away.
+          pip install --quiet setuptools
           semgrep scan \
             --config p/python \
             --config p/security-audit \
