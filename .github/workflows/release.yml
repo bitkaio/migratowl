@@ -167,8 +167,8 @@ jobs:
       - name: Install syft CLI
         run: |
           SYFT_VERSION="1.25.0"
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.25.0/install.sh \
-            | sh -s -- -b /usr/local/bin "v${SYFT_VERSION}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin syft
 
       - name: Generate and attach SBOM
         run: |
@@ -178,8 +178,8 @@ jobs:
       - name: Install Trivy CLI
         run: |
           TRIVY_VERSION="0.61.0"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.61.0/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C /usr/local/bin trivy
 
       - name: Scan released image with Trivy
         run: |

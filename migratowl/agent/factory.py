@@ -219,12 +219,15 @@ def create_migratowl_agent(
         if settings.model_provider == "anthropic"
         else settings.openai_base_url
     )
+    extra_kwargs: dict[str, Any] = {}
+    if base_url:
+        extra_kwargs["base_url"] = base_url
     model = init_chat_model(
         f"{settings.model_provider}:{settings.model_name}",
         rate_limiter=rate_limiter,
         max_retries=8,
         callbacks=[_langfuse_handler] if _langfuse_handler else None,
-        **({"base_url": base_url} if base_url else {}),
+        **extra_kwargs,
     )
 
     # Subagent

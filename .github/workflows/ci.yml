@@ -81,7 +81,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install Semgrep
-        run: pip install "semgrep==1.136.0"
+        run: pip install "semgrep==1.136.0" setuptools
 
       - name: Run Semgrep
         run: |
@@ -145,7 +145,7 @@ jobs:
       - name: Run zizmor (text — fail on HIGH)
         run: |
           set +e
-          zizmor --format text --min-severity high .github/workflows/
+          zizmor --format plain --min-severity high .github/workflows/
           EXIT_CODE=$?
           if [[ $EXIT_CODE -ne 0 ]]; then
             echo "::error::zizmor found HIGH or CRITICAL issues in workflow files"
@@ -251,36 +251,8 @@ jobs:
       - name: Lint Markdown files
         run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv"
 
-  # ── CodeQL (push to main only) ───────────────────────────────────────────
-  codeql:
-    name: CodeQL Analysis
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          persist-credentials: false
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3
-        with:
-          languages: python
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a  # v3
+  # CodeQL is handled by GitHub's Default Setup (repo Settings → Code Security).
+  # A custom advanced-config job cannot coexist with Default Setup without conflict.
 
   # ── Dependency vulnerability scan (push to main only) ────────────────────
   vulncheck:
@@ -363,8 +335,8 @@ jobs:
       - name: Install Trivy CLI
         run: |
           TRIVY_VERSION="0.61.0"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.61.0/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C /usr/local/bin trivy
           trivy --version
 
       - name: Scan image with Trivy
@@ -379,8 +351,8 @@ jobs:
       - name: Install syft CLI
         run: |
           SYFT_VERSION="1.25.0"
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.25.0/install.sh \
-            | sh -s -- -b /usr/local/bin "v${SYFT_VERSION}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin syft
           syft --version
 
       - name: Generate SBOM

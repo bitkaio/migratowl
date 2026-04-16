@@ -86,8 +86,8 @@ def create_app(
             status_url=f"/jobs/{job.job_id}",
         )
 
-    @app.get("/jobs/{job_id}")
-    async def get_job(job_id: str) -> JobStatus:
+    @app.get("/jobs/{job_id}", response_model=None)
+    async def get_job(job_id: str) -> JobStatus | JSONResponse:
         store: JobStore = app.state.job_store
         job = store.get(job_id)
         if job is None:

@@ -39,6 +39,7 @@ def create_check_outdated_tool(
         deps = [Dependency(**d) for d in json.loads(dependencies_json)]
         outdated = await check_outdated(deps, options=_options, concurrency=concurrency)
         settings = get_settings()
+        result: dict[str, object]
         if len(outdated) > settings.max_outdated_deps:
             outdated = sorted(outdated, key=_major_version_gap, reverse=True)[: settings.max_outdated_deps]
             result = {

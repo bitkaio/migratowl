@@ -389,7 +389,7 @@ async def query_maven_central(
 
 _ECOSYSTEM_QUERIES: dict[
     Ecosystem,
-    Callable[[httpx.AsyncClient, Dependency], Coroutine[Any, Any, OutdatedDependency | None]],
+    Callable[[httpx.AsyncClient, Dependency, CheckOptions], Coroutine[Any, Any, OutdatedDependency | None]],
 ] = {
     Ecosystem.PYTHON: query_pypi,
     Ecosystem.NODEJS: query_npm,
@@ -440,6 +440,7 @@ async def check_outdated(
             headers={"User-Agent": _USER_AGENT},
         )
 
+    assert client is not None  # always assigned: either passed in or created above
     try:
         results = await asyncio.gather(*[_query_one(client, dep) for dep in deps])
     finally:

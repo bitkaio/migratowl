@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def _patch_filesystem_middleware_eviction() -> None:
 
     _original_init = FilesystemMiddleware.__init__
 
-    def patched_init(self: FilesystemMiddleware, *args: object, **kwargs: object) -> None:
+    def patched_init(self: FilesystemMiddleware, *args: Any, **kwargs: Any) -> None:
         if "tool_token_limit_before_evict" not in kwargs:
             kwargs["tool_token_limit_before_evict"] = None
         _original_init(self, *args, **kwargs)
@@ -119,17 +120,18 @@ def _patch_summarization_threshold() -> None:
     from deepagents.middleware import summarization as deepagents_summarization
     from deepagents.middleware.summarization import compute_summarization_defaults as _orig_compute
 
-    def patched_compute_summarization_defaults(model: object) -> dict:
+    def patched_compute_summarization_defaults(model: Any) -> Any:
         defaults = _orig_compute(model)
         if isinstance(defaults.get("trigger"), tuple) and defaults["trigger"][0] == "fraction":
             defaults["trigger"] = ("tokens", 500_000)
             tas = defaults.get("truncate_args_settings")
             if isinstance(tas, dict):
-                if isinstance(tas.get("trigger"), tuple) and tas["trigger"][0] == "fraction":
+                tas_trigger = tas.get("trigger")
+                if isinstance(tas_trigger, tuple) and tas_trigger[0] == "fraction":
                     tas["trigger"] = ("tokens", 500_000)
         return defaults
 
-    deepagents_summarization.compute_summarization_defaults = patched_compute_summarization_defaults
+    deepagents_summarization.compute_summarization_defaults = patched_compute_summarization_defaults  # type: ignore[assignment]
     logger.info(
         "Patched compute_summarization_defaults to use token-based trigger (overcounting workaround)"
     )
