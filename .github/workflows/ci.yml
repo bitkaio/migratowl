@@ -78,16 +78,13 @@ jobs:
       - name: Set up Python (for tool installs)
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"  # semgrep's otel deps need pkg_resources (removed in 3.13)
 
       - name: Install Semgrep
         run: pip install "semgrep==1.136.0"
 
       - name: Run Semgrep
         run: |
-          # semgrep's opentelemetry deps use pkg_resources (removed in Python 3.13 stdlib).
-          # Re-install setuptools *after* semgrep so pip can't downgrade it away.
-          pip install --quiet setuptools
           semgrep scan \
             --config p/python \
             --config p/security-audit \
@@ -336,10 +333,8 @@ jobs:
         run: uv run langgraph build --platform linux/amd64 -t "$IMAGE_NAME"
 
       - name: Install Trivy CLI
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          TRIVY_VERSION=$(gh api repos/aquasecurity/trivy/releases/latest --jq '.tag_name[1:]')
+          TRIVY_VERSION="0.69.3"
           curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
             | tar -xz -C /usr/local/bin trivy
           trivy --version

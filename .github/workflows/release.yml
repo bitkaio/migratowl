@@ -32,7 +32,8 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5 -- zizmor: ignore[cache-poisoning]
+        # zizmor: ignore[cache-poisoning]
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
         with:
           enable-caching: false
 
@@ -90,7 +91,8 @@ jobs:
             type=raw,value=latest
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5 -- zizmor: ignore[cache-poisoning]
+        # zizmor: ignore[cache-poisoning]
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
         with:
           enable-caching: false
 
@@ -174,10 +176,8 @@ jobs:
           cosign attest --yes --predicate sbom.cdx.json --type cyclonedx "$IMAGE_REF"
 
       - name: Install Trivy CLI
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          TRIVY_VERSION=$(gh api repos/aquasecurity/trivy/releases/latest --jq '.tag_name[1:]')
+          TRIVY_VERSION="0.69.3"
           curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
             | tar -xz -C /usr/local/bin trivy
 
