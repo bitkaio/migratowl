@@ -3,6 +3,7 @@
 import json
 import re
 import tomllib
+
 import defusedxml.ElementTree as ET
 
 from migratowl.models.schemas import Dependency, Ecosystem
