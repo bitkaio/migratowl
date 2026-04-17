@@ -78,13 +78,13 @@ automatically safe. The build stopped at the first error; packages not yet \
 compiled were never reached. Apply version-gap heuristics (major bump → \
 confidence ≥ 0.3) rather than assuming confidence = 0.
 
-For packages with 0 < confidence < {{confidence_threshold}} (some signal but ambiguous):
+For packages with 0 < confidence < {confidence_threshold} (some signal but ambiguous):
 - Delegate to the "package-analyzer" subagent via task() for isolated testing.
   Dispatch ONE package at a time, sequentially — never in parallel — to avoid \
 overloading the sandbox with concurrent backend calls.
   Provide: package name, current_version, latest_version, ecosystem.
 
-For packages with confidence ≥ {{confidence_threshold}}:
+For packages with confidence ≥ {confidence_threshold}:
 - Fetch the changelog with fetch_changelog_tool.
 - Produce an AnalysisReport with error_summary, changelog_citation, and suggested_human_fix.
 

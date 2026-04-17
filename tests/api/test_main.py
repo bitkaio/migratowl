@@ -4,10 +4,10 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import migratowl.api.main as main_mod
 from httpx import AsyncClient, ASGITransport
 
 from migratowl.api.jobs import JobStore
-from migratowl.api.main import create_app
 from migratowl.config import Settings
 
 
@@ -26,7 +26,7 @@ def mock_manager() -> MagicMock:
 @pytest.fixture
 def app(settings: Settings, mock_manager: MagicMock):
     """Create app with pre-initialized manager (skip lifespan K8s init)."""
-    application = create_app(settings=settings, manager=mock_manager)
+    application = main_mod.create_app(settings=settings, manager=mock_manager)
     # Manually set state that lifespan would set (ASGITransport doesn't trigger lifespan)
     application.state.manager = mock_manager
     application.state.job_store = JobStore()
@@ -103,7 +103,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_start_called_when_pr_and_sha_provided(
         self, app, client: AsyncClient
     ) -> None:
-        import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start") as mock_start, \
              patch("migratowl.api.main.notify_pr_done"), \
@@ -127,7 +126,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_done_called_on_success(
         self, app, client: AsyncClient
     ) -> None:
-        import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start"), \
              patch("migratowl.api.main.notify_pr_done") as mock_done, \
@@ -146,7 +144,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_failed_called_on_scan_error(
         self, app, client: AsyncClient
     ) -> None:
-        import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start"), \
              patch("migratowl.api.main.notify_pr_done"), \

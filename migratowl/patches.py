@@ -11,20 +11,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_applied = False
-
-
 def apply_patches() -> None:
     """Apply all monkey-patches. Idempotent — safe to call multiple times."""
-    global _applied
-    if _applied:
+    if getattr(apply_patches, "_applied", False):
         return
     _patch_grep_raw()
     _patch_filesystem_middleware_eviction()
     _patch_summarization_threshold()
     _patch_subagent_recursion_limit()
     _patch_langchain_kubernetes_annotated()
-    _applied = True
+    apply_patches._applied = True  # type: ignore[attr-defined]
 
 
 def _patch_grep_raw() -> None:

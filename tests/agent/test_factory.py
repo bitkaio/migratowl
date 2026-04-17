@@ -194,6 +194,23 @@ class TestCreateMigratowlAgent:
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
         assert "one at a time" in prompt or "sequentially" in prompt
 
+    def test_system_prompt_substitutes_confidence_threshold(self) -> None:
+        """SYSTEM_PROMPT.format(confidence_threshold=X) must render X in the output.
+
+        The prompt contains two thresholds expressed as ``{confidence_threshold}``.
+        If they are accidentally double-escaped as ``{{confidence_threshold}}``,
+        the format call silently passes the argument without substituting it,
+        and the agent's instructions will always contain the literal text
+        ``{confidence_threshold}`` instead of the configured value.
+        """
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "0.7" in prompt, (
+            "confidence_threshold was not substituted — check for double braces "
+            "{{confidence_threshold}} in SYSTEM_PROMPT"
+        )
+
     def test_no_base_url_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
