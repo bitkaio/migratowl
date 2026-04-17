@@ -12,6 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.13%2B-blue" alt="Python 3.13+" />
   <img src="https://img.shields.io/badge/license-BSD%203--Clause-green" alt="License" />
+  <a href="https://www.bestpractices.dev/projects/12571"><img src="https://www.bestpractices.dev/projects/12571/badge" alt="OpenSSF Best Practices"></a>
 </p>
 
 ---
