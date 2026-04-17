@@ -246,7 +246,10 @@ jobs:
           node-version: "22"
 
       - name: Install markdownlint-cli2
-        run: npm install -g "markdownlint-cli2@0.17.2" --integrity "sha512-XH06ZOi8wCrtOSSj3p8y3yJzwgzYOSa7lglNyS3fP05JPRzRGyjauBb5UvlLUSCGysMmULS1moxdRHHudV+g/Q=="
+        run: |
+          curl -fsSL "https://registry.npmjs.org/markdownlint-cli2/-/markdownlint-cli2-0.17.2.tgz" -o /tmp/markdownlint-cli2.tgz
+          echo "ccb69c7c76a64e948100aefd5c63239ebf4c1ba3424342b7d81f3ec06d0d81a6  /tmp/markdownlint-cli2.tgz" | sha256sum -c -
+          npm install -g /tmp/markdownlint-cli2.tgz
 
       - name: Lint Markdown files
         run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv"
