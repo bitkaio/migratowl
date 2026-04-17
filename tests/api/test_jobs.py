@@ -4,7 +4,6 @@ import pytest
 
 from migratowl.api.jobs import JobStore
 from migratowl.models.schemas import (
-    AnalysisReport,
     JobState,
     ScanAnalysisReport,
     ScanResult,

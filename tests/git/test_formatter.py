@@ -1,6 +1,5 @@
 """Tests for PR comment formatter."""
 
-import pytest
 
 from migratowl.git.formatter import format_pr_comment
 from migratowl.models.schemas import (

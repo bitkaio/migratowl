@@ -22,7 +22,7 @@ def create_sandbox_manager(settings: Settings) -> KubernetesSandboxManager:
 
         truststore.extract_from_ssl()
     except ImportError:
-        pass
+        logger.debug("truststore not installed; skipping system certificate injection")
 
     config = KubernetesProviderConfig(
         template_name=settings.sandbox_template,

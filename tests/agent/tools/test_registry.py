@@ -147,7 +147,6 @@ class TestCheckOutdatedDepsTool:
 
 
 class TestQueryMavenCentral:
-    @pytest.mark.asyncio
     async def test_returns_outdated_when_newer_available(self) -> None:
         dep = Dependency(
             name="org.springframework.boot:spring-boot-starter",
@@ -176,7 +175,6 @@ class TestQueryMavenCentral:
         assert "spring-boot-starter" in client.get.call_args[0][0]
         assert "core=gav" in client.get.call_args[0][0]
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_up_to_date(self) -> None:
         dep = Dependency(
             name="com.example:library",
@@ -196,7 +194,6 @@ class TestQueryMavenCentral:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_not_found(self) -> None:
         dep = Dependency(
             name="com.example:unknown",
@@ -214,7 +211,6 @@ class TestQueryMavenCentral:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_malformed_name(self) -> None:
         dep = Dependency(
             name="no-colon-here",

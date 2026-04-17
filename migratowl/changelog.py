@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 
 import html2text as _html2text
@@ -12,6 +13,8 @@ from packaging.version import InvalidVersion, Version
 
 from migratowl.config import get_settings
 from migratowl.http import get_http_client
+
+logger = logging.getLogger(__name__)
 
 
 async def fetch_changelog(
@@ -30,8 +33,8 @@ async def fetch_changelog(
     if changelog_url:
         try:
             return await _fetch_from_url(changelog_url), []
-        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError):
-            pass
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
+            logger.debug("changelog_url fetch failed for %s: %s", dep_name, exc)
 
     # Step 2: extract changelog link from README.
     if repository_url:
@@ -39,8 +42,8 @@ async def fetch_changelog(
         if readme_link and readme_link != changelog_url:
             try:
                 return await _fetch_from_url(readme_link), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError):
-                pass
+            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
+                logger.debug("readme changelog link fetch failed for %s: %s", dep_name, exc)
 
     if repository_url:
         settings = get_settings()
@@ -54,8 +57,8 @@ async def fetch_changelog(
         for strategy in ordered:
             try:
                 return await strategy(repository_url), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError):
-                pass
+            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
+                logger.debug("strategy %s failed for %s: %s", strategy.__name__, dep_name, exc)
 
     return "", [f"Could not fetch changelog for {dep_name}"]
 
@@ -223,8 +226,8 @@ async def _try_urls_concurrently(
                 r = await client.get(url)
                 if r.status_code == 200 and chunk_changelog_by_version(r.text):
                     return r.text
-            except (httpx.HTTPStatusError, httpx.RequestError):
-                pass
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                logger.debug("concurrent fetch failed for %s: %s", url, exc)
             return None
 
     tasks = [asyncio.create_task(_fetch_one(url)) for url in urls]
@@ -285,8 +288,8 @@ async def _fetch_from_github(repository_url: str) -> str:
                         r2 = await client.get(raw_url)
                         if r2.status_code == 200 and chunk_changelog_by_version(r2.text):
                             return r2.text
-                    except (httpx.HTTPStatusError, httpx.RequestError):
-                        pass
+                    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                        logger.debug("blob redirect fetch failed for %s: %s", raw_url, exc)
             except (httpx.HTTPStatusError, httpx.RequestError):
                 continue
 
@@ -463,7 +466,7 @@ def chunk_changelog_by_version(text: str) -> list[dict]:
         return []
 
     chunks = []
-    for idx, (line_i, version, char_start) in enumerate(header_positions):
+    for idx, (line_i, version, _) in enumerate(header_positions):
         # Content starts after this header line (and the RST underline if present)
         content_line = line_i + 1
         # Skip RST underline

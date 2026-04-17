@@ -3,9 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
-from httpx import ASGITransport
+from httpx import AsyncClient, ASGITransport
 
 from migratowl.api.jobs import JobStore
 from migratowl.api.main import create_app
@@ -36,15 +35,15 @@ def app(settings: Settings, mock_manager: MagicMock):
 
 
 @pytest.fixture
-async def client(app) -> httpx.AsyncClient:
+async def client(app) -> AsyncClient:
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
 class TestHealthz:
     @pytest.mark.asyncio
-    async def test_returns_ok(self, client: httpx.AsyncClient) -> None:
+    async def test_returns_ok(self, client: AsyncClient) -> None:
         resp = await client.get("/healthz")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
@@ -52,7 +51,7 @@ class TestHealthz:
 
 class TestWebhook:
     @pytest.mark.asyncio
-    async def test_accepts_valid_payload(self, client: httpx.AsyncClient) -> None:
+    async def test_accepts_valid_payload(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/webhook",
             json={"repo_url": "https://github.com/x/y"},
@@ -64,12 +63,12 @@ class TestWebhook:
         assert data["status_url"].startswith("/jobs/")
 
     @pytest.mark.asyncio
-    async def test_rejects_missing_repo_url(self, client: httpx.AsyncClient) -> None:
+    async def test_rejects_missing_repo_url(self, client: AsyncClient) -> None:
         resp = await client.post("/webhook", json={})
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_returns_unique_job_ids(self, client: httpx.AsyncClient) -> None:
+    async def test_returns_unique_job_ids(self, client: AsyncClient) -> None:
         resp1 = await client.post(
             "/webhook", json={"repo_url": "https://github.com/x/y"}
         )
@@ -81,7 +80,7 @@ class TestWebhook:
 
 class TestGetJob:
     @pytest.mark.asyncio
-    async def test_returns_job_after_webhook(self, client: httpx.AsyncClient) -> None:
+    async def test_returns_job_after_webhook(self, client: AsyncClient) -> None:
         post_resp = await client.post(
             "/webhook", json={"repo_url": "https://github.com/x/y"}
         )
@@ -94,7 +93,7 @@ class TestGetJob:
         assert data["state"] in ("pending", "running", "completed", "failed")
 
     @pytest.mark.asyncio
-    async def test_returns_404_for_unknown_job(self, client: httpx.AsyncClient) -> None:
+    async def test_returns_404_for_unknown_job(self, client: AsyncClient) -> None:
         resp = await client.get("/jobs/nonexistent-id")
         assert resp.status_code == 404
 
@@ -102,7 +101,7 @@ class TestGetJob:
 class TestWebhookNotifyIntegration:
     @pytest.mark.asyncio
     async def test_notify_pr_start_called_when_pr_and_sha_provided(
-        self, app, client: httpx.AsyncClient
+        self, app, client: AsyncClient
     ) -> None:
         import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)
@@ -126,7 +125,7 @@ class TestWebhookNotifyIntegration:
 
     @pytest.mark.asyncio
     async def test_notify_pr_done_called_on_success(
-        self, app, client: httpx.AsyncClient
+        self, app, client: AsyncClient
     ) -> None:
         import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)
@@ -145,7 +144,7 @@ class TestWebhookNotifyIntegration:
 
     @pytest.mark.asyncio
     async def test_notify_pr_failed_called_on_scan_error(
-        self, app, client: httpx.AsyncClient
+        self, app, client: AsyncClient
     ) -> None:
         import migratowl.api.main as main_mod
         main_mod._scan_semaphore = asyncio.Semaphore(1)

@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock
 
 import migratowl.agent.subagents as _subagents_mod
-from migratowl.agent.subagents import create_package_analyzer_subagent
 
 
 class TestCreatePackageAnalyzerSubagent:
@@ -14,7 +13,7 @@ class TestCreatePackageAnalyzerSubagent:
 
     def _call(self, monkeypatch, *, backend_factory=None, tools=None, model=None):
         monkeypatch.setattr(_subagents_mod, "create_deep_agent", lambda **kw: self._fake_graph())
-        return create_package_analyzer_subagent(
+        return _subagents_mod.create_package_analyzer_subagent(
             model=model or MagicMock(),
             backend_factory=backend_factory or MagicMock(),
             tools=tools if tools is not None else [],
@@ -40,7 +39,7 @@ class TestCreatePackageAnalyzerSubagent:
         """The runnable must be exactly what create_deep_agent returns."""
         fake_graph = MagicMock()
         monkeypatch.setattr(_subagents_mod, "create_deep_agent", lambda **kw: fake_graph)
-        result = create_package_analyzer_subagent(
+        result = _subagents_mod.create_package_analyzer_subagent(
             model=MagicMock(), backend_factory=MagicMock(), tools=[]
         )
         assert result["runnable"] is fake_graph
@@ -58,7 +57,7 @@ class TestCreatePackageAnalyzerSubagent:
             lambda **kw: (captured.update(kw), MagicMock())[1],
         )
         backend_factory = MagicMock()
-        create_package_analyzer_subagent(
+        _subagents_mod.create_package_analyzer_subagent(
             model=MagicMock(), backend_factory=backend_factory, tools=[]
         )
         assert captured.get("backend") is backend_factory
@@ -72,7 +71,7 @@ class TestCreatePackageAnalyzerSubagent:
             lambda **kw: (captured.update(kw), MagicMock())[1],
         )
         model = MagicMock()
-        create_package_analyzer_subagent(
+        _subagents_mod.create_package_analyzer_subagent(
             model=model, backend_factory=MagicMock(), tools=[]
         )
         assert captured.get("model") is model
@@ -86,7 +85,7 @@ class TestCreatePackageAnalyzerSubagent:
             lambda **kw: (captured.update(kw), MagicMock())[1],
         )
         tools = [MagicMock(), MagicMock()]
-        create_package_analyzer_subagent(
+        _subagents_mod.create_package_analyzer_subagent(
             model=MagicMock(), backend_factory=MagicMock(), tools=tools
         )
         assert captured.get("tools") is tools

@@ -1,7 +1,5 @@
 """Tests for registry query functions."""
 
-import asyncio
-import json
 
 import httpx
 import pytest

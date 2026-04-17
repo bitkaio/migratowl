@@ -1,6 +1,6 @@
 """Tests for the session-aware graph injection."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

@@ -47,6 +47,13 @@ class TestParseRequirementsTxt:
 
         assert deps[0].current_version == "~=2.28"
 
+    def test_pinned_with_comma_preserves_full_constraint(self) -> None:
+        content = "requests==2.28,<3.0\n"
+        deps = parse_requirements_txt(content, MANIFEST_PATH)
+
+        assert deps[0].name == "requests"
+        assert deps[0].current_version == "==2.28,<3.0"
+
     def test_skips_comments_and_blanks(self) -> None:
         content = "# a comment\n\nrequests==1.0\n  \n"
         deps = parse_requirements_txt(content, MANIFEST_PATH)
@@ -232,6 +239,24 @@ class TestParsePackageJson:
 
         assert deps[0].current_version == "*"
 
+    def test_strips_tilde_prefix(self) -> None:
+        content = '{"dependencies": {"express": "~4.18.0"}}'
+        deps = parse_package_json(content, "package.json")
+
+        assert deps[0].current_version == "4.18.0"
+
+    def test_workspace_protocol_star_preserved(self) -> None:
+        content = '{"dependencies": {"my-lib": "workspace:*"}}'
+        deps = parse_package_json(content, "package.json")
+
+        assert deps[0].current_version == "workspace:*"
+
+    def test_workspace_protocol_caret_preserved(self) -> None:
+        content = '{"dependencies": {"my-lib": "workspace:^1.0.0"}}'
+        deps = parse_package_json(content, "package.json")
+
+        assert deps[0].current_version == "workspace:^1.0.0"
+
 
 class TestParseGoMod:
     def test_single_require(self) -> None:
@@ -268,6 +293,7 @@ require (
 
         assert len(deps) == 1
         assert deps[0].name == "github.com/foo/bar"
+        assert deps[0].current_version == "1.0.0"
 
     def test_empty_content(self) -> None:
         deps = parse_go_mod("", "go.mod")

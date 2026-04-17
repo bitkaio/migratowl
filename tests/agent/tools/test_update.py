@@ -61,7 +61,7 @@ class TestUpdateDependenciesTool:
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
         packages = json.dumps([{"name": "express", "latest_version": "5.0.0"}])
-        result = tool.invoke({
+        tool.invoke({
             "folder_name": "main",
             "ecosystem": "nodejs",
             "packages_json": packages,
@@ -80,7 +80,7 @@ class TestUpdateDependenciesTool:
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
         packages = json.dumps([{"name": "github.com/gin-gonic/gin", "latest_version": "1.9.1"}])
-        result = tool.invoke({
+        tool.invoke({
             "folder_name": "main",
             "ecosystem": "go",
             "packages_json": packages,
@@ -99,7 +99,7 @@ class TestUpdateDependenciesTool:
         tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
         packages = json.dumps([{"name": "serde", "latest_version": "1.0.200"}])
-        result = tool.invoke({
+        tool.invoke({
             "folder_name": "main",
             "ecosystem": "rust",
             "packages_json": packages,

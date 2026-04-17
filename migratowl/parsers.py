@@ -28,10 +28,10 @@ def parse_requirements_txt(content: str, manifest_path: str) -> list[Dependency]
             line = line[:comment_idx].strip()
 
         # Split name from version spec
-        # Find first operator position
+        # Sort longest-first so ">=" is matched before ">" (avoids prefix collision)
         name = line
         version = ""
-        for op in _REQ_OPERATORS:
+        for op in sorted(_REQ_OPERATORS, key=len, reverse=True):
             idx = line.find(op)
             if idx != -1:
                 name = line[:idx].strip()
@@ -125,7 +125,8 @@ def parse_package_json(content: str, manifest_path: str) -> list[Dependency]:
     all_deps.update(data.get("devDependencies", {}))
 
     for name, version_str in all_deps.items():
-        version = re.sub(r"^[~^>=<]+", "", version_str)
+        # Strip exactly one leading operator prefix; workspace: and bare versions are unaffected
+        version = re.sub(r"^(?:\^|~|>=|<=|>|<|=)\s*", "", version_str, count=1)
         deps.append(
             Dependency(
                 name=name,
@@ -214,7 +215,9 @@ def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:
         group_id = (dep.findtext(f"{ns}groupId") or "").strip()
         artifact_id = (dep.findtext(f"{ns}artifactId") or "").strip()
         version = (dep.findtext(f"{ns}version") or "").strip()
-        if not group_id or not artifact_id or not version or version.startswith("${"):
+        if not group_id or not artifact_id:
+            continue
+        if not version or version.startswith("${"):
             continue
         deps.append(
             Dependency(
@@ -233,6 +236,7 @@ def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
         return []
 
     deps: list[Dependency] = []
+    # Matches: optional-quote  group:artifact:version  same-quote (or parenthesis-wrapped)
     pattern = re.compile(r"""(['"])([a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-]+):([^'"\s]+)\1""")
     for m in pattern.finditer(content):
         deps.append(

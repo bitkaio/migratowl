@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock
 
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
-from tests.conftest import ExecResult, make_backend
+from tests.conftest import ExecResult
 
 DEFAULT_WORKSPACE = "/home/user/workspace"
 CUSTOM_WORKSPACE = "/opt/workspace"

@@ -12,27 +12,27 @@ class TestCreateLangfuseHandler:
     def test_returns_none_when_keys_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
         monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-        from migratowl.observability import create_langfuse_handler
+        import migratowl.observability as obs_module
 
-        result = create_langfuse_handler(settings=Settings(_env_file=None))
+        result = obs_module.create_langfuse_handler(settings=Settings(_env_file=None))
         assert result is None
 
     def test_returns_none_when_only_public_key_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-        from migratowl.observability import create_langfuse_handler
+        import migratowl.observability as obs_module
 
         settings = Settings(_env_file=None)
         settings.langfuse_public_key = "pk-test"
-        result = create_langfuse_handler(settings=settings)
+        result = obs_module.create_langfuse_handler(settings=settings)
         assert result is None
 
     def test_returns_none_when_only_secret_key_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-        from migratowl.observability import create_langfuse_handler
+        import migratowl.observability as obs_module
 
         settings = Settings(_env_file=None)
         settings.langfuse_secret_key = "sk-test"
-        result = create_langfuse_handler(settings=settings)
+        result = obs_module.create_langfuse_handler(settings=settings)
         assert result is None
 
     def test_returns_handler_when_both_keys_present(self) -> None:
@@ -44,9 +44,9 @@ class TestCreateLangfuseHandler:
         settings.langfuse_secret_key = "sk-test"
 
         with patch.dict("sys.modules", {"langfuse.langchain": MagicMock(CallbackHandler=mock_callback_handler_cls)}):
-            from migratowl import observability
+            import migratowl.observability as obs_module
 
-            result = observability.create_langfuse_handler(settings=settings)
+            result = obs_module.create_langfuse_handler(settings=settings)
 
         assert result is mock_handler
         mock_callback_handler_cls.assert_called_once()

@@ -12,6 +12,7 @@ from migratowl.models.schemas import (
     JobState,
     JobStatus,
     MainExecutionAnalysis,
+    OutdatedCheckMode,
     OutdatedDependency,
     PackageConfidence,
     ScanAnalysisReport,
@@ -77,6 +78,18 @@ class TestScanWebhookPayload:
     def test_check_deps_defaults_to_empty(self) -> None:
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
         assert payload.check_deps == []
+
+    def test_exclude_deps_defaults_to_empty(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        assert payload.exclude_deps == []
+
+    def test_mode_defaults_to_normal(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        assert payload.mode == OutdatedCheckMode.NORMAL
+
+    def test_include_prerelease_defaults_to_false(self) -> None:
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        assert payload.include_prerelease is False
 
     def test_check_deps_accepted(self) -> None:
         payload = ScanWebhookPayload(

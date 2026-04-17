@@ -65,6 +65,12 @@ def _constraint_to_specifier(raw: str) -> SpecifierSet | None:
       - npm/Cargo tilde:  ~4.21.2  →  >=4.21.2,<4.22.0
       - Python operators: >=4.0.0,<5.0.0  (passed through to SpecifierSet directly)
       - Bare / exact (=): returns None
+
+    Edge cases:
+      - Empty string or ``*``: returns None (no constraint to apply).
+      - Malformed caret/tilde (non-numeric segments): returns None.
+      - Python-style operator strings that are invalid SpecifierSet syntax
+        (e.g. ``>=foo``): returns None.
     """
     raw = raw.strip()
     if not raw or raw == "*":
@@ -167,8 +173,8 @@ def _is_outdated(current: str, latest: str) -> bool:
     return lat > cur
 
 
-def _extract_pypi_url(project_urls: dict[str, str] | None, keys: list[str]) -> str | None:
-    """Extract first matching URL from PyPI project_urls."""
+def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) -> str | None:
+    """Extract first matching URL from a project_urls dict (case-insensitive key lookup)."""
     if not project_urls:
         return None
     for key in keys:
@@ -178,8 +184,17 @@ def _extract_pypi_url(project_urls: dict[str, str] | None, keys: list[str]) -> s
     return None
 
 
+def _clean_git_url(url: str) -> str:
+    """Strip ``git+`` prefix and ``.git`` suffix from a repository URL."""
+    if url.startswith("git+"):
+        url = url[4:]
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url
+
+
 def _extract_npm_repo_url(repository: dict[str, Any] | str | None) -> str | None:
-    """Clean npm repository URL — strip git+ prefix and .git suffix."""
+    """Extract and clean npm repository URL from the ``repository`` field."""
     if repository is None:
         return None
     if isinstance(repository, str):
@@ -190,11 +205,7 @@ def _extract_npm_repo_url(repository: dict[str, Any] | str | None) -> str | None
         return None
     if not url:
         return None
-    if url.startswith("git+"):
-        url = url[4:]
-    if url.endswith(".git"):
-        url = url[:-4]
-    return url
+    return _clean_git_url(url)
 
 
 _KNOWN_GO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
@@ -206,6 +217,7 @@ def _go_proxy_encode(module_path: str) -> str:
     The Go module proxy spec requires uppercase letters to be escaped as
     ``!lowercase`` (e.g. ``Masterminds`` → ``!masterminds``) so that paths
     remain unambiguous on case-insensitive file systems.
+    Module paths without uppercase letters are returned unmodified.
     """
     return re.sub(r"[A-Z]", lambda m: "!" + m.group(0).lower(), module_path)
 
@@ -254,8 +266,8 @@ async def query_pypi(
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         homepage_url=info.get("home_page") or None,
-        repository_url=_extract_pypi_url(project_urls, ["Repository", "Source", "Source Code", "GitHub"]),
-        changelog_url=_extract_pypi_url(project_urls, ["Changelog", "Changes", "Release Notes", "History"]),
+        repository_url=_extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub"]),
+        changelog_url=_extract_url_by_key(project_urls, ["Changelog", "Changes", "Release Notes", "History"]),
     )
 
 
@@ -331,8 +343,12 @@ async def query_golang(
     if target is None or not _is_outdated(dep.current_version, target):
         return None
 
-    # Re-attach 'v' prefix that packaging normalizes away, if the original had it
-    if not target.startswith("v") and any(v.startswith("v") for v in all_versions):
+    # Re-attach 'v' prefix that packaging normalizes away.
+    # Prefer the current_version's own style; fall back to registry majority.
+    prefixed_count = sum(1 for v in all_versions if v.startswith("v"))
+    unprefixed_count = len(all_versions) - prefixed_count
+    prefers_v_prefix = dep.current_version.startswith("v") or (prefixed_count > unprefixed_count)
+    if prefers_v_prefix and not target.startswith("v"):
         target = f"v{target}"
 
     return OutdatedDependency(

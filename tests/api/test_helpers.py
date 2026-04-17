@@ -60,7 +60,7 @@ class TestBuildUserMessage:
 
 class TestExtractReport:
     def test_extracts_structured_response_pydantic_model(self) -> None:
-        from migratowl.models.schemas import AnalysisReport, ScanAnalysisReport, ScanResult
+        from migratowl.models.schemas import ScanAnalysisReport, ScanResult
 
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
         structured = ScanAnalysisReport(

@@ -3,7 +3,6 @@
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pytest
 
 from migratowl.changelog import (
     _extract_changelog_link,

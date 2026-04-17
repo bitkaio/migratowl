@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 
 from migratowl.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _client: httpx.AsyncClient | None = None
 
@@ -64,8 +67,8 @@ class RetryTransport(httpx.AsyncBaseTransport):
             if retry_after is not None:
                 try:
                     return float(retry_after)  # noqa: TRY300
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    logger.debug("Retry-After header is not a float: %s", exc)
         delay: float = self._backoff_base * (2**attempt)
         return delay
 

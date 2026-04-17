@@ -15,7 +15,6 @@ def settings() -> Settings:
 
 class TestCreateSandboxManager:
     def test_returns_manager_instance(self, settings: Settings) -> None:
-        from langchain_kubernetes import KubernetesSandboxManager
 
         with patch("migratowl.agent.sandbox.KubernetesSandboxManager") as mock_cls:
             mock_cls.return_value = mock_cls
