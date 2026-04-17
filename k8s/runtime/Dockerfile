@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
 
 # ── System deps (heaviest / most-cached layer) ──────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,7 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js 22 LTS via NodeSource ───────────────────────────────────────
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
+    && echo "575583bbac2fccc0b5edd0dbc03e222d9f9dc8d724da996d22754d6411104fd1  /tmp/nodesource_setup.sh" | sha256sum -c - \
+    && bash /tmp/nodesource_setup.sh \
+    && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,14 +32,16 @@ USER 1000
 ENV CARGO_HOME="/home/user/.cargo"
 ENV RUSTUP_HOME="/home/user/.rustup"
 ENV PATH="${CARGO_HOME}/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain stable --profile minimal
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && echo "6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf  /tmp/rustup-init.sh" | sha256sum -c - \
+    && sh /tmp/rustup-init.sh -y --default-toolchain stable --profile minimal \
+    && rm /tmp/rustup-init.sh
 
 # ── Runtime server (FastAPI) ────────────────────────────────────────────
 USER root
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+COPY requirements.txt requirements.lock.txt ./
+RUN pip install --no-cache-dir --break-system-packages --require-hashes -r requirements.lock.txt
 
 COPY main.py .
 RUN chown -R 1000:1000 /app

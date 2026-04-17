@@ -81,9 +81,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install Semgrep
-        # setuptools<80 required: semgrep's opentelemetry deps use pkg_resources,
-        # which setuptools>=80 removed. Pin together so the resolver sees the constraint.
-        run: pip install "semgrep==1.136.0" "setuptools<80"
+        run: pip install --require-hashes -r .github/requirements/semgrep.txt
 
       - name: Run Semgrep
         run: |
@@ -133,7 +131,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install zizmor
-        run: pip install "zizmor==1.16.3"
+        run: pip install --require-hashes -r .github/requirements/zizmor.txt
 
       - name: Run zizmor (SARIF output for Security tab)
         run: zizmor --format sarif .github/workflows/ > zizmor.sarif
@@ -248,7 +246,7 @@ jobs:
           node-version: "22"
 
       - name: Install markdownlint-cli2
-        run: npm install -g "markdownlint-cli2@0.17.2"
+        run: npm install -g "markdownlint-cli2@0.17.2" --integrity "sha512-XH06ZOi8wCrtOSSj3p8y3yJzwgzYOSa7lglNyS3fP05JPRzRGyjauBb5UvlLUSCGysMmULS1moxdRHHudV+g/Q=="
 
       - name: Lint Markdown files
         run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv"
@@ -287,7 +285,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pip-audit
-        run: pip install "pip-audit==2.9.0"
+        run: pip install --require-hashes -r .github/requirements/pip-audit.txt
 
       - name: Run pip-audit against lockfile
         run: |

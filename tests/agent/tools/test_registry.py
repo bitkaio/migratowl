@@ -171,7 +171,7 @@ class TestQueryMavenCentral:
         assert result.latest_version == "3.3.0"
         assert result.current_version == "3.2.0"
         assert result.ecosystem == Ecosystem.JAVA
-        assert "search.maven.org" in client.get.call_args[0][0]
+        assert client.get.call_args[0][0].startswith("https://search.maven.org/")
         assert "org.springframework.boot" in client.get.call_args[0][0]
         assert "spring-boot-starter" in client.get.call_args[0][0]
         assert "core=gav" in client.get.call_args[0][0]

@@ -56,16 +56,18 @@ async def execute_command(request: ExecuteRequest):
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        file_path = os.path.join("/app", file.filename)
+        file_path = get_safe_path(file.filename)
         with open(file_path, "wb") as f:
             f.write(await file.read())
         return JSONResponse(
             status_code=200,
             content={"message": f"File '{file.filename}' uploaded successfully."},
         )
-    except Exception as e:
+    except ValueError:
+        return JSONResponse(status_code=403, content={"message": "Access denied"})
+    except Exception:
         logging.exception("Upload failed.")
-        return JSONResponse(status_code=500, content={"message": f"Upload failed: {e}"})
+        return JSONResponse(status_code=500, content={"message": "Upload failed"})
 
 
 @app.get("/download/{encoded_file_path:path}")

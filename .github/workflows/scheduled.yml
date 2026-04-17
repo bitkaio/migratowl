@@ -45,7 +45,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pip-audit
-        run: pip install "pip-audit==2.9.0"
+        run: pip install --require-hashes -r .github/requirements/pip-audit.txt
 
       - name: Run pip-audit
         id: pip_audit
@@ -99,7 +99,7 @@ jobs:
             --severity HIGH,CRITICAL \
             --format json \
             -o trivy-scheduled-report.json \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            "$REGISTRY/$IMAGE_NAME:latest"
         continue-on-error: true
 
       - name: Open issue on new CVEs
@@ -115,7 +115,7 @@ jobs:
           ")
           gh issue create \
             --title "Weekly scan: ${VULN_COUNT} container CVE(s) found in latest image ($(date -u +%Y-%m-%d))" \
-            --body "Trivy found HIGH/CRITICAL CVEs in \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`. See attached artifact for details." \
+            --body "Trivy found HIGH/CRITICAL CVEs in \`$REGISTRY/$IMAGE_NAME:latest\`. See attached artifact for details." \
             --label "security" || true
 
       - name: Upload Trivy report
