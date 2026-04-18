@@ -149,20 +149,24 @@ jobs:
         env:
           JOB_ID: ${{ steps.trigger.outputs.job_id }}
         run: |
-          for i in $(seq 1 60); do
+          echo "Waiting 10 minutes before first poll..."
+          sleep 600
+
+          DEADLINE=$(($(date +%s) + 3600))
+          while [ $(date +%s) -lt $DEADLINE ]; do
             RESPONSE=$(curl -sf "http://127.0.0.1:8000/jobs/$JOB_ID")
             STATE=$(echo "$RESPONSE" | jq -r .state)
-            echo "[$i/60] state: $STATE"
+            echo "[$(date -u +%H:%M:%S)] state: $STATE"
             if [ "$STATE" = "completed" ] || [ "$STATE" = "failed" ]; then
               echo "$RESPONSE" > /tmp/scan-result.json
               echo "final_state=$STATE" >> "$GITHUB_OUTPUT"
               break
             fi
-            sleep 10
+            sleep 30
           done
 
-          if [ -z "$STATE" ] || ([ "$STATE" != "completed" ] && [ "$STATE" != "failed" ]); then
-            echo "Scan timed out after 10 minutes"
+          if [ "$STATE" != "completed" ] && [ "$STATE" != "failed" ]; then
+            echo "Scan timed out after 1 hour"
             cat /tmp/migratowl.log
             exit 1
           fi
