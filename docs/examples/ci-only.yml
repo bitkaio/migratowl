@@ -9,7 +9,7 @@
 #   - You don't have (or don't want) a long-running Migratowl deployment
 #   - You want fully self-contained CI with no external dependencies
 #
-# Use docs/examples/dependabot-scan.yml instead when:
+# Use docs/examples/with-migratowl-server.yml instead when:
 #   - You already run a persistent Migratowl server
 #   - You want scans to be faster (no cluster spin-up overhead)
 #
@@ -57,20 +57,20 @@ jobs:
         uses: helm/kind-action@v1
         # No extra config needed — Migratowl raw mode works with any plain cluster.
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Checkout Migratowl
+        uses: actions/checkout@v4
         with:
-          python-version: "3.13"
+          repository: bitkaio/migratowl
+          ref: v0.3.0  # pin to a release tag
+          path: .migratowl
+          persist-credentials: false
 
-      # ── Install Migratowl ─────────────────────────────────────────────────
-      # Option A: install from PyPI (replace X.Y.Z with the version you want)
-      #   run: pip install migratowl==X.Y.Z
-      #
-      # Option B: install from source (if you vendor Migratowl or use a fork)
-      #   uses: actions/checkout@v4 in a prior step, then:
-      #   run: pip install .
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Install Migratowl
-        run: pip install migratowl
+        run: uv sync --frozen
+        working-directory: .migratowl
 
       - name: Apply raw-mode RBAC to kind cluster
         # This gives Migratowl permission to create/delete sandbox Pods and
@@ -125,7 +125,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          uvicorn migratowl.api.main:app \
+          cd .migratowl
+          uv run uvicorn migratowl.api.main:app \
             --host 127.0.0.1 --port 8000 \
             > /tmp/migratowl.log 2>&1 &
           echo $! > /tmp/migratowl.pid
