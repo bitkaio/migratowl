@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      statuses: write
 
     steps:
       - name: Checkout
@@ -211,9 +212,13 @@ jobs:
         run: |
           if [ -f /tmp/scan-result.json ]; then
             jq '{state, error,
-                 outdated_count: (.result.scan_result.outdated | length),
-                 reports: [.result.reports[] | {dependency_name, is_breaking, confidence}]}' \
+                 outdated_count: (.result.scan_result.outdated // [] | length),
+                 reports: [.result.reports // [] | .[] | {dependency_name, is_breaking, confidence}]}' \
               /tmp/scan-result.json
+            if [ "$(jq -r .state /tmp/scan-result.json)" = "failed" ]; then
+              echo "--- Migratowl server log ---"
+              cat /tmp/migratowl.log
+            fi
           fi
 
       - name: Upload full result
