@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-18
+
+### Added
+
+- **Raw sandbox mode** (`MIGRATOWL_SANDBOX_MODE=raw`) — runs on any Kubernetes cluster without
+  the agent-sandbox controller or CRDs. Migratowl manages ephemeral pods directly via the
+  Kubernetes API. Intended for CI environments (kind, EKS, GKE) where CRD installation is not
+  practical. Controlled by three new settings: `MIGRATOWL_SANDBOX_MODE`, `MIGRATOWL_SANDBOX_IMAGE`
+  (default `python:3.12-slim`), and `MIGRATOWL_SANDBOX_BLOCK_NETWORK` (default `true`; note that
+  kind's default CNI kindnet does not enforce NetworkPolicy).
+- **`k8s/rbac-raw.yaml`** — RBAC manifest for raw mode; grants direct Pod create/delete and
+  NetworkPolicy create/delete instead of the Sandbox CR verbs used by agent-sandbox mode.
+- **Migratowl self-scan workflow** (`.github/workflows/migratowl-scan.yml`) — Migratowl scans its
+  own dependencies on `workflow_dispatch` (full scan) and on Dependabot PRs (targeted single-dep
+  scan). Spins up a kind cluster in raw mode, starts an ephemeral Migratowl server, and polls for
+  completion with a 5-minute initial wait and a 1-hour wall-clock deadline.
+- **`docs/examples/ci-only.yml`** — drop-in GitHub Actions workflow for projects that want
+  Migratowl scans without running a persistent server; self-contained, requires only
+  `ANTHROPIC_API_KEY` as a repository secret.
+- **`docs/examples/with-migratowl-server.yml`** — renamed from `dependabot-scan.yml`; triggers an
+  existing Migratowl deployment via webhook.
+
+### Changed
+
+- `docs/examples/dependabot-scan.yml` renamed to `docs/examples/with-migratowl-server.yml` for
+  clarity.
+
 ## [0.2.0] - 2026-04-09
 
 ### Added
@@ -129,6 +156,7 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bitkaio/migratowl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bitkaio/migratowl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bitkaio/migratowl/releases/tag/v0.1.0

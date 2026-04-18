@@ -60,7 +60,7 @@ The result tells developers:
   - [Observability](#observability)
 - [Kubernetes Setup](#kubernetes-setup)
 - [Observability](#observability-1)
-- [GitHub Actions / Dependabot](#github-actions--dependabot)
+- [GitHub Actions](#github-actions)
 - [Architecture](#architecture)
 - [Project Layout](#project-layout)
 - [Development](#development)
@@ -361,9 +361,12 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIGRATOWL_SANDBOX_TEMPLATE` | `migratowl-sandbox-template` | agent-sandbox `AgentSandboxTemplate` name |
+| `MIGRATOWL_SANDBOX_MODE` | `agent-sandbox` | `agent-sandbox` (requires controller + CRDs) or `raw` (any cluster, no CRDs) |
+| `MIGRATOWL_SANDBOX_TEMPLATE` | `migratowl-sandbox-template` | agent-sandbox `AgentSandboxTemplate` name (agent-sandbox mode only) |
 | `MIGRATOWL_SANDBOX_NAMESPACE` | `default` | Kubernetes namespace for sandbox pods |
-| `MIGRATOWL_SANDBOX_CONNECTION_MODE` | `tunnel` | Connection mode: `tunnel` or `direct` |
+| `MIGRATOWL_SANDBOX_CONNECTION_MODE` | `tunnel` | Connection mode: `tunnel` or `direct` (agent-sandbox mode only) |
+| `MIGRATOWL_SANDBOX_IMAGE` | `python:3.12-slim` | Container image for sandbox pods (raw mode only). Must include the runtime for the target ecosystem — e.g. `python:3.13-slim`, `node:22-slim`, `golang:1.24-bookworm`, `rust:1.86-slim`, `maven:3.9-eclipse-temurin-21-alpine`. For mixed-ecosystem repos use a fat image that bundles all runtimes (see `k8s/runtime/`). |
+| `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it) |
 | `MIGRATOWL_WORKSPACE_PATH` | `/home/user/workspace` | Workspace root inside the sandbox |
 
 ### Analysis
@@ -433,11 +436,16 @@ kubectl apply -f k8s/sandbox-template.yaml
 kubectl apply -f k8s/warm-pool.yaml
 ```
 
-**Raw mode fallback** — if you can't install the agent-sandbox controller, switch to raw mode (works on any cluster, no CRDs required):
+**Raw mode** — if you can't install the agent-sandbox controller (locked-down clusters, CI environments), switch to raw mode. No CRDs required — Migratowl manages ephemeral pods directly:
 ```bash
-MIGRATOWL_SANDBOX_CONNECTION_MODE=direct  # set in .env
+MIGRATOWL_SANDBOX_MODE=raw          # set in .env
+MIGRATOWL_SANDBOX_IMAGE=python:3.12-slim
+MIGRATOWL_SANDBOX_BLOCK_NETWORK=true  # requires Calico/Cilium; set false for kind (kindnet ignores NetworkPolicy)
 ```
-Then install `langchain-kubernetes[raw]` instead of `langchain-kubernetes[agent-sandbox]`. Raw mode manages ephemeral pods directly and attaches a deny-all `NetworkPolicy` for isolation.
+Apply the raw-mode RBAC instead of the default one:
+```bash
+kubectl apply -f k8s/rbac-raw.yaml
+```
 
 **Security defaults applied to every pod:**
 - `runAsNonRoot: true`, `runAsUser: 1000`
@@ -467,32 +475,36 @@ No additional code changes are needed — the `observability.py` module initiali
 
 ---
 
-## GitHub Actions / Dependabot
+## GitHub Actions
 
-Migratowl can be triggered automatically from a GitHub Actions workflow whenever Dependabot opens or updates a PR. A ready-to-use workflow is provided at [`docs/examples/dependabot-scan.yml`](docs/examples/dependabot-scan.yml) — copy it into `.github/workflows/` in any repo you want to scan.
+Two ready-to-use example workflows are in [`docs/examples/`](docs/examples/). Both trigger on Dependabot PRs (targeted single-dep scan) and on `workflow_dispatch` (manual full scan).
 
-**What the workflow does:**
-1. Fires on `pull_request` events from `dependabot[bot]`
-2. POSTs to your Migratowl instance with the repo URL, branch, PR number, and commit SHA
-3. Migratowl sets a `pending` commit status immediately, then posts a PR comment with the full analysis table and sets a `success` or `failure` status when done
+### Option A — No server needed (`ci-only.yml`)
+
+Spins up a temporary kind cluster and Migratowl instance inside the runner. Nothing to host.
+
+**Setup (2 steps):**
+1. Copy [`docs/examples/ci-only.yml`](docs/examples/ci-only.yml) into `.github/workflows/` in your repo
+2. Add one repository secret: `ANTHROPIC_API_KEY` (Settings → Secrets and variables → Actions → New repository secret)
+
+That's it. The built-in `GITHUB_TOKEN` is used automatically for PR comments.
+
+### Option B — Persistent Migratowl server (`with-migratowl-server.yml`)
+
+Triggers your existing Migratowl deployment via webhook. Near-instant trigger, no cluster spin-up in CI.
 
 **Setup:**
-```bash
-# 1. Set MIGRATOWL_URL as a repository Actions variable
-#    (Settings → Secrets and variables → Actions → Variables)
-#    e.g. https://migratowl.internal.yourcompany.com
+1. Copy [`docs/examples/with-migratowl-server.yml`](docs/examples/with-migratowl-server.yml) into `.github/workflows/`
+2. Add a repository Actions variable `MIGRATOWL_URL` pointing at your deployment (Settings → Secrets and variables → Actions → Variables), e.g. `https://migratowl.yourcompany.com`
+3. Ensure your Migratowl instance has `GITHUB_TOKEN` set with `repo:status` and `public_repo` scopes (or `repo` for private repos)
 
-# 2. Ensure Migratowl is configured with a GitHub token:
-GITHUB_TOKEN=ghp_...   # needs repo:status + public_repo (or repo for private)
-```
-
-**For GitLab**, change `"git_provider": "github"` to `"gitlab"` in the `curl` payload and configure:
+**For GitLab**, change `"git_provider": "github"` to `"gitlab"` in the payload and configure:
 ```bash
 GITLAB_TOKEN=glpat-...
 GITLAB_API_URL=https://gitlab.com/api/v4   # or your self-hosted URL
 ```
 
-**GitHub Enterprise Server** — set `GITHUB_API_URL` to your GHES API endpoint:
+**GitHub Enterprise Server** — set `GITHUB_API_URL` on your Migratowl instance:
 ```bash
 GITHUB_API_URL=https://github.corp.com/api/v3
 ```
@@ -578,7 +590,8 @@ migratowl/
 └── http.py              # Shared HTTPX async client with retry logic
 
 k8s/
-├── rbac.yaml            # ServiceAccount + ClusterRole for sandbox management
+├── rbac.yaml            # RBAC for agent-sandbox mode (manages Sandbox CRs)
+├── rbac-raw.yaml        # RBAC for raw mode (manages Pods + NetworkPolicies directly)
 ├── sandbox-template.yaml# AgentSandboxTemplate CRD for the runner pod
 ├── warm-pool.yaml       # Optional warm pool for faster pod startup
 ├── sandbox-router.yaml  # Optional sandbox router service
