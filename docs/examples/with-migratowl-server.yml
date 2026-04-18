@@ -1,4 +1,4 @@
-# docs/examples/dependabot-scan.yml
+# docs/examples/with-migratowl-server.yml
 #
 # Drop this file into .github/workflows/ in any repo you want Migratowl to scan.
 #

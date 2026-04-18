@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: migratowl
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: migratowl-sandbox-role
+  namespace: default
+rules:
+  # Raw mode: manage ephemeral sandbox Pods directly
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+
+  # Exec and log access for executing commands in sandbox Pods
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # NetworkPolicy for network isolation (block_network=True)
+  # NOTE: requires a CNI that enforces NetworkPolicy (Calico, Cilium).
+  # kind's default CNI (kindnet) accepts the object but does not enforce it.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: migratowl-sandbox-rolebinding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: migratowl
+    namespace: default
+roleRef:
+  kind: Role
+  name: migratowl-sandbox-role
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,228 @@
+# docs/examples/ci-only.yml
+#
+# Drop this into .github/workflows/ in any repo you want Migratowl to scan
+# WITHOUT running a persistent Migratowl server. This workflow spins up a
+# temporary kind cluster and Migratowl instance inside the GitHub Actions
+# runner, runs the scan, then tears everything down.
+#
+# Use this when:
+#   - You don't have (or don't want) a long-running Migratowl deployment
+#   - You want fully self-contained CI with no external dependencies
+#
+# Use docs/examples/dependabot-scan.yml instead when:
+#   - You already run a persistent Migratowl server
+#   - You want scans to be faster (no cluster spin-up overhead)
+#
+# Requirements (repository secrets/variables):
+#   - ANTHROPIC_API_KEY  (secret) — Anthropic API key for the LLM
+#   - The built-in GITHUB_TOKEN is used automatically for PR comments
+#
+# Triggers:
+#   - workflow_dispatch: full scan, no dep filter — good for routine sweeps
+#   - pull_request by dependabot[bot]: scans the one bumped dep; grouped
+#     Dependabot PRs fall back to a full scan automatically
+#
+# Sandbox note:
+#   kind's default CNI (kindnet) does not enforce NetworkPolicy, so
+#   MIGRATOWL_SANDBOX_BLOCK_NETWORK is disabled. The sandbox Pod can reach
+#   the internet, which is needed to clone the target repo and fetch package
+#   metadata. If stricter isolation is required, replace kind's CNI with
+#   Calico and set MIGRATOWL_SANDBOX_BLOCK_NETWORK to "true".
+
+name: Migratowl Dependency Scan (self-hosted kind)
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  migratowl-scan:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up kind cluster
+        uses: helm/kind-action@v1
+        # No extra config needed — Migratowl raw mode works with any plain cluster.
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # ── Install Migratowl ─────────────────────────────────────────────────
+      # Option A: install from PyPI (replace X.Y.Z with the version you want)
+      #   run: pip install migratowl==X.Y.Z
+      #
+      # Option B: install from source (if you vendor Migratowl or use a fork)
+      #   uses: actions/checkout@v4 in a prior step, then:
+      #   run: pip install .
+      - name: Install Migratowl
+        run: pip install migratowl
+
+      - name: Apply raw-mode RBAC to kind cluster
+        # This gives Migratowl permission to create/delete sandbox Pods and
+        # NetworkPolicy objects in the default namespace.
+        run: |
+          kubectl apply -f - <<'RBAC'
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: migratowl
+            namespace: default
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: migratowl-sandbox-role
+            namespace: default
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["create", "get", "list", "watch", "delete"]
+            - apiGroups: [""]
+              resources: ["pods/exec"]
+              verbs: ["create"]
+            - apiGroups: [""]
+              resources: ["pods/log"]
+              verbs: ["get"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["networkpolicies"]
+              verbs: ["create", "delete"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: migratowl-sandbox-rolebinding
+            namespace: default
+          subjects:
+            - kind: ServiceAccount
+              name: migratowl
+              namespace: default
+          roleRef:
+            kind: Role
+            name: migratowl-sandbox-role
+            apiGroup: rbac.authorization.k8s.io
+          RBAC
+
+      - name: Start Migratowl server
+        env:
+          MIGRATOWL_SANDBOX_MODE: raw
+          MIGRATOWL_SANDBOX_IMAGE: python:3.12-slim
+          MIGRATOWL_SANDBOX_BLOCK_NETWORK: "false"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uvicorn migratowl.api.main:app \
+            --host 127.0.0.1 --port 8000 \
+            > /tmp/migratowl.log 2>&1 &
+          echo $! > /tmp/migratowl.pid
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/healthz > /dev/null && exit 0
+            sleep 2
+          done
+          cat /tmp/migratowl.log; exit 1
+
+      - name: Build payload and trigger scan
+        id: trigger
+        env:
+          REPO_URL: ${{ github.event.repository.clone_url }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            BRANCH="$DEFAULT_BRANCH"
+          else
+            BRANCH="$BASE_BRANCH"
+          fi
+
+          DEP_NAME=$(echo "$HEAD_BRANCH" | sed -n 's|dependabot/[^/]*/\(.*\)-[0-9][0-9.]*$|\1|p')
+          if [ -n "$DEP_NAME" ]; then
+            CHECK_DEPS=$(jq -n --arg dep "$DEP_NAME" '[$dep]')
+          else
+            CHECK_DEPS='[]'
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            payload=$(jq -n \
+              --arg  repo_url    "$REPO_URL" \
+              --arg  branch_name "$BRANCH" \
+              --argjson check_deps "$CHECK_DEPS" \
+              '{repo_url: $repo_url, branch_name: $branch_name,
+                git_provider: "github", check_deps: $check_deps}')
+          else
+            payload=$(jq -n \
+              --arg     repo_url    "$REPO_URL" \
+              --arg     branch_name "$BRANCH" \
+              --argjson pr_number   "${PR_NUMBER:-null}" \
+              --arg     commit_sha  "$COMMIT_SHA" \
+              --argjson check_deps  "$CHECK_DEPS" \
+              '{repo_url: $repo_url, branch_name: $branch_name,
+                git_provider: "github", pr_number: $pr_number,
+                commit_sha: $commit_sha, check_deps: $check_deps}')
+          fi
+
+          JOB_ID=$(curl --fail-with-body -sX POST http://127.0.0.1:8000/webhook \
+            -H "Content-Type: application/json" \
+            -d "$payload" | jq -r .job_id)
+
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Poll until scan completes
+        id: result
+        env:
+          JOB_ID: ${{ steps.trigger.outputs.job_id }}
+        run: |
+          for i in $(seq 1 60); do
+            RESPONSE=$(curl -sf "http://127.0.0.1:8000/jobs/$JOB_ID")
+            STATE=$(echo "$RESPONSE" | jq -r .state)
+            echo "[$i/60] state: $STATE"
+            if [ "$STATE" = "completed" ] || [ "$STATE" = "failed" ]; then
+              echo "$RESPONSE" > /tmp/scan-result.json
+              echo "final_state=$STATE" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 10
+          done
+          [ "$STATE" = "completed" ] || [ "$STATE" = "failed" ] || { cat /tmp/migratowl.log; exit 1; }
+
+      - name: Print scan summary
+        if: always()
+        run: |
+          if [ -f /tmp/scan-result.json ]; then
+            jq '{state, error,
+                 outdated_count: (.result.scan_result.outdated | length),
+                 reports: [.result.reports[] | {dependency_name, is_breaking, confidence}]}' \
+              /tmp/scan-result.json
+          fi
+
+      - name: Upload full result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migratowl-scan-result
+          path: /tmp/scan-result.json
+          retention-days: 30
+
+      - name: Fail if scan errored
+        if: steps.result.outputs.final_state == 'failed'
+        run: exit 1

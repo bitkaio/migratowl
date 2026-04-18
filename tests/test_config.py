@@ -24,6 +24,18 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.sandbox_connection_mode == "tunnel"
 
+    def test_default_sandbox_mode(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_mode == "agent-sandbox"
+
+    def test_default_sandbox_image(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_image == "python:3.12-slim"
+
+    def test_default_sandbox_block_network(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_block_network is True
+
     def test_default_workspace_path(self) -> None:
         settings = Settings(_env_file=None)
         assert settings.workspace_path == "/home/user/workspace"
@@ -112,6 +124,21 @@ class TestSettingsFromEnv:
         monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
         settings = Settings()
         assert settings.sandbox_connection_mode == "direct"
+
+    def test_env_override_sandbox_mode_raw(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_MODE", "raw")
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_mode == "raw"
+
+    def test_env_override_sandbox_image(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_IMAGE", "node:20-slim")
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_image == "node:20-slim"
+
+    def test_invalid_sandbox_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_MODE", "docker")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)
 
     def test_env_override_workspace_path(self, monkeypatch: object) -> None:
         monkeypatch.setenv("MIGRATOWL_WORKSPACE_PATH", "/tmp/workspace")

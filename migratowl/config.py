@@ -22,9 +22,12 @@ class Settings(BaseSettings):
     )
 
     # Kubernetes sandbox
+    sandbox_mode: Literal["agent-sandbox", "raw"] = "agent-sandbox"
     sandbox_template: str = "migratowl-sandbox-template"
     sandbox_namespace: str = "default"
     sandbox_connection_mode: str = "tunnel"
+    sandbox_image: str = "python:3.12-slim"
+    sandbox_block_network: bool = True
 
     # Workspace
     workspace_path: str = "/home/user/workspace"

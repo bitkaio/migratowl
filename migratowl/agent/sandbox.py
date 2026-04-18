@@ -24,11 +24,21 @@ def create_sandbox_manager(settings: Settings) -> KubernetesSandboxManager:
     except ImportError:
         logger.debug("truststore not installed; skipping system certificate injection")
 
-    config = KubernetesProviderConfig(
-        template_name=settings.sandbox_template,
-        namespace=settings.sandbox_namespace,
-        connection_mode=settings.sandbox_connection_mode,
-    )
+    if settings.sandbox_mode == "raw":
+        config = KubernetesProviderConfig(
+            mode="raw",
+            namespace=settings.sandbox_namespace,
+            image=settings.sandbox_image,
+            block_network=settings.sandbox_block_network,
+        )
+        logger.info("KubernetesSandboxManager created (mode=raw, image=%s)", settings.sandbox_image)
+    else:
+        config = KubernetesProviderConfig(
+            template_name=settings.sandbox_template,
+            namespace=settings.sandbox_namespace,
+            connection_mode=settings.sandbox_connection_mode,
+        )
+        logger.info("KubernetesSandboxManager created (template=%s)", settings.sandbox_template)
+
     manager = KubernetesSandboxManager(config)
-    logger.info("KubernetesSandboxManager created (template=%s)", settings.sandbox_template)
     return manager

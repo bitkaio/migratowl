@@ -1,0 +1,195 @@
+# Migratowl scans its own dependencies.
+#
+# Triggers:
+#   - workflow_dispatch: full scan (no dep filter) — use for routine sweeps
+#   - pull_request by dependabot[bot]: targeted scan of the one bumped dep;
+#     falls back to full scan for grouped Dependabot PRs that update many deps
+#
+# Requirements:
+#   - ANTHROPIC_API_KEY set as a repository secret
+#   - The built-in GITHUB_TOKEN is used for PR comments (pull-requests: write)
+#
+# Sandbox: kind cluster (raw mode, no CRDs). kindnet does not enforce
+# NetworkPolicy, so egress from the sandbox Pod is unrestricted. This is
+# acceptable here because Migratowl only clones its own public repo and runs
+# tests — it does not execute untrusted third-party code.
+
+name: Migratowl Dependency Scan
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  self-scan:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up kind cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0bb7b2bb33cf9e53b77a  # v1.10.0
+        with:
+          version: v0.27.0
+          kubectl_version: v1.32.0
+
+      - name: Apply raw-mode RBAC
+        run: kubectl apply -f k8s/rbac-raw.yaml
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Migratowl server
+        env:
+          MIGRATOWL_SANDBOX_MODE: raw
+          MIGRATOWL_SANDBOX_IMAGE: python:3.12-slim
+          MIGRATOWL_SANDBOX_BLOCK_NETWORK: "false"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run uvicorn migratowl.api.main:app \
+            --host 127.0.0.1 --port 8000 \
+            > /tmp/migratowl.log 2>&1 &
+          echo $! > /tmp/migratowl.pid
+
+      - name: Wait for server to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/healthz > /dev/null; then
+              echo "Server ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server did not start in time"
+          cat /tmp/migratowl.log
+          exit 1
+
+      - name: Build payload and trigger scan
+        id: trigger
+        env:
+          REPO_URL: ${{ github.event.repository.clone_url }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Determine which branch to scan
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            BRANCH="$DEFAULT_BRANCH"
+          else
+            # For Dependabot PRs, scan the base branch (dep is still at old version there)
+            BRANCH="$BASE_BRANCH"
+          fi
+
+          # Extract dep name from Dependabot branch: dependabot/<ecosystem>/<name>-<version>
+          # Grouped PRs produce no match; check_deps stays [] → full scan (same as manual)
+          DEP_NAME=$(echo "$HEAD_BRANCH" | sed -n 's|dependabot/[^/]*/\(.*\)-[0-9][0-9.]*$|\1|p')
+          if [ -n "$DEP_NAME" ]; then
+            CHECK_DEPS=$(jq -n --arg dep "$DEP_NAME" '[$dep]')
+          else
+            CHECK_DEPS='[]'
+          fi
+
+          # Build the payload; omit pr_number / commit_sha for manual runs
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            payload=$(jq -n \
+              --arg  repo_url    "$REPO_URL" \
+              --arg  branch_name "$BRANCH" \
+              --argjson check_deps "$CHECK_DEPS" \
+              '{repo_url: $repo_url, branch_name: $branch_name,
+                git_provider: "github", check_deps: $check_deps}')
+          else
+            payload=$(jq -n \
+              --arg     repo_url    "$REPO_URL" \
+              --arg     branch_name "$BRANCH" \
+              --argjson pr_number   "${PR_NUMBER:-null}" \
+              --arg     commit_sha  "$COMMIT_SHA" \
+              --argjson check_deps  "$CHECK_DEPS" \
+              '{repo_url: $repo_url, branch_name: $branch_name,
+                git_provider: "github", pr_number: $pr_number,
+                commit_sha: $commit_sha, check_deps: $check_deps}')
+          fi
+
+          JOB_ID=$(curl --fail-with-body -sX POST http://127.0.0.1:8000/webhook \
+            -H "Content-Type: application/json" \
+            -d "$payload" | jq -r .job_id)
+
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Scan triggered: job $JOB_ID"
+
+      - name: Poll until scan completes
+        id: result
+        env:
+          JOB_ID: ${{ steps.trigger.outputs.job_id }}
+        run: |
+          for i in $(seq 1 60); do
+            RESPONSE=$(curl -sf "http://127.0.0.1:8000/jobs/$JOB_ID")
+            STATE=$(echo "$RESPONSE" | jq -r .state)
+            echo "[$i/60] state: $STATE"
+            if [ "$STATE" = "completed" ] || [ "$STATE" = "failed" ]; then
+              echo "$RESPONSE" > /tmp/scan-result.json
+              echo "final_state=$STATE" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$STATE" ] || ([ "$STATE" != "completed" ] && [ "$STATE" != "failed" ]); then
+            echo "Scan timed out after 10 minutes"
+            cat /tmp/migratowl.log
+            exit 1
+          fi
+
+      - name: Print scan summary
+        if: always()
+        env:
+          FINAL_STATE: ${{ steps.result.outputs.final_state }}
+        run: |
+          echo "=== Scan state: $FINAL_STATE ==="
+          if [ -f /tmp/scan-result.json ]; then
+            jq '{state, error, "outdated_count": (.result.scan_result.outdated | length),
+                 "reports": [.result.reports[] | {dependency_name, is_breaking, confidence}]}' \
+              /tmp/scan-result.json
+          fi
+
+      - name: Upload full result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: migratowl-scan-result
+          path: /tmp/scan-result.json
+          retention-days: 30
+
+      - name: Fail if scan errored
+        if: steps.result.outputs.final_state == 'failed'
+        run: |
+          echo "Migratowl scan job failed — check the artifact for details"
+          exit 1
