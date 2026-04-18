@@ -1,8 +1,6 @@
 header:
   license:
     spdx-id: Apache-2.0
-    copyright-owner: The Migratowl Authors
-    software-name: Migratowl
 
   paths-ignore:
     - '.venv'
