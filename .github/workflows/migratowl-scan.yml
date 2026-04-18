@@ -44,7 +44,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up kind cluster
-        uses: helm/kind-action@a1b0e391336a6ee6713a0bb7b2bb33cf9e53b77a  # v1.10.0
+        uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde  # v1.10.0
         with:
           version: v0.27.0
           kubectl_version: v1.32.0
@@ -53,7 +53,7 @@ jobs:
         run: kubectl apply -f k8s/rbac-raw.yaml
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9  # v7
         with:
           enable-caching: true
           cache-dependency-glob: "uv.lock"
