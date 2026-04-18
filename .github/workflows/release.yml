@@ -210,7 +210,7 @@ jobs:
       actions: read
       id-token: write
       packages: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0  # zizmor: ignore[unpinned-uses] -- SHA pinning not supported by this action
     with:
       image: ghcr.io/${{ github.repository }}
       digest: ${{ needs.docker.outputs.digest }}
