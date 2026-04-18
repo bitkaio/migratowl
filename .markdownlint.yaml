@@ -1,0 +1,4 @@
+MD013: false   # line-length: docs and changelogs use long lines
+MD033: false   # inline-html: README uses HTML for badges and alignment
+MD041: false   # first-line-h1: PR template intentionally starts with ##
+MD024: false   # no-duplicate-heading: CHANGELOG uses repeated section names

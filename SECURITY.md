@@ -10,7 +10,7 @@ Only the latest release of migratowl receives security fixes.
 
 Please report vulnerabilities using one of these channels:
 
-- **Email:** security@kun.co.hu
+- **Email:** [security@kun.co.hu](mailto:security@kun.co.hu)
 - **GitHub Security Advisory:** [Open a private advisory](../../security/advisories/new)
 
 Include as much of the following as possible:

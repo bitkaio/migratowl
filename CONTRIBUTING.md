@@ -57,7 +57,7 @@ Examples:
 
 ## Security Vulnerabilities
 
-Do **not** open a public issue for security vulnerabilities. Instead, email security@bitkaio.com with a description of the vulnerability. We will respond within 72 hours.
+Do **not** open a public issue for security vulnerabilities. Instead, email [security@bitkaio.com](mailto:security@bitkaio.com) with a description of the vulnerability. We will respond within 72 hours.
 
 ## Code of Conduct
 

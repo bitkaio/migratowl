@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-**Version 1.0 — Effective April 2026**
+## Version 1.0 — Effective April 2026
 
 This Contributor License Agreement ("Agreement") is between you ("Contributor") and bitkaio LLC, a Wyoming limited liability company ("Company").
 

@@ -30,6 +30,7 @@ Migratowl answers one question: **"If I upgrade this dependency, will anything b
 It receives a webhook, clones the target repository, scans all dependency manifests, queries package registries for newer versions, and runs the project inside an isolated Kubernetes sandbox with every dependency bumped. An AI agent executes the test suite, reads the error output, fetches the relevant changelog, and produces a structured report per dependency.
 
 The result tells developers:
+
 - Whether the upgrade is breaking
 - What specifically went wrong
 - A verbatim citation from the changelog
@@ -85,7 +86,7 @@ The result tells developers:
 
 Migratowl runs a four-phase agent workflow inside an ephemeral Kubernetes sandbox.
 
-```
+```text
 POST /webhook
      │
      ▼
@@ -128,6 +129,7 @@ POST /webhook
 ```
 
 **Confidence scoring rules** (applied in Phase 3 when tests fail):
+
 - Error message directly names the package → high confidence (≥ 0.8)
 - Import or attribute error for a known package API → high confidence
 - Major version jump (e.g. `2.x → 3.x`) → moderate confidence boost
@@ -136,7 +138,8 @@ POST /webhook
 The default confidence threshold is `0.7` (configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD`).
 
 **Sandbox workspace layout:**
-```
+
+```text
 /home/user/workspace/
 ├── source/          # Immutable clone — never executed
 ├── main/            # All deps bumped, executed in Phase 2
@@ -268,7 +271,7 @@ Poll the status of a scan job.
 
 **Job lifecycle:**
 
-```
+```text
 PENDING ──► RUNNING ──► COMPLETED
                    └──► FAILED
 ```
@@ -294,7 +297,7 @@ Liveness check. Returns `200 {"status": "ok"}` when the server is running.
 
 The `ScanAnalysisReport` delivered to `callback_url` (and returned in `GET /jobs/{job_id}` when completed):
 
-```
+```text
 ScanAnalysisReport
 ├── repo_url                  string    — repository that was analyzed
 ├── branch_name               string    — branch that was cloned
@@ -432,22 +435,27 @@ kubectl apply -f k8s/sandbox-template.yaml
 ```
 
 **Optional warm pool** (reduces cold-start latency):
+
 ```bash
 kubectl apply -f k8s/warm-pool.yaml
 ```
 
 **Raw mode** — if you can't install the agent-sandbox controller (locked-down clusters, CI environments), switch to raw mode. No CRDs required — Migratowl manages ephemeral pods directly:
+
 ```bash
 MIGRATOWL_SANDBOX_MODE=raw          # set in .env
 MIGRATOWL_SANDBOX_IMAGE=python:3.12-slim
 MIGRATOWL_SANDBOX_BLOCK_NETWORK=true  # requires Calico/Cilium; set false for kind (kindnet ignores NetworkPolicy)
 ```
+
 Apply the raw-mode RBAC instead of the default one:
+
 ```bash
 kubectl apply -f k8s/rbac-raw.yaml
 ```
 
 **Security defaults applied to every pod:**
+
 - `runAsNonRoot: true`, `runAsUser: 1000`
 - `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
 - `automountServiceAccountToken: false`
@@ -467,6 +475,7 @@ LANGFUSE_HOST=https://cloud.langfuse.com   # or your self-hosted instance
 ```
 
 When enabled, every scan produces a LangFuse session (keyed by `job_id`) containing:
+
 - **Main agent trace** — all LLM calls and tool invocations
 - **Tool call spans** — `clone_repo`, `scan_dependencies`, `execute_project`, etc.
 - **Subagent spans** — `package-analyzer` subagent runs nested under the parent trace
@@ -484,6 +493,7 @@ Two ready-to-use example workflows are in [`docs/examples/`](docs/examples/). Bo
 Spins up a temporary kind cluster and Migratowl instance inside the runner. Nothing to host.
 
 **Setup (2 steps):**
+
 1. Copy [`docs/examples/ci-only.yml`](docs/examples/ci-only.yml) into `.github/workflows/` in your repo
 2. Add one repository secret: `ANTHROPIC_API_KEY` (Settings → Secrets and variables → Actions → New repository secret)
 
@@ -494,17 +504,20 @@ That's it. The built-in `GITHUB_TOKEN` is used automatically for PR comments.
 Triggers your existing Migratowl deployment via webhook. Near-instant trigger, no cluster spin-up in CI.
 
 **Setup:**
+
 1. Copy [`docs/examples/with-migratowl-server.yml`](docs/examples/with-migratowl-server.yml) into `.github/workflows/`
 2. Add a repository Actions variable `MIGRATOWL_URL` pointing at your deployment (Settings → Secrets and variables → Actions → Variables), e.g. `https://migratowl.yourcompany.com`
 3. Ensure your Migratowl instance has `GITHUB_TOKEN` set with `repo:status` and `public_repo` scopes (or `repo` for private repos)
 
 **For GitLab**, change `"git_provider": "github"` to `"gitlab"` in the payload and configure:
+
 ```bash
 GITLAB_TOKEN=glpat-...
 GITLAB_API_URL=https://gitlab.com/api/v4   # or your self-hosted URL
 ```
 
 **GitHub Enterprise Server** — set `GITHUB_API_URL` on your Migratowl instance:
+
 ```bash
 GITHUB_API_URL=https://github.corp.com/api/v3
 ```
@@ -513,7 +526,7 @@ GITHUB_API_URL=https://github.corp.com/api/v3
 
 ## Architecture
 
-```
+```text
                           ┌─────────────────────────────┐
   HTTP client             │          FastAPI            │
   ─────────────────────►  │  POST /webhook              │
@@ -558,7 +571,7 @@ GITHUB_API_URL=https://github.corp.com/api/v3
 
 ## Project Layout
 
-```
+```text
 migratowl/
 ├── api/
 │   ├── main.py          # FastAPI app, /webhook + /jobs endpoints, lifespan

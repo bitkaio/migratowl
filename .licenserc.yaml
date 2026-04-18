@@ -20,5 +20,9 @@ header:
     - '*.cfg'
     - '*.lock'
     - 'k8s'
+    - 'LICENSE'
+    - '.gitignore'
+    - '.env.example'
+    - '.env'
 
   comment: on-failure
