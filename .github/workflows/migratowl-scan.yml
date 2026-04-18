@@ -20,6 +20,9 @@ on:
   workflow_dispatch: {}
   pull_request:
     types: [opened, synchronize]
+    paths:
+      - pyproject.toml
+      - uv.lock
 
 permissions:
   contents: read
