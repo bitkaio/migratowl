@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.13%2B-blue" alt="Python 3.13+" />
-  <img src="https://img.shields.io/badge/license-BSD%203--Clause-green" alt="License" />
+  <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License" />
   <a href="https://www.bestpractices.dev/projects/12571"><img src="https://www.bestpractices.dev/projects/12571/badge" alt="OpenSSF Best Practices"></a>
 </p>
 
@@ -641,4 +641,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). All contributors must sign the [CLA](CLA
 
 ## License
 
-BSD 3-Clause — see [LICENSE](LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE).
