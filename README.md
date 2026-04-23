@@ -35,7 +35,44 @@ The result tells developers:
 - What specifically went wrong
 - A verbatim citation from the changelog
 - A plain-English fix suggestion
-- A confidence score (0.0–1.0)
+
+---
+
+## Why Not Just Use Snyk, Dependabot, or Your CI Pipeline?
+
+Use them together, not instead. Here is what each one does not do:
+
+**"SemVer already tells me if a major version breaks things."**
+It tells you *that* something changed. It does not tell you *which of your files* imports
+the removed API, or whether your project even calls the affected code path.
+
+**"I just let CI run on the Dependabot PR."**
+CI tells you it failed. Migratowl tells you *why*, links it to a specific changelog entry,
+and scores how confident it is in that attribution — for every package in the PR, not just
+the one that happened to fail loudest.
+
+**"The LLM is just guessing the confidence score."**
+No. Tests run first in an isolated sandbox. The LLM reads the real error output and
+decides whether the failure is attributable clearly enough to report, or whether the
+package needs an isolated re-run. It is routing logic, not prediction.
+
+**"We have no tests."**
+For compiled languages (Go, Rust, Java), build failures are caught automatically — no
+tests needed. For interpreted languages (Python, Node.js), a test suite is currently
+required to detect runtime breakage. Zero-test support for interpreted ecosystems is
+planned.
+
+| | Snyk | SonarQube | Dependabot | Renovate | Your CI | Migratowl |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Security CVE alerts | ✅ | ✅ | ⚠️ | ⚠️ | ❌ | ❌ |
+| License compliance | ⚠️ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Automated version-bump PRs | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| Tests run on upgrade | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| No CI config required | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Which file / call site breaks | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Changelog-cited explanation | ❌ | ❌ | ❌ | ⚠️ | ❌ | ✅ |
+
+⚠️ = partial &nbsp;&nbsp; ❌ = not in scope
 
 ---
 
@@ -62,6 +99,8 @@ The result tells developers:
 - [Kubernetes Setup](#kubernetes-setup)
 - [Observability](#observability-1)
 - [GitHub Actions](#github-actions)
+  - [Option A — No server needed (`ci-only.yml`)](#option-a--no-server-needed-ci-onlyyml)
+  - [Option B — Persistent Migratowl server (`with-migratowl-server.yml`)](#option-b--persistent-migratowl-server-with-migratowl-serveryml)
 - [Architecture](#architecture)
 - [Project Layout](#project-layout)
 - [Development](#development)
@@ -109,13 +148,13 @@ POST /webhook
                           │ pass / fail + error output
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Phase 3 — Confidence Scoring                           │
+│  Phase 3 — Subagent Routing                             │
 │                                                         │
-│  All pass ──► every package: is_breaking=false, conf=1  │
+│  All pass ──► every package: is_breaking=false          │
 │                                                         │
-│  Some fail ──► assign confidence per package            │
-│    conf ≥ threshold ──► fetch_changelog + write report  │
-│    conf < threshold ──► delegate to package-analyzer    │
+│  Some fail ──► route per package                        │
+│    clear attribution ──► fetch_changelog + write report │
+│    ambiguous failure ──► delegate to package-analyzer   │
 │                          subagent (isolated run)        │
 └─────────────────────────┬───────────────────────────────┘
                           │ AnalysisReport[]
@@ -128,14 +167,13 @@ POST /webhook
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Confidence scoring rules** (applied in Phase 3 when tests fail):
+**Routing rules** (applied in Phase 3 when tests fail):
 
-- Error message directly names the package → high confidence (≥ 0.8)
-- Import or attribute error for a known package API → high confidence
-- Major version jump (e.g. `2.x → 3.x`) → moderate confidence boost
-- Generic failure with no clear link → low confidence (< 0.5)
+- Error message directly names the package → attributed directly; report written
+- Import or attribute error for a known package API → attributed directly
+- Ambiguous failure with no clear link to a specific package → delegated to an isolated package-analyzer subagent run
 
-The default confidence threshold is `0.7` (configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD`).
+The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (default `0.7`).
 
 **Sandbox workspace layout:**
 
@@ -323,8 +361,7 @@ ScanAnalysisReport
 │   ├── is_breaking           bool
 │   ├── error_summary         string    — what failed (empty if not breaking)
 │   ├── changelog_citation    string    — verbatim excerpt from changelog
-│   ├── suggested_human_fix   string    — plain-English remediation step
-│   └── confidence            float     — 0.0–1.0
+│   └── suggested_human_fix   string    — plain-English remediation step
 ├── skipped                   string[]  — package names not analyzed
 └── total_duration_seconds    float
 ```
@@ -337,8 +374,7 @@ ScanAnalysisReport
   "is_breaking": true,
   "error_summary": "ImportError: cannot import name 'PreparedRequest'",
   "changelog_citation": "## 3.0.0 — Removed PreparedRequest from the public API.",
-  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`.",
-  "confidence": 0.95
+  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`."
 }
 ```
 

@@ -25,8 +25,8 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         lines.append("_No outdated dependencies found to analyze._")
     else:
         lines += [
-            "| Package | Status | Confidence | Fix |",
-            "|---------|--------|------------|-----|",
+            "| Package | Status | Fix |",
+            "|---------|--------|-----|",
         ]
         sorted_reports = sorted(
             report.reports,
@@ -34,11 +34,10 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         )
         for r in sorted_reports:
             status = "⚠️ Breaking" if r.is_breaking else "✅ Safe"
-            conf = f"{r.confidence:.0%}"
             fix = r.suggested_human_fix if r.is_breaking else "—"
             if len(fix) > 120:
                 fix = fix[:117] + "..."
-            lines.append(f"| `{r.dependency_name}` | {status} | {conf} | {fix} |")
+            lines.append(f"| `{r.dependency_name}` | {status} | {fix} |")
 
     if report.skipped:
         skipped_str = ", ".join(f"`{s}`" for s in report.skipped)

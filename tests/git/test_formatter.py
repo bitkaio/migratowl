@@ -91,3 +91,9 @@ class TestFormatPrComment:
         breaking = _make_analysis("zzz", is_breaking=True, fix="fix it")
         comment = format_pr_comment(_make_report([safe, breaking]))
         assert comment.index("zzz") < comment.index("aaa")
+
+    def test_confidence_not_shown_in_output(self) -> None:
+        r = _make_analysis("requests", is_breaking=False, confidence=0.9)
+        comment = format_pr_comment(_make_report([r]))
+        assert "Confidence" not in comment
+        assert "90%" not in comment
