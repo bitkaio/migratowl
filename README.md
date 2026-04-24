@@ -78,8 +78,6 @@ planned.
 
 ## Table of Contents
 
-- [What It Does](#what-it-does)
-- [Table of Contents](#table-of-contents)
 - [Supported Ecosystems](#supported-ecosystems)
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
