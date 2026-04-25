@@ -187,7 +187,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bitkaio/migratowl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bitkaio/migratowl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bitkaio/migratowl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bitkaio/migratowl/releases/tag/v0.1.0
