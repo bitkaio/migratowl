@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-25
+
+### Added
+
+- **Zero-config CI distribution** — two new companion repositories make Migratowl installable in
+  under two minutes with no Kubernetes infrastructure:
+  - **`bitkaio/migratowl-action`** — GitHub Composite Action published to the GitHub Marketplace.
+    Spins up an ephemeral [kind](https://kind.sigs.k8s.io/) cluster with Calico CNI inside the
+    runner, runs the scan in raw sandbox mode, and tears everything down on completion. Supports
+    Dependabot/Renovate PR targeted scans, scheduled full-repo scans, and three
+    `results-destination` options (`pr-comment`, `issue`, `artifact`).
+  - **`bitkaio/migratowl-gitlab-component`** — GitLab CI/CD Component published to the Component
+    Catalog. Mirrors the Action's behaviour using `docker:dind`; all seven steps are inlined in
+    `templates/scan.yml`. Supports self-managed GitLab via the `gitlab-api-url` input.
+- **Prebuilt multi-arch runtime image** — `ghcr.io/bitkaio/migratowl-runtime:<version>` is now
+  built and pushed to GHCR on every release (`linux/amd64` + `linux/arm64`). The Action and
+  Component pull this image instead of rebuilding `k8s/runtime/` on every CI run, saving 1–3
+  minutes per scan.
+- **Getting Started section in README** — two named paths presented side by side: *Zero-config*
+  (no cluster needed, links to the Action and Component) and *Self-hosted* (existing cluster,
+  links to the renamed Quick Start section).
+
+### Changed
+
+- **PR comment no longer shows a confidence column** — the `Confidence` column has been removed
+  from the PR/MR comment table. The table is now `| Package | Status | Fix |`. Confidence scoring
+  is still computed internally but is not surfaced until it is validated against real-world repos.
+- **`docs/examples/ci-only.yml`** — added `statuses: write` permission (required to post commit
+  statuses); improved scan result display to guard against null `outdated` / `reports` fields;
+  logs the Migratowl server output when the scan state is `failed`.
+- **License updated to Apache 2.0** — all source files and README now carry Apache 2.0 headers
+  and SPDX identifiers (`SPDX-License-Identifier: Apache-2.0`).
+
 ## [0.3.0] - 2026-04-18
 
 ### Added
