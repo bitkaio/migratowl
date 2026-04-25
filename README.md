@@ -152,7 +152,7 @@ include:
       stage: test
 ```
 
-See [bitkaio/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl-gitlab-component) for details.
+See [bitkaio/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl/migratowl-gitlab-component) for details.
 
 ### Self-hosted (existing Kubernetes cluster)
 
