@@ -164,3 +164,40 @@ class TestWebhookNotifyIntegration:
             await asyncio.sleep(0.05)
 
         mock_failed.assert_awaited_once()
+
+
+class TestRunScanSetsModelName:
+    @pytest.mark.asyncio
+    async def test_model_name_set_on_report(self, app) -> None:
+        from migratowl.models.schemas import ScanAnalysisReport, ScanResult, ScanWebhookPayload
+
+        completed_report = ScanAnalysisReport(
+            repo_url="https://github.com/x/y",
+            branch_name="main",
+            scan_result=ScanResult(
+                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=1.0
+            ),
+            reports=[],
+            total_duration_seconds=3.0,
+        )
+
+        main_mod._scan_semaphore = asyncio.Semaphore(1)
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = {
+                "structured_response": completed_report,
+                "messages": [],
+            }
+            mock_factory.return_value = mock_graph
+
+            payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+            job = app.state.job_store.create(payload)
+
+            await main_mod._run_scan(app, job.job_id)
+
+            result_job = app.state.job_store.get(job.job_id)
+            assert result_job.result is not None
+            assert result_job.result.model_name == app.state.settings.model_name

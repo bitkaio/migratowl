@@ -2,7 +2,9 @@
 
 """Tests for webhook helper functions."""
 
-from migratowl.api.helpers import build_user_message, extract_report
+from langchain_core.messages import AIMessage, HumanMessage
+
+from migratowl.api.helpers import _accumulate_tokens, build_user_message, extract_report
 from migratowl.models.schemas import Ecosystem, ScanWebhookPayload
 
 
@@ -155,3 +157,56 @@ class TestExtractReport:
         agent_result = {"messages": []}
         report = extract_report(agent_result, payload)
         assert report.repo_url == "https://github.com/x/y"
+
+    def test_populates_token_counts_from_ai_messages(self) -> None:
+        from migratowl.models.schemas import ScanAnalysisReport, ScanResult
+
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+        structured = ScanAnalysisReport(
+            repo_url="https://github.com/x/y",
+            branch_name="main",
+            scan_result=ScanResult(
+                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=1.0
+            ),
+            reports=[],
+            total_duration_seconds=5.0,
+        )
+        agent_result = {
+            "structured_response": structured,
+            "messages": [
+                AIMessage(
+                    content="done",
+                    usage_metadata={"input_tokens": 1000, "output_tokens": 400, "total_tokens": 1400},
+                )
+            ],
+        }
+        report = extract_report(agent_result, payload)
+        assert report.total_input_tokens == 1000
+        assert report.total_output_tokens == 400
+
+
+class TestAccumulateTokens:
+    def test_returns_zeros_for_empty_messages(self) -> None:
+        assert _accumulate_tokens([]) == (0, 0)
+
+    def test_sums_usage_metadata_from_ai_messages(self) -> None:
+        msgs = [
+            AIMessage(content="hello", usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}),
+            AIMessage(content="world", usage_metadata={"input_tokens": 200, "output_tokens": 80, "total_tokens": 280}),
+        ]
+        assert _accumulate_tokens(msgs) == (300, 130)
+
+    def test_ignores_non_ai_messages(self) -> None:
+        msgs = [
+            HumanMessage(content="scan this"),
+            AIMessage(content="ok", usage_metadata={"input_tokens": 50, "output_tokens": 20, "total_tokens": 70}),
+        ]
+        assert _accumulate_tokens(msgs) == (50, 20)
+
+    def test_ignores_ai_messages_without_usage_metadata(self) -> None:
+        msgs = [AIMessage(content="no metadata here")]
+        assert _accumulate_tokens(msgs) == (0, 0)
+
+    def test_handles_dict_messages(self) -> None:
+        msgs = [{"role": "assistant", "content": "dict message"}]
+        assert _accumulate_tokens(msgs) == (0, 0)

@@ -15,6 +15,9 @@ def _make_report(
     reports: list[AnalysisReport],
     skipped: list[str] | None = None,
     duration: float = 12.5,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    model_name: str = "",
 ) -> ScanAnalysisReport:
     return ScanAnalysisReport(
         repo_url="https://github.com/org/repo",
@@ -28,6 +31,9 @@ def _make_report(
         reports=reports,
         skipped=skipped or [],
         total_duration_seconds=duration,
+        total_input_tokens=input_tokens,
+        total_output_tokens=output_tokens,
+        model_name=model_name,
     )
 
 
@@ -97,3 +103,68 @@ class TestFormatPrComment:
         comment = format_pr_comment(_make_report([r]))
         assert "Confidence" not in comment
         assert "90%" not in comment
+
+
+class TestFormatTokens:
+    def test_zero_tokens_returns_empty_string(self) -> None:
+        from migratowl.git.formatter import _format_tokens
+        assert _format_tokens(0, 0) == ""
+
+    def test_shows_m_for_millions(self) -> None:
+        from migratowl.git.formatter import _format_tokens
+        result = _format_tokens(1_500_000, 500_000)
+        assert "2.0M" in result
+
+    def test_shows_input_and_output_breakdown(self) -> None:
+        from migratowl.git.formatter import _format_tokens
+        result = _format_tokens(900_000, 300_000)
+        assert "↑" in result
+        assert "↓" in result
+
+
+class TestEstimateCost:
+    def test_returns_empty_for_unknown_model(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        assert _estimate_cost("unknown-model-xyz", 1_000_000, 500_000) == ""
+
+    def test_returns_empty_when_no_tokens(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        assert _estimate_cost("claude-sonnet-4-6", 0, 0) == ""
+
+    def test_calculates_cost_for_known_model(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-sonnet-4-6: $3/1M input, $15/1M output
+        # 1M input = $3.00, 0.5M output = $7.50 → $10.50
+        result = _estimate_cost("claude-sonnet-4-6", 1_000_000, 500_000)
+        assert result == "~$10.50"
+
+    def test_cost_rounds_to_two_decimal_places(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # $0.30 input + $1.50 output = $1.80
+        result = _estimate_cost("claude-sonnet-4-6", 100_000, 100_000)
+        assert result == "~$1.80"
+
+
+class TestFormatPrCommentTokenFooter:
+    def test_footer_shows_tokens_when_present(self) -> None:
+        report = _make_report([], duration=10.0, input_tokens=900_000, output_tokens=300_000)
+        comment = format_pr_comment(report)
+        assert "↑" in comment
+        assert "↓" in comment
+
+    def test_footer_shows_cost_for_known_model(self) -> None:
+        report = _make_report([], duration=10.0, input_tokens=1_000_000, output_tokens=500_000, model_name="claude-sonnet-4-6")
+        comment = format_pr_comment(report)
+        assert "~$10.50" in comment
+
+    def test_footer_omits_cost_for_unknown_model(self) -> None:
+        report = _make_report([], duration=10.0, input_tokens=500_000, output_tokens=200_000, model_name="unknown-future-model")
+        comment = format_pr_comment(report)
+        assert "~$" not in comment
+        assert "↑" in comment
+
+    def test_footer_omits_token_section_when_zero(self) -> None:
+        report = _make_report([], duration=10.0)
+        comment = format_pr_comment(report)
+        assert "↑" not in comment
+        assert "~$" not in comment

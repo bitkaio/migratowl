@@ -19,11 +19,26 @@ from __future__ import annotations
 import json
 import logging
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 from migratowl.models.schemas import ScanAnalysisReport, ScanResult, ScanWebhookPayload
 
 logger = logging.getLogger(__name__)
+
+
+def _accumulate_tokens(messages: list[object]) -> tuple[int, int]:
+    """Sum input and output token counts from AIMessage.usage_metadata."""
+    input_tokens = 0
+    output_tokens = 0
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            continue
+        meta = msg.usage_metadata
+        if meta is None:
+            continue
+        input_tokens += meta["input_tokens"]
+        output_tokens += meta["output_tokens"]
+    return input_tokens, output_tokens
 
 
 def build_user_message(payload: ScanWebhookPayload) -> str:
@@ -62,34 +77,47 @@ def extract_report(agent_result: dict, payload: ScanWebhookPayload) -> ScanAnaly
          ToolStrategy fails to populate structured_response).
       3. Return an empty report if nothing works.
     """
+    report: ScanAnalysisReport | None = None
+
     # 1. Primary: structured_response key (ProviderStrategy / Anthropic)
     structured = agent_result.get("structured_response")
     if structured is not None:
         try:
             if isinstance(structured, ScanAnalysisReport):
-                return structured
-            return ScanAnalysisReport.model_validate(structured)
+                report = structured
+            else:
+                report = ScanAnalysisReport.model_validate(structured)
         except Exception:
             logger.debug("structured_response present but failed validation")
 
     # 2. Fallback: parse JSON from messages (ToolStrategy / OpenAI fallback)
-    for msg in reversed(agent_result.get("messages", [])):
-        content = _message_text(msg)
-        if not content:
-            continue
-        try:
-            data = json.loads(content)
-            return ScanAnalysisReport.model_validate(data)
-        except (json.JSONDecodeError, Exception):
-            continue
+    if report is None:
+        for msg in reversed(agent_result.get("messages", [])):
+            content = _message_text(msg)
+            if not content:
+                continue
+            try:
+                data = json.loads(content)
+                report = ScanAnalysisReport.model_validate(data)
+                break
+            except (json.JSONDecodeError, Exception):
+                continue
 
-    logger.warning("Could not extract ScanAnalysisReport from agent output; returning empty report")
-    return ScanAnalysisReport(
-        repo_url=payload.repo_url,
-        branch_name=payload.branch_name,
-        scan_result=ScanResult(
-            all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0
-        ),
-        reports=[],
-        total_duration_seconds=0.0,
-    )
+    # 3. Empty report sentinel
+    if report is None:
+        logger.warning("Could not extract ScanAnalysisReport from agent output; returning empty report")
+        report = ScanAnalysisReport(
+            repo_url=payload.repo_url,
+            branch_name=payload.branch_name,
+            scan_result=ScanResult(
+                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0
+            ),
+            reports=[],
+            total_duration_seconds=0.0,
+        )
+
+    # Accumulate token usage from all messages
+    messages = agent_result.get("messages", [])
+    report.total_input_tokens, report.total_output_tokens = _accumulate_tokens(messages)
+
+    return report

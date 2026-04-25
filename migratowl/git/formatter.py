@@ -16,6 +16,40 @@
 
 from migratowl.models.schemas import ScanAnalysisReport
 
+# (input_cost_per_1M_tokens, output_cost_per_1M_tokens) in USD
+_PRICING: dict[str, tuple[float, float]] = {
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4-7": (15.0, 75.0),
+    "claude-haiku-4-5-20251001": (0.80, 4.0),
+    "gpt-4o": (2.50, 10.0),
+    "gpt-4o-mini": (0.15, 0.60),
+}
+
+
+def _format_tokens(input_tokens: int, output_tokens: int) -> str:
+    """Humanise token counts as '1.2M tokens (↑890K / ↓355K)'. Returns '' when both are zero."""
+    total = input_tokens + output_tokens
+    if total == 0:
+        return ""
+
+    def _fmt(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.0f}K"
+        return str(n)
+
+    return f"{_fmt(total)} tokens (↑{_fmt(input_tokens)} / ↓{_fmt(output_tokens)})"
+
+
+def _estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> str:
+    """Return '~$0.12' for known models, '' for unknown or zero-token runs."""
+    pricing = _PRICING.get(model_name)
+    if not pricing or (input_tokens + output_tokens) == 0:
+        return ""
+    cost = (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+    return f"~${cost:.2f}"
+
 
 def format_pr_comment(report: ScanAnalysisReport) -> str:
     """Return a markdown string suitable for posting as a PR/MR comment."""
@@ -52,10 +86,20 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
 
     breaking_count = sum(1 for r in report.reports if r.is_breaking)
     summary = f"{breaking_count} breaking" if breaking_count else "all safe"
-    lines += [
-        "",
-        f"_Scan duration: {report.total_duration_seconds:.1f}s"
-        f" · {len(report.reports)} package(s) analyzed · {summary}_",
+
+    footer_parts = [
+        f"Scan duration: {report.total_duration_seconds:.1f}s",
+        f"{len(report.reports)} package(s) analyzed",
+        summary,
     ]
+
+    token_str = _format_tokens(report.total_input_tokens, report.total_output_tokens)
+    if token_str:
+        footer_parts.append(token_str)
+        cost_str = _estimate_cost(report.model_name, report.total_input_tokens, report.total_output_tokens)
+        if cost_str:
+            footer_parts.append(cost_str)
+
+    lines += ["", f"_{' · '.join(footer_parts)}_"]
 
     return "\n".join(lines)

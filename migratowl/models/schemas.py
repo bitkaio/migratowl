@@ -161,6 +161,9 @@ class ScanAnalysisReport(BaseModel):
     reports: list[AnalysisReport]
     skipped: list[str] = []
     total_duration_seconds: float
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    model_name: str = ""
 
 
 class JobState(enum.StrEnum):

@@ -138,6 +138,7 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
                 config={"configurable": {"thread_id": job_id}},
             )
             report = extract_report(result, job.payload)
+            report.model_name = app.state.settings.model_name
             store.set_result(job_id, report)
 
             # Optional callback

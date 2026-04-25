@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LLM cost telemetry in PR comments** — the PR/MR comment footer now shows token usage and an
+  estimated cost for each scan. Example: `1.2M tokens (↑890K / ↓355K) · ~$0.12`. Token counts
+  are accumulated from `AIMessage.usage_metadata` across all agent turns. Cost estimates are
+  computed from a built-in pricing table covering `claude-sonnet-4-6`, `claude-opus-4-7`,
+  `claude-haiku-4-5-20251001`, `gpt-4o`, and `gpt-4o-mini`; unknown models display token counts
+  without a cost estimate.
+
 ## [0.4.0] - 2026-04-25
 
 ### Added
