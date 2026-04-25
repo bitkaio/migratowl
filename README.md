@@ -78,9 +78,10 @@ planned.
 
 ## Table of Contents
 
+- [Getting Started](#getting-started)
 - [Supported Ecosystems](#supported-ecosystems)
 - [How It Works](#how-it-works)
-- [Quick Start](#quick-start)
+- [Self-Hosted Quick Start](#self-hosted-quick-start)
 - [API Reference](#api-reference)
   - [POST /webhook](#post-webhook)
   - [GET /jobs/{job\_id}](#get-jobsjob_id)
@@ -104,6 +105,58 @@ planned.
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Getting Started
+
+Choose the path that matches your setup:
+
+### Zero-config (no cluster needed)
+
+For individual developers and small teams with no existing Kubernetes infrastructure. Migratowl spins up a temporary cluster inside the CI runner — nothing to install or host.
+
+**GitHub Actions** — add one workflow file and one secret:
+
+```yaml
+name: migratowl
+on:
+  pull_request:
+    branches: [main]
+concurrency:
+  group: migratowl-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: bitkaio/migratowl-action@v1
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+See [bitkaio/migratowl-action](https://github.com/bitkaio/migratowl-action) for the full inputs reference, scheduled mode, and GitLab usage.
+
+**GitLab CI** — include the component once:
+
+```yaml
+stages: [test]
+include:
+  - component: gitlab.com/bitkaio/migratowl-gitlab-component/scan@v1
+    inputs:
+      anthropic-api-key: $ANTHROPIC_API_KEY
+      stage: test
+```
+
+See [bitkaio/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl-gitlab-component) for details.
+
+### Self-hosted (existing Kubernetes cluster)
+
+For teams that already operate a Kubernetes cluster and want a persistent Migratowl deployment. Follow the [Self-Hosted Quick Start](#self-hosted-quick-start) below.
 
 ---
 
@@ -184,7 +237,7 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 
 ---
 
-## Quick Start
+## Self-Hosted Quick Start
 
 **Prerequisites:** Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker, minikube, kubectl.
 

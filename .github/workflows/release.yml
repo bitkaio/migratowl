@@ -46,6 +46,46 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v
 
+  # ── Build and push sandbox runtime image ──────────────────────────────────
+  runtime-image:
+    name: Runtime Image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push runtime image
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6
+        with:
+          context: k8s/runtime
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/bitkaio/migratowl-runtime:${{ github.ref_name }}
+            ghcr.io/bitkaio/migratowl-runtime:latest
+
   # ── Build and push Docker image with LangGraph CLI ─────────────────────────
   docker:
     name: Docker
@@ -222,7 +262,7 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [sign-and-attest, provenance, docker]
+    needs: [sign-and-attest, provenance, docker, runtime-image]
     permissions:
       contents: write
 
