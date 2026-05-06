@@ -6,7 +6,7 @@
 import httpx
 import pytest
 
-from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, RegistryFailure
 from migratowl.registry import CheckOptions
 
 # ---------------------------------------------------------------------------
@@ -398,10 +398,10 @@ class TestCheckOutdated:
         ]
 
         async with httpx.AsyncClient(transport=transport) as client:
-            result = await check_outdated(deps, concurrency=5, client=client)
+            outdated, failures = await check_outdated(deps, concurrency=5, client=client)
 
-        assert len(result) == 1
-        assert result[0].name == "requests"
+        assert len(outdated) == 1
+        assert outdated[0].name == "requests"
 
     async def test_single_failed_query_does_not_block_others(self) -> None:
         from migratowl.registry import check_outdated
@@ -420,18 +420,19 @@ class TestCheckOutdated:
         ]
 
         async with httpx.AsyncClient(transport=transport) as client:
-            result = await check_outdated(deps, concurrency=5, client=client)
+            outdated, failures = await check_outdated(deps, concurrency=5, client=client)
 
-        assert len(result) == 1
-        assert result[0].name == "flask"
+        assert len(outdated) == 1
+        assert outdated[0].name == "flask"
 
     async def test_empty_input(self) -> None:
         from migratowl.registry import check_outdated
 
         async with httpx.AsyncClient(transport=_mock_transport({})) as client:
-            result = await check_outdated([], concurrency=5, client=client)
+            outdated, failures = await check_outdated([], concurrency=5, client=client)
 
-        assert result == []
+        assert outdated == []
+        assert failures == []
 
 
 # ===========================================================================
@@ -923,10 +924,10 @@ class TestCheckOutdatedWithOptions:
         })
         deps = [_dep("express", "^4.21.2", Ecosystem.NODEJS, "package.json")]
         async with httpx.AsyncClient(transport=transport) as client:
-            result = await check_outdated(deps, concurrency=1, client=client)
+            outdated, _ = await check_outdated(deps, concurrency=1, client=client)
 
-        assert len(result) == 1  # normal mode: 5.0.0 exists → outdated
-        assert result[0].latest_version == "5.0.0"
+        assert len(outdated) == 1  # normal mode: 5.0.0 exists → outdated
+        assert outdated[0].latest_version == "5.0.0"
 
     async def test_normal_options_flags_major_bump(self) -> None:
         from migratowl.registry import check_outdated
@@ -942,7 +943,70 @@ class TestCheckOutdatedWithOptions:
         deps = [_dep("express", "^4.21.2", Ecosystem.NODEJS, "package.json")]
         opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=False)
         async with httpx.AsyncClient(transport=transport) as client:
-            result = await check_outdated(deps, options=opts, concurrency=1, client=client)
+            outdated, _ = await check_outdated(deps, options=opts, concurrency=1, client=client)
 
-        assert len(result) == 1
-        assert result[0].latest_version == "5.0.0"
+        assert len(outdated) == 1
+        assert outdated[0].latest_version == "5.0.0"
+
+# ===========================================================================
+# check_outdated — failure propagation (Issue 1)
+# ===========================================================================
+
+
+class TestCheckOutdatedReturnsFailures:
+    async def test_failed_query_yields_registry_failure(self) -> None:
+        from migratowl.registry import check_outdated
+
+        transport = _mock_transport({})  # requests → 404 → HTTPStatusError
+
+        deps = [_dep("requests", "2.31.0", Ecosystem.PYTHON)]
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            outdated, failures = await check_outdated(deps, concurrency=5, client=client)
+
+        assert outdated == []
+        assert len(failures) == 1
+        assert failures[0].name == "requests"
+        assert failures[0].ecosystem == Ecosystem.PYTHON
+
+    async def test_successful_query_has_no_failure(self) -> None:
+        from migratowl.registry import check_outdated
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={
+                "info": {"version": "2.32.0", "home_page": None, "project_urls": None},
+                "releases": {"2.31.0": [], "2.32.0": []},
+            }),
+        })
+
+        deps = [_dep("requests", "2.31.0", Ecosystem.PYTHON)]
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            outdated, failures = await check_outdated(deps, concurrency=5, client=client)
+
+        assert len(outdated) == 1
+        assert failures == []
+
+    async def test_mixed_queries_tracks_both_separately(self) -> None:
+        from migratowl.registry import check_outdated
+
+        transport = _mock_transport({
+            "/pypi/flask/json": httpx.Response(200, json={
+                "info": {"version": "3.1.0", "home_page": None, "project_urls": None},
+                "releases": {"3.0.0": [], "3.1.0": []},
+            }),
+            # requests → 404 → failure
+        })
+
+        deps = [
+            _dep("flask", "3.0.0", Ecosystem.PYTHON),
+            _dep("requests", "2.31.0", Ecosystem.PYTHON),
+        ]
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            outdated, failures = await check_outdated(deps, concurrency=5, client=client)
+
+        assert len(outdated) == 1
+        assert outdated[0].name == "flask"
+        assert len(failures) == 1
+        assert failures[0].name == "requests"

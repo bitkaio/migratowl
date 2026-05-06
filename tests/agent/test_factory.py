@@ -229,3 +229,25 @@ class TestCreateMigratowlAgent:
 
         call_kwargs = mock_init.call_args[1]
         assert "base_url" not in call_kwargs
+
+class TestSystemPromptMajorVersionChangelog:
+    def test_fetches_changelog_for_major_bump_when_tests_pass(self) -> None:
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "major" in prompt.lower()
+        assert "fetch_changelog" in prompt or "changelog" in prompt.lower()
+        assert "0.9" in prompt
+
+    def test_no_major_bump_keeps_1_0_confidence(self) -> None:
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "1.0" in prompt
+
+    def test_fetch_changelog_rule_includes_major_bump_exception(self) -> None:
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        important_rules_section = prompt.split("## Important Rules")[1]
+        assert "major" in important_rules_section.lower()

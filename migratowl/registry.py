@@ -26,7 +26,7 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from migratowl.config import get_settings
-from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency, RegistryFailure
 
 logger = logging.getLogger(__name__)
 
@@ -439,28 +439,33 @@ async def check_outdated(
     options: CheckOptions | None = None,
     concurrency: int = 10,
     client: httpx.AsyncClient | None = None,
-) -> list[OutdatedDependency]:
+) -> tuple[list[OutdatedDependency], list[RegistryFailure]]:
     """Check a list of dependencies against their package registries.
 
-    Returns only the outdated ones. Failed queries are logged and skipped.
+    Returns a tuple of (outdated, failures). Outdated contains deps with newer
+    versions available. Failures contains deps whose registry query raised an
+    exception (network errors, unexpected response shapes, etc.).
     """
     if not deps:
-        return []
+        return [], []
 
     _options = options if options is not None else CheckOptions()
     sem = asyncio.Semaphore(concurrency)
 
-    async def _query_one(c: httpx.AsyncClient, dep: Dependency) -> OutdatedDependency | None:
+    async def _query_one(
+        c: httpx.AsyncClient, dep: Dependency
+    ) -> tuple[OutdatedDependency | None, RegistryFailure | None]:
         query_fn = _ECOSYSTEM_QUERIES.get(dep.ecosystem)
         if query_fn is None:
             logger.warning("No registry query for ecosystem %s", dep.ecosystem)
-            return None
+            return None, None
         async with sem:
             try:
-                return await query_fn(c, dep, _options)
+                result = await query_fn(c, dep, _options)
+                return result, None
             except Exception:
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)
-                return None
+                return None, RegistryFailure(name=dep.name, ecosystem=dep.ecosystem)
 
     owns_client = client is None
     if owns_client:
@@ -472,9 +477,13 @@ async def check_outdated(
 
     assert client is not None  # always assigned: either passed in or created above
     try:
-        results = await asyncio.gather(*[_query_one(client, dep) for dep in deps])
+        pairs: list[tuple[OutdatedDependency | None, RegistryFailure | None]] = list(
+            await asyncio.gather(*[_query_one(client, dep) for dep in deps])
+        )
     finally:
         if owns_client:
             await client.aclose()
 
-    return [r for r in results if r is not None]
+    outdated = [o for o, _ in pairs if o is not None]
+    failures = [f for _, f in pairs if f is not None]
+    return outdated, failures

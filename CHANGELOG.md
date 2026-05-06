@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-06
+
 ### Added
 
 - **LLM cost telemetry in PR comments** — the PR/MR comment footer now shows token usage and an
@@ -15,6 +17,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computed from a built-in pricing table covering `claude-sonnet-4-6`, `claude-opus-4-7`,
   `claude-haiku-4-5-20251001`, `gpt-4o`, and `gpt-4o-mini`; unknown models display token counts
   without a cost estimate.
+- **Registry query failures surfaced in PR comments** — packages that could not be queried (e.g.
+  network errors, unsupported registries) are now collected into a `RegistryFailure` list and
+  shown in a collapsible `<details>` block at the bottom of the PR comment
+  ("N package(s) could not be queried"). Previously these failures were silently swallowed,
+  causing packages to disappear from the output without any indication. `ScanResult` now carries
+  a `registry_failures` field; `check_outdated` returns
+  `tuple[list[OutdatedDependency], list[RegistryFailure]]`.
+
+### Changed
+
+- **PR comment table redesigned** — the table is now `| Package | Current | Latest | Status |`,
+  replacing the previous `| Package | Status | Fix |` layout. Breaking packages show `✗ breaking`;
+  safe packages show `✓ safe`; skipped packages are included inline with `— skipped` and their
+  current/latest version. When a package is skipped because it is already at the latest version,
+  both the Current and Latest columns show the same version.
+- **Per-package collapsible detail cards** — breaking packages each get a `<details>` card showing
+  the version transition (`1.2.3 → 2.0.0`), error summary, changelog citation, and full fix
+  suggestion without any character truncation. Skipped packages each get a `<details>` card
+  showing the reason they were skipped. Both card types appear below the table, replacing the
+  previous combined "Fix details (N package(s))" block.
+- **Changelog fetched for major-version bumps when tests pass** — when `validate_project` passes
+  but a package has a major-version bump (`current_major < latest_major`), the agent now calls
+  `fetch_changelog_tool` to inspect for breaking changes and sets `is_breaking`, `confidence`
+  (0.9), and `suggested_human_fix` from the changelog. Previously the agent marked all packages
+  `is_breaking=false, confidence=1.0` whenever tests passed, silently skipping changelog
+  inspection for major bumps. The same logic applies to the `package-analyzer` subagent.
 
 ## [0.4.0] - 2026-04-25
 
@@ -196,7 +224,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bitkaio/migratowl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bitkaio/migratowl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bitkaio/migratowl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bitkaio/migratowl/compare/v0.1.0...v0.2.0
