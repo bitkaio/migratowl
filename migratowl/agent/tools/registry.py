@@ -48,20 +48,26 @@ def create_check_outdated_tool(
         Takes a JSON array of dependency objects (output from scan_dependencies)
         and returns a JSON object with:
           - "outdated": list of outdated dependencies with latest versions and metadata
+          - "failures": list of deps whose registry query failed (name + ecosystem)
           - "warning": null, or a message if the list was capped to the largest version gaps
         """
         deps = [Dependency(**d) for d in json.loads(dependencies_json)]
-        outdated = await check_outdated(deps, options=_options, concurrency=concurrency)
+        outdated, failures = await check_outdated(deps, options=_options, concurrency=concurrency)
         settings = get_settings()
         result: dict[str, object]
         if len(outdated) > settings.max_outdated_deps:
             outdated = sorted(outdated, key=_major_version_gap, reverse=True)[: settings.max_outdated_deps]
             result = {
                 "outdated": [d.model_dump() for d in outdated],
+                "failures": [f.model_dump() for f in failures],
                 "warning": f"Capped at {settings.max_outdated_deps} deps (largest version gaps shown first)",
             }
         else:
-            result = {"outdated": [d.model_dump() for d in outdated], "warning": None}
+            result = {
+                "outdated": [d.model_dump() for d in outdated],
+                "failures": [f.model_dump() for f in failures],
+                "warning": None,
+            }
         return json.dumps(result)
 
     return check_outdated_deps

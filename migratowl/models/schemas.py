@@ -95,6 +95,13 @@ class OutdatedDependency(BaseModel):
     changelog_url: str | None = None
 
 
+class RegistryFailure(BaseModel):
+    """A dependency whose registry query could not be completed."""
+
+    name: str
+    ecosystem: Ecosystem
+
+
 class ScanResult(BaseModel):
     """Phase 0 output: all dependencies, outdated ones, and scan metadata."""
 
@@ -102,6 +109,7 @@ class ScanResult(BaseModel):
     outdated: list[OutdatedDependency]
     manifests_found: list[str]
     scan_duration_seconds: float
+    registry_failures: list[RegistryFailure] = []
 
 
 class ExecutionResult(BaseModel):

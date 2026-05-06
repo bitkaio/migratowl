@@ -6,6 +6,8 @@
 from migratowl.git.formatter import format_pr_comment
 from migratowl.models.schemas import (
     AnalysisReport,
+    Ecosystem,
+    RegistryFailure,
     ScanAnalysisReport,
     ScanResult,
 )
@@ -18,6 +20,7 @@ def _make_report(
     input_tokens: int = 0,
     output_tokens: int = 0,
     model_name: str = "",
+    registry_failures: list[RegistryFailure] | None = None,
 ) -> ScanAnalysisReport:
     return ScanAnalysisReport(
         repo_url="https://github.com/org/repo",
@@ -27,6 +30,7 @@ def _make_report(
             outdated=[],
             manifests_found=["requirements.txt"],
             scan_duration_seconds=1.0,
+            registry_failures=registry_failures or [],
         ),
         reports=reports,
         skipped=skipped or [],
@@ -84,13 +88,14 @@ class TestFormatPrComment:
         comment = format_pr_comment(_make_report([], duration=47.3))
         assert "47.3s" in comment
 
-    def test_long_fix_is_truncated(self) -> None:
-        long_fix = "x" * 200
+    def test_long_fix_shows_short_summary_in_table_cell(self) -> None:
+        long_fix = "Use the new API instead. See migration guide at https://example.com/migrate for full details."
         r = _make_analysis("pkg", is_breaking=True, fix=long_fix)
         comment = format_pr_comment(_make_report([r]))
-        table_line = [ln for ln in comment.splitlines() if "pkg" in ln][0]
+        table_line = [ln for ln in comment.splitlines() if "`pkg`" in ln][0]
         fix_cell = table_line.split("|")[-2].strip()
-        assert len(fix_cell) <= 120
+        assert fix_cell.endswith("…")
+        assert len(fix_cell) <= 85
 
     def test_breaking_packages_sorted_first(self) -> None:
         safe = _make_analysis("aaa", is_breaking=False)
@@ -168,3 +173,80 @@ class TestFormatPrCommentTokenFooter:
         comment = format_pr_comment(report)
         assert "↑" not in comment
         assert "~$" not in comment
+
+class TestFormatPrCommentRegistryFailures:
+    def test_failures_block_shown_when_present(self) -> None:
+        failures = [RegistryFailure(name="mongoose", ecosystem=Ecosystem.NODEJS)]
+        comment = format_pr_comment(_make_report([], registry_failures=failures))
+        assert "mongoose" in comment
+        assert "could not be queried" in comment
+        assert "<details>" in comment
+
+    def test_no_failures_block_when_empty(self) -> None:
+        comment = format_pr_comment(_make_report([]))
+        assert "could not be queried" not in comment
+
+    def test_failure_count_in_summary_line(self) -> None:
+        failures = [
+            RegistryFailure(name="mongoose", ecosystem=Ecosystem.NODEJS),
+            RegistryFailure(name="@popperjs/core", ecosystem=Ecosystem.NODEJS),
+        ]
+        comment = format_pr_comment(_make_report([], registry_failures=failures))
+        assert "2 package(s)" in comment
+
+
+class TestShortFix:
+    def test_uses_first_sentence_when_short(self) -> None:
+        from migratowl.git.formatter import _short_fix
+        result = _short_fix("Pin to 2.x. See docs.")
+        assert result == "Pin to 2.x…"
+
+    def test_truncates_to_80_when_no_sentence_break(self) -> None:
+        from migratowl.git.formatter import _short_fix
+        long = "x" * 100
+        result = _short_fix(long)
+        assert result == "x" * 80 + "…"
+
+    def test_no_ellipsis_when_fits(self) -> None:
+        from migratowl.git.formatter import _short_fix
+        result = _short_fix("Short fix.")
+        assert result == "Short fix."
+
+
+class TestFixDetails:
+    def test_full_fix_appears_in_details_block(self) -> None:
+        long_fix = "x" * 200
+        r = _make_analysis("pkg", is_breaking=True, fix=long_fix)
+        comment = format_pr_comment(_make_report([r]))
+        assert long_fix in comment
+        assert "Fix details" in comment
+
+    def test_short_fix_not_truncated_in_table_cell(self) -> None:
+        r = _make_analysis("pkg", is_breaking=True, fix="Pin to 2.x.")
+        comment = format_pr_comment(_make_report([r]))
+        table_line = [ln for ln in comment.splitlines() if "`pkg`" in ln][0]
+        fix_cell = table_line.split("|")[-2].strip()
+        assert fix_cell == "Pin to 2.x."
+
+    def test_no_fix_details_block_for_all_safe_packages(self) -> None:
+        r = _make_analysis("requests", is_breaking=False)
+        comment = format_pr_comment(_make_report([r]))
+        assert "Fix details" not in comment
+
+    def test_no_fix_details_block_when_breaking_has_no_fix(self) -> None:
+        r = _make_analysis("pkg", is_breaking=True, fix="")
+        comment = format_pr_comment(_make_report([r]))
+        assert "Fix details" not in comment
+
+    def test_fix_details_contains_package_name(self) -> None:
+        r = _make_analysis("httpx", is_breaking=True, fix="Use httpx.Client() instead of requests-style calls. " * 5)
+        comment = format_pr_comment(_make_report([r]))
+        assert "httpx" in comment.split("Fix details")[1]
+
+    def test_first_sentence_as_inline_summary(self) -> None:
+        fix = "Update imports. Full details at docs.example.com."
+        r = _make_analysis("pkg", is_breaking=True, fix=fix)
+        comment = format_pr_comment(_make_report([r]))
+        table_line = [ln for ln in comment.splitlines() if "`pkg`" in ln][0]
+        fix_cell = table_line.split("|")[-2].strip()
+        assert fix_cell == "Update imports…"

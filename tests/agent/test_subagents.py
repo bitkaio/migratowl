@@ -91,3 +91,17 @@ class TestCreatePackageAnalyzerSubagent:
             model=MagicMock(), backend_factory=MagicMock(), tools=tools
         )
         assert captured.get("tools") is tools
+
+class TestPackageAnalyzerPromptMajorVersionChangelog:
+    def test_major_bump_triggers_changelog_on_clean_tests(self) -> None:
+        from migratowl.agent.subagents import PACKAGE_ANALYZER_PROMPT
+
+        assert "major" in PACKAGE_ANALYZER_PROMPT.lower()
+        assert "0.9" in PACKAGE_ANALYZER_PROMPT
+        assert "changelog" in PACKAGE_ANALYZER_PROMPT.lower()
+
+    def test_no_major_bump_skips_changelog_on_clean_tests(self) -> None:
+        from migratowl.agent.subagents import PACKAGE_ANALYZER_PROMPT
+
+        lower = PACKAGE_ANALYZER_PROMPT.lower()
+        assert "do not call fetch_changelog" in lower or "do not call" in lower

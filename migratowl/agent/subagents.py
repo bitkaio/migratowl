@@ -37,8 +37,12 @@ Workflow:
    - Use ls, read_file, grep, or execute to inspect files and error details.
    - Call fetch_changelog_tool to understand what changed.
    - Suggest a fix citing the exact changelog section.
-5. If tests pass cleanly, report is_breaking=false with high confidence.
-   Do NOT call fetch_changelog_tool if there are no errors.
+5. If tests pass cleanly:
+   - No major-version bump (current_major == latest_major): report is_breaking=false \
+with confidence=1.0. Do NOT call fetch_changelog_tool.
+   - Major-version bump (current_major < latest_major): call fetch_changelog_tool, \
+inspect for breaking changes, and set is_breaking, changelog_citation, and \
+suggested_human_fix accordingly. Use confidence=0.9.
 
 Your final message must contain ONLY this JSON object (no prose, no markdown wrapper):
 {"dependency_name": "...", "is_breaking": true|false, "error_summary": "...|null", \

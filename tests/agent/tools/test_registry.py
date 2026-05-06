@@ -10,7 +10,7 @@ import pytest
 
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.config import Settings
-from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency
+from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency, RegistryFailure
 from migratowl.registry import CheckOptions, query_maven_central
 
 
@@ -40,7 +40,7 @@ class TestCheckOutdatedDepsTool:
             ),
         ]
 
-        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=mock_outdated):
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=(mock_outdated, [])):
             tool = create_check_outdated_tool(concurrency=5)
             result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
 
@@ -50,11 +50,11 @@ class TestCheckOutdatedDepsTool:
         assert result["warning"] is None
 
     async def test_empty_input(self) -> None:
-        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=[]):
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=([], [])):
             tool = create_check_outdated_tool(concurrency=5)
             result = json.loads(await tool.ainvoke({"dependencies_json": "[]"}))
 
-        assert result == {"outdated": [], "warning": None}
+        assert result == {"outdated": [], "failures": [], "warning": None}
 
     async def test_malformed_json_raises(self) -> None:
         tool = create_check_outdated_tool(concurrency=5)
@@ -72,7 +72,7 @@ class TestCheckOutdatedDepsTool:
             for d in mock_outdated
         ])
 
-        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=mock_outdated):
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=(mock_outdated, [])):
             tool = create_check_outdated_tool(concurrency=5)
             result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
 
@@ -96,7 +96,7 @@ class TestCheckOutdatedDepsTool:
         mock_settings.max_outdated_deps = 3
 
         with patch("migratowl.agent.tools.registry.get_settings", return_value=mock_settings):
-            with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=mock_outdated):
+            with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=(mock_outdated, [])):
                 tool = create_check_outdated_tool(concurrency=5)
                 result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
 
@@ -121,7 +121,7 @@ class TestCheckOutdatedDepsTool:
         mock_settings.max_outdated_deps = 3
 
         with patch("migratowl.agent.tools.registry.get_settings", return_value=mock_settings):
-            with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=mock_outdated):
+            with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=(mock_outdated, [])):
                 tool = create_check_outdated_tool(concurrency=5)
                 result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
 
@@ -139,7 +139,7 @@ class TestCheckOutdatedDepsTool:
         ])
         opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=True)
 
-        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=[]) as mock_check:
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=([], [])) as mock_check:
             tool = create_check_outdated_tool(concurrency=5, options=opts)
             await tool.ainvoke({"dependencies_json": deps_json})
 
@@ -226,3 +226,34 @@ class TestQueryMavenCentral:
 
         assert result is None
         client.get.assert_not_called()
+
+class TestCheckOutdatedDepsToolFailures:
+    async def test_failures_key_present_when_query_fails(self) -> None:
+        deps_json = json.dumps([
+            {"name": "broken-pkg", "current_version": "1.0.0", "ecosystem": "python", "manifest_path": "requirements.txt"},
+        ])
+        failure = RegistryFailure(name="broken-pkg", ecosystem=Ecosystem.PYTHON)
+
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=([], [failure])):
+            tool = create_check_outdated_tool(concurrency=5)
+            result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
+
+        assert "failures" in result
+        assert len(result["failures"]) == 1
+        assert result["failures"][0]["name"] == "broken-pkg"
+
+    async def test_failures_empty_when_all_succeed(self) -> None:
+        deps_json = json.dumps([
+            {"name": "requests", "current_version": "2.31.0", "ecosystem": "python", "manifest_path": "requirements.txt"},
+        ])
+        outdated = [OutdatedDependency(
+            name="requests", current_version="2.31.0", latest_version="2.32.0",
+            ecosystem=Ecosystem.PYTHON, manifest_path="requirements.txt",
+        )]
+
+        with patch("migratowl.agent.tools.registry.check_outdated", new_callable=AsyncMock, return_value=(outdated, [])):
+            tool = create_check_outdated_tool(concurrency=5)
+            result = json.loads(await tool.ainvoke({"dependencies_json": deps_json}))
+
+        assert result["failures"] == []
+        assert len(result["outdated"]) == 1

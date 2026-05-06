@@ -51,6 +51,20 @@ def _estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> st
     return f"~${cost:.2f}"
 
 
+def _details_block(summary: str, body: str) -> list[str]:
+    """Return lines for a collapsible <details> block."""
+    return ["", f"<details><summary>{summary}</summary>", "", body, "", "</details>"]
+
+
+def _short_fix(fix: str) -> str:
+    """First sentence (or ≤80 chars) of a fix string for the inline table cell."""
+    dot_pos = fix.find(". ")
+    summary = fix[: dot_pos + 1] if 0 < dot_pos < 80 else fix[:80]
+    if len(summary) < len(fix):
+        summary = summary.rstrip(".") + "…"
+    return summary
+
+
 def format_pr_comment(report: ScanAnalysisReport) -> str:
     """Return a markdown string suitable for posting as a PR/MR comment."""
     lines: list[str] = ["## Migratowl Dependency Analysis", ""]
@@ -68,21 +82,30 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         )
         for r in sorted_reports:
             status = "⚠️ Breaking" if r.is_breaking else "✅ Safe"
-            fix = r.suggested_human_fix if r.is_breaking else "—"
-            if len(fix) > 120:
-                fix = fix[:117] + "..."
-            lines.append(f"| `{r.dependency_name}` | {status} | {fix} |")
+            fix_inline = _short_fix(r.suggested_human_fix) if r.is_breaking and r.suggested_human_fix else "—"
+            lines.append(f"| `{r.dependency_name}` | {status} | {fix_inline} |")
+
+        breaking_with_fix = [r for r in sorted_reports if r.is_breaking and r.suggested_human_fix]
+        if breaking_with_fix:
+            fix_body = "\n\n".join(
+                f"**`{r.dependency_name}`** — {r.suggested_human_fix}"
+                for r in breaking_with_fix
+            )
+            lines += _details_block(f"Fix details ({len(breaking_with_fix)} package(s))", fix_body)
 
     if report.skipped:
         skipped_str = ", ".join(f"`{s}`" for s in report.skipped)
-        lines += [
-            "",
-            f"<details><summary>{len(report.skipped)} package(s) skipped</summary>",
-            "",
-            skipped_str,
-            "",
-            "</details>",
-        ]
+        lines += _details_block(f"{len(report.skipped)} package(s) skipped", skipped_str)
+
+    if report.scan_result.registry_failures:
+        failed_str = ", ".join(
+            f"`{f.name}` ({f.ecosystem})"
+            for f in report.scan_result.registry_failures
+        )
+        lines += _details_block(
+            f"{len(report.scan_result.registry_failures)} package(s) could not be queried",
+            failed_str,
+        )
 
     breaking_count = sum(1 for r in report.reports if r.is_breaking)
     summary = f"{breaking_count} breaking" if breaking_count else "all safe"

@@ -56,7 +56,7 @@ You operate inside a Kubernetes sandbox with a workspace laid out as:
 2. Run detect_languages on source/ to find ecosystems and default commands.
 3. Run scan_dependencies on source/ to find all declared dependencies.
 4. Run check_outdated_deps to identify which have newer versions.
-   Result format: {{"outdated": [...], "warning": null or "..."}}.
+   Result format: {{"outdated": [...], "failures": [...], "warning": null or "..."}}.
    If warning is present, only the largest version gaps are shown.
 
 ### Phase 2: Main Analysis
@@ -72,8 +72,13 @@ then runs pytest if detected.
 
 ### Phase 3: Confidence Assessment
 After executing main/:
-- If ALL tests pass → all packages are safe. Produce AnalysisReport per package \
-with is_breaking=false and confidence=1.0.
+- If ALL tests pass → check the major-version gap for each package:
+  - No major bump (current_major == latest_major): produce AnalysisReport with \
+is_breaking=false and confidence=1.0. No changelog fetch needed.
+  - Major-version bump (current_major < latest_major): call fetch_changelog_tool \
+for that package, inspect for breaking changes, then produce AnalysisReport with \
+is_breaking set accordingly, changelog_citation and suggested_human_fix from the \
+changelog, and confidence=0.9 (changelog-derived, not test-derived).
 - If tests FAIL → analyze the error output and assign a confidence score (0.0–1.0) \
 to each outdated package indicating how likely it caused the failure.
 
@@ -108,7 +113,8 @@ into a final ScanAnalysisReport.
 
 ## Important Rules
 - NEVER execute code in source/ — it is the immutable reference.
-- Only call fetch_changelog_tool when a package causes errors or warnings.
+- Only call fetch_changelog_tool when a package causes errors or warnings, OR when \
+all tests pass but the package has a major-version bump (current_major < latest_major).
 - Per-package folders share the same sandbox — isolation is by path, not by instance.
 
 ## Sandbox Tool Restrictions
