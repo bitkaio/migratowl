@@ -253,8 +253,8 @@ cp .env.example .env
 minikube start --driver=docker --memory=8192 --cpus=4
 
 # 4. Install agent-sandbox controller and CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.1.0/manifest.yaml
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.1.0/extensions.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.2.1/manifest.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.2.1/extensions.yaml
 
 # 5. Build sandbox runner image inside minikube
 eval $(minikube docker-env)
@@ -442,7 +442,7 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | `ANTHROPIC_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=anthropic` (default) |
 | `OPENAI_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=openai` |
 | `MIGRATOWL_MODEL_PROVIDER` | `anthropic` | LLM provider: `anthropic` or `openai` |
-| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-4-6` | Model name (must match provider) |
+| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5` | Model name (must match provider) |
 | `MIGRATOWL_MODEL_RATE_LIMIT_RPS` | `0.1` | Max LLM requests/second (0.1 = 6 req/min) |
 | `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API |
 | `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API |
@@ -509,8 +509,8 @@ Migratowl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kuber
 
 ```bash
 # Install controller + CRDs (one-time)
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.1.0/manifest.yaml
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.1.0/extensions.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.2.1/manifest.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.2.1/extensions.yaml
 
 # Build runtime image (must be visible to the cluster — use minikube docker-env locally)
 eval $(minikube docker-env)

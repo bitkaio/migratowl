@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-16
+
+### Changed
+
+- **Default LLM model bumped to `claude-sonnet-5`** — successor to `claude-sonnet-4-6`; near-Opus quality
+  on agentic/coding work at the same $3/$15 per-MTok sticker price (introductory $2/$10 through
+  2026-08-31). Note: Sonnet 5 uses a new tokenizer that produces ~30% more tokens for the same text, so
+  per-scan token counts in the cost-telemetry footer will read higher even though pricing is unchanged.
+- **`deepagents` upgraded from 0.4.11 to 0.6.12** — brings code interpreter middleware, `stream_events`
+  v3, and delta-channel checkpointer storage (10-100x smaller). `migratowl/patches.py`'s
+  `_patch_subagent_recursion_limit` was updated: deepagents 0.6's `_build_task_tool()` now takes
+  keyword-only `private_state_keys` / `state_schema` params and accepts a mix of raw `SubAgent` dict
+  specs (no `runnable` key, compiled internally) alongside `CompiledSubAgent` specs — the patch now
+  forwards all arguments and only wraps specs that already have a `runnable`.
+- **agent-sandbox controller updated to v0.2.1** (from v0.1.0) — the controller moved from a
+  StatefulSet to a Deployment (delete the old StatefulSet before upgrading an existing cluster), and
+  SandboxTemplates without an explicit network policy now default to a strict "secure by default"
+  isolation posture (blocks internal cluster IPs, VPC subnets, and the node metadata server). See
+  `dev-setup.md` for the upgrade note.
+
+### Fixed
+
+- **LLM cost-telemetry pricing table corrected** — `claude-opus-4-7` was priced at $15/$75 per MTok
+  (Opus 4.5-era pricing); the correct rate is $5/$25 (Opus 4.6+ pricing). `claude-haiku-4-5-20251001`
+  was priced at $0.80/$4; the correct rate is $1/$5. Added entries for `claude-sonnet-5` ($3/$15),
+  `claude-opus-4-8` ($5/$25), `claude-fable-5` ($10/$50), and a bare `claude-haiku-4-5` alias.
+
 ## [0.5.0] - 2026-05-06
 
 ### Added
@@ -218,7 +245,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/bitkaio/migratowl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bitkaio/migratowl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bitkaio/migratowl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bitkaio/migratowl/compare/v0.2.0...v0.3.0

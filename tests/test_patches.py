@@ -174,6 +174,53 @@ class TestSubagentRecursionLimitPatch:
 
         mock_runnable.with_config.assert_called_once_with({"recursion_limit": 500})
 
+    def test_build_task_tool_forwards_keyword_only_args(self) -> None:
+        """deepagents 0.6 calls _build_task_tool with keyword-only args
+        (private_state_keys, state_schema); the patch must forward them."""
+        from unittest.mock import MagicMock
+
+        apply_patches()
+        from deepagents.middleware import subagents as _subagents_mod
+
+        mock_runnable = MagicMock()
+        wrapped = MagicMock()
+        mock_runnable.with_config.return_value = wrapped
+
+        specs = [{"name": "kwargs-agent", "description": "test", "runnable": mock_runnable}]
+        _subagents_mod._build_task_tool(
+            specs,
+            private_state_keys=frozenset({"secret"}),
+            state_schema=None,
+        )
+
+        mock_runnable.with_config.assert_called_once_with({"recursion_limit": 500})
+
+    def test_build_task_tool_skips_raw_specs_without_runnable(self) -> None:
+        """deepagents 0.6 mixes raw SubAgent specs (no 'runnable' key) with
+        CompiledSubAgent specs; the patch must pass raw specs through untouched
+        instead of raising KeyError."""
+        from unittest.mock import MagicMock
+
+        apply_patches()
+        from deepagents.middleware import subagents as _subagents_mod
+
+        mock_runnable = MagicMock()
+        mock_runnable.with_config.return_value = MagicMock()
+
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+        raw_spec = {
+            "name": "raw-agent",
+            "description": "raw spec compiled internally by deepagents",
+            "system_prompt": "You are a test agent.",
+            "tools": [],
+            "model": GenericFakeChatModel(messages=iter([])),
+        }
+        compiled_spec = {"name": "compiled-agent", "description": "test", "runnable": mock_runnable}
+        _subagents_mod._build_task_tool([raw_spec, compiled_spec])
+
+        mock_runnable.with_config.assert_called_once_with({"recursion_limit": 500})
+
     def test_recursion_limit_patch_idempotent(self) -> None:
         """Double apply_patches() still results in with_config called exactly once per _build_task_tool call."""
         from unittest.mock import MagicMock

@@ -150,23 +150,27 @@ def _patch_summarization_threshold() -> None:
 def _patch_subagent_recursion_limit() -> None:
     """Inject recursion_limit=500 into subagent invocations.
 
-    deepagents' _build_task_tool() calls subagent.invoke/ainvoke without
-    a config argument, so subagents run at LangGraph's default recursion_limit
-    of 100. We wrap each subagent runnable with .with_config({"recursion_limit": 500})
-    before it is stored in the task tool's closure, giving subagents 5x headroom.
+    deepagents invokes subagents without binding a recursion_limit, so they
+    run at LangGraph's default. We wrap each CompiledSubAgent runnable with
+    .with_config({"recursion_limit": 500}) before it reaches the task tool;
+    the bound config wins per-key merges (langgraph#7926), giving subagents
+    5x headroom. Raw SubAgent specs (no "runnable" key, compiled internally
+    by deepagents 0.6+) are passed through untouched.
     """
     from deepagents.middleware import subagents as _subagents_mod
 
     _orig_build_task_tool = _subagents_mod._build_task_tool
 
-    def _patched_build_task_tool(subagents_list, task_description=None):
+    def _patched_build_task_tool(subagents_list: Any, *args: Any, **kwargs: Any) -> Any:
         patched_specs = [
             {**spec, "runnable": spec["runnable"].with_config({"recursion_limit": 500})}
+            if "runnable" in spec
+            else spec
             for spec in subagents_list
         ]
-        return _orig_build_task_tool(patched_specs, task_description)
+        return _orig_build_task_tool(patched_specs, *args, **kwargs)  # type: ignore[arg-type]
 
-    _subagents_mod._build_task_tool = _patched_build_task_tool
+    _subagents_mod._build_task_tool = _patched_build_task_tool  # type: ignore[assignment]
     logger.info("Patched _build_task_tool to inject recursion_limit=500 for subagents")
 
 

@@ -149,6 +149,46 @@ class TestEstimateCost:
         result = _estimate_cost("claude-sonnet-4-6", 100_000, 100_000)
         assert result == "~$1.80"
 
+    def test_claude_sonnet_5_pricing(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-sonnet-5: $3/1M input, $15/1M output
+        # 1M input = $3.00, 0.5M output = $7.50 → $10.50
+        result = _estimate_cost("claude-sonnet-5", 1_000_000, 500_000)
+        assert result == "~$10.50"
+
+    def test_claude_opus_4_8_pricing(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-opus-4-8: $5/1M input, $25/1M output
+        # 1M input = $5.00, 0.5M output = $12.50 → $17.50
+        result = _estimate_cost("claude-opus-4-8", 1_000_000, 500_000)
+        assert result == "~$17.50"
+
+    def test_claude_opus_4_7_pricing(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-opus-4-7: $5/1M input, $25/1M output (Opus 4.6+ pricing)
+        result = _estimate_cost("claude-opus-4-7", 1_000_000, 500_000)
+        assert result == "~$17.50"
+
+    def test_claude_haiku_4_5_pricing(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-haiku-4-5: $1/1M input, $5/1M output
+        # 1M input = $1.00, 1M output = $5.00 → $6.00
+        result = _estimate_cost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
+        assert result == "~$6.00"
+
+    def test_claude_haiku_4_5_bare_alias(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # bare alias without the date suffix must also resolve
+        result = _estimate_cost("claude-haiku-4-5", 1_000_000, 1_000_000)
+        assert result == "~$6.00"
+
+    def test_claude_fable_5_pricing(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+        # claude-fable-5: $10/1M input, $50/1M output
+        # 1M input = $10.00, 0.5M output = $25.00 → $35.00
+        result = _estimate_cost("claude-fable-5", 1_000_000, 500_000)
+        assert result == "~$35.00"
+
 
 class TestFormatPrCommentTokenFooter:
     def test_footer_shows_tokens_when_present(self) -> None:

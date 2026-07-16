@@ -4,6 +4,11 @@ metadata:
   name: migratowl-sandbox-template
   namespace: default
 spec:
+  # No explicit network policy: since agent-sandbox v0.2.x the controller
+  # applies a strict managed default (blocks internal cluster IPs, VPC
+  # subnets, and the node metadata server; external egress to package
+  # registries stays open). Set spec.networkPolicyManagement: Unmanaged
+  # to opt out.
   podTemplate:
     spec:
       containers:

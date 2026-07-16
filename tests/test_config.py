@@ -12,7 +12,7 @@ class TestSettingsDefaults:
     def test_default_model_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_MODEL_NAME", raising=False)
         settings = Settings(_env_file=None)
-        assert settings.model_name == "claude-sonnet-4-6"
+        assert settings.model_name == "claude-sonnet-5"
 
     def test_default_sandbox_template(self) -> None:
         settings = Settings(_env_file=None)
