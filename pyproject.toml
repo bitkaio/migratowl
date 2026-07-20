@@ -10,14 +10,29 @@ dependencies = [
     "langchain-anthropic",
     "langchain-openai",
     "pydantic>=2.0",
-    "pydantic-settings>=2.0",
+    "pydantic-settings>=2.14.2",
     "python-dotenv",
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.31",
     "httpx>=0.27",
     "packaging>=24.0",
     "defusedxml>=0.7.1",
     "html2text>=2024.2.26",
     "langfuse",
+]
+
+[tool.uv]
+# langchain-kubernetes 0.4.0 declares `k8s-agent-sandbox>=0.1.0` (no upper bound),
+# but the client API changed in 0.3+: SandboxClient.__init__ dropped `template_name`
+# in favour of `connection_config`. Resolving to 0.3+ fails at runtime with
+# `TypeError: SandboxClient.__init__() got an unexpected keyword argument 'template_name'`.
+# Unit tests do not catch this (the sandbox backend is mocked) — only an E2E scan does.
+# Lift this cap once langchain-kubernetes supports the newer client.
+constraint-dependencies = [
+    "k8s-agent-sandbox<0.3",
+    # Security floor on a transitive dep (pulled in via google-auth / kubernetes).
+    # Its direct dependents only declare open lower bounds, so the resolver would
+    # otherwise keep the vulnerable 46.0.7 (GHSA-537c-gmf6-5ccf).
+    "cryptography>=48.0.1",
 ]
 
 [dependency-groups]

@@ -27,6 +27,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   isolation posture (blocks internal cluster IPs, VPC subnets, and the node metadata server). See
   `dev-setup.md` for the upgrade note.
 
+### Security
+
+- **14 known vulnerabilities across 6 packages resolved** — `pip-audit` in CI began failing as new
+  2026 advisories landed against an aging lockfile (the pins predated this release; a plain `uv lock`
+  is conservative and never moved them). Resolved with **targeted** `uv lock --upgrade-package` rather
+  than a blanket `--upgrade`, so the agent framework (`langchain`, `langgraph`, `langchain-anthropic`,
+  `deepagents`) stays on its validated versions:
+  `cryptography` 46.0.7 → 49.0.0 (GHSA-537c-gmf6-5ccf), `idna` 3.11 → 3.18 (PYSEC-2026-215),
+  `urllib3` 2.6.3 → 2.7.0 (PYSEC-2026-141/142), `pydantic-settings` 2.13.1 → 2.14.2
+  (GHSA-4xgf-cpjx-pc3j), `python-multipart` 0.0.26 → 0.0.32 (PYSEC-2026-3036/3037/3039/3040), and
+  `starlette` 0.52.1 → 1.3.1 (PYSEC-2026-161/248/249/2280/2281). The starlette 0.x → 1.x major bump
+  pulled `fastapi` 0.135.1 → 0.139.2; neither `fastapi` (`starlette>=0.46.0`) nor `sse-starlette`
+  (`starlette>=0.49.1`) caps the major, and the full HTTP surface was re-verified under 1.3.1.
+- **Sandbox runtime image dependencies patched** — `k8s/runtime/requirements.lock.txt` carried the
+  same vulnerable `starlette` (1.0.0), `python-multipart` (0.0.26), and `idna` (3.11). Regenerated to
+  `starlette` 1.3.1, `python-multipart` 0.0.32, `idna` 3.18, `fastapi` 0.139.2. Note this lockfile is
+  **not** covered by the CI `pip-audit` step, which only audits `uv export` of the top-level lock.
+- **Dependency floors raised to prevent regression** — `pydantic-settings>=2.14.2` and
+  `python-multipart>=0.0.31` (in `pyproject.toml` and `k8s/runtime/requirements.txt`), so a fresh
+  resolve cannot pick a known-vulnerable version. `cryptography>=48.0.1` is enforced via
+  `[tool.uv] constraint-dependencies`: it is transitive (via `google-auth`/`kubernetes`) and its
+  dependents declare only open lower bounds, so the resolver otherwise kept the vulnerable 46.0.7.
+- **`k8s-agent-sandbox` capped to `<0.3`** — `langchain-kubernetes` 0.4.0 declares
+  `k8s-agent-sandbox>=0.1.0` with no upper bound, but the client API changed in 0.3+
+  (`SandboxClient.__init__` dropped `template_name` for `connection_config`). Resolving to 0.5.x fails
+  at runtime with `TypeError: ... unexpected keyword argument 'template_name'`. **The unit suite does
+  not catch this** — the sandbox backend is mocked — so it only surfaces in an end-to-end scan. Lift
+  the cap once `langchain-kubernetes` supports the newer client.
+
+### Added
+
+- **CI now audits the sandbox runtime lockfile** — a second `pip-audit` step covers
+  `k8s/runtime/requirements.lock.txt`. The existing step only exports the top-level `uv.lock`, so the
+  runtime image's separate dependency set shipped unscanned (and was carrying three of the CVEs above).
+
 ### Fixed
 
 - **LLM cost-telemetry pricing table corrected** — `claude-opus-4-7` was priced at $15/$75 per MTok

@@ -295,6 +295,12 @@ jobs:
           uv export --frozen --no-dev --format requirements-txt > /tmp/reqs.txt
           pip-audit --requirement /tmp/reqs.txt --strict
 
+      # The sandbox runtime image pins its own dependency set, separate from
+      # uv.lock. Without this step its CVEs go unnoticed (it shipped a
+      # vulnerable starlette/python-multipart/idna until v0.6.0).
+      - name: Run pip-audit against sandbox runtime lockfile
+        run: pip-audit --requirement k8s/runtime/requirements.lock.txt --no-deps --strict
+
       - name: Run Bandit (warning-only)
         run: uv run bandit -r migratowl/ || true
 
