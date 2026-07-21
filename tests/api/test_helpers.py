@@ -210,3 +210,127 @@ class TestAccumulateTokens:
     def test_handles_dict_messages(self) -> None:
         msgs = [{"role": "assistant", "content": "dict message"}]
         assert _accumulate_tokens(msgs) == (0, 0)
+
+
+class TestComputeSkipped:
+    """Tests for correct computation of the skipped field."""
+
+    def test_skipped_excludes_non_outdated_deps(self) -> None:
+        """Non-outdated deps should never appear in skipped, even if agent includes them."""
+        from migratowl.api.helpers import compute_skipped
+        from migratowl.models.schemas import OutdatedDependency
+
+        outdated = [
+            OutdatedDependency(
+                name="express", current_version="4.0.0", latest_version="5.0.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+            OutdatedDependency(
+                name="lodash", current_version="4.0.0", latest_version="4.5.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+        ]
+        analyzed_names = ["express"]
+        # Agent incorrectly included "@popperjs/core" which wasn't outdated
+        agent_skipped = ["lodash", "@popperjs/core"]
+
+        result = compute_skipped(outdated, analyzed_names, agent_skipped)
+
+        assert "lodash" in result  # outdated but not analyzed
+        assert "@popperjs/core" not in result  # not outdated, should be excluded
+
+    def test_skipped_only_contains_unanalyzed_outdated_deps(self) -> None:
+        """Skipped should only contain outdated deps that weren't analyzed."""
+        from migratowl.api.helpers import compute_skipped
+        from migratowl.models.schemas import OutdatedDependency
+
+        outdated = [
+            OutdatedDependency(
+                name="a", current_version="1.0.0", latest_version="2.0.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+            OutdatedDependency(
+                name="b", current_version="1.0.0", latest_version="2.0.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+            OutdatedDependency(
+                name="c", current_version="1.0.0", latest_version="2.0.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+        ]
+        analyzed_names = ["a"]
+        agent_skipped = []  # agent didn't populate skipped
+
+        result = compute_skipped(outdated, analyzed_names, agent_skipped)
+
+        assert set(result) == {"b", "c"}
+
+    def test_skipped_empty_when_all_outdated_analyzed(self) -> None:
+        """If all outdated deps are analyzed, skipped should be empty."""
+        from migratowl.api.helpers import compute_skipped
+        from migratowl.models.schemas import OutdatedDependency
+
+        outdated = [
+            OutdatedDependency(
+                name="express", current_version="4.0.0", latest_version="5.0.0",
+                ecosystem="nodejs", manifest_path="package.json"
+            ),
+        ]
+        analyzed_names = ["express"]
+        agent_skipped = []
+
+        result = compute_skipped(outdated, analyzed_names, agent_skipped)
+
+        assert result == []
+
+    def test_extract_report_fixes_skipped_list(self) -> None:
+        """extract_report should fix the agent's incorrect skipped list."""
+        from migratowl.models.schemas import (
+            AnalysisReport,
+            OutdatedDependency,
+            ScanAnalysisReport,
+            ScanResult,
+            Dependency,
+        )
+
+        payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+
+        # Agent returned a report with incorrect skipped list
+        # (includes @popperjs/core which wasn't outdated)
+        structured = ScanAnalysisReport(
+            repo_url="https://github.com/x/y",
+            branch_name="main",
+            scan_result=ScanResult(
+                all_deps=[
+                    Dependency(name="@popperjs/core", current_version="2.11.8", ecosystem="nodejs", manifest_path="package.json"),
+                    Dependency(name="express", current_version="4.0.0", ecosystem="nodejs", manifest_path="package.json"),
+                    Dependency(name="lodash", current_version="4.0.0", ecosystem="nodejs", manifest_path="package.json"),
+                ],
+                outdated=[
+                    OutdatedDependency(name="express", current_version="4.0.0", latest_version="5.0.0", ecosystem="nodejs", manifest_path="package.json"),
+                    OutdatedDependency(name="lodash", current_version="4.0.0", latest_version="4.5.0", ecosystem="nodejs", manifest_path="package.json"),
+                ],
+                manifests_found=["package.json"],
+                scan_duration_seconds=1.0,
+            ),
+            reports=[
+                AnalysisReport(
+                    dependency_name="express",
+                    is_breaking=True,
+                    error_summary="Breaking changes",
+                    changelog_citation="From changelog",
+                    suggested_human_fix="Fix it",
+                    confidence=0.9,
+                ),
+            ],
+            skipped=["lodash", "@popperjs/core"],  # Agent incorrectly included @popperjs/core
+            total_duration_seconds=5.0,
+        )
+        agent_result = {"structured_response": structured, "messages": []}
+
+        report = extract_report(agent_result, payload)
+
+        # skipped should be fixed: only lodash (outdated but not analyzed)
+        assert "lodash" in report.skipped
+        assert "@popperjs/core" not in report.skipped
+        assert len(report.skipped) == 1

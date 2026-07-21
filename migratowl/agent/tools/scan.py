@@ -107,7 +107,7 @@ def create_scan_dependencies_tool(
                 if module_name:
                     go_module_names.add(module_name)
 
-            rel_path = os.path.relpath(filepath, workspace_path)
+            rel_path = os.path.relpath(filepath, workspace_path).replace("\\", "/")
             deps = parser_fn(cat_result.output, rel_path)
             all_deps.extend(deps)
 

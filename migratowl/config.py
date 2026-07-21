@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MIGRATOWL_", extra="ignore")
 
     # LLM — API keys read directly from env: ANTHROPIC_API_KEY or OPENAI_API_KEY
-    model_provider: Literal["anthropic", "openai"] = "anthropic"
+    model_provider: Literal["anthropic", "openai", "litellm"] = "anthropic"
     model_name: str = "claude-sonnet-5"
     anthropic_base_url: str | None = Field(
         default=None,
@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     openai_base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("MIGRATOWL_OPENAI_BASE_URL", "OPENAI_BASE_URL"),
+    )
+    # LiteLLM unified endpoint (OpenAI-compatible, routes to any provider)
+    litellm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MIGRATOWL_LITELLM_BASE_URL", "LITELLM_BASE_URL"),
+    )
+    # Model alias — override model name sent to provider (for proxies with different naming)
+    model_alias: str | None = Field(
+        default=None,
+        description="Override model name sent to provider. Use when proxy expects different naming.",
     )
 
     # Kubernetes sandbox

@@ -2,6 +2,7 @@
 
 """Tests for sandbox manager factory."""
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -11,12 +12,18 @@ from migratowl.config import Settings
 
 
 @pytest.fixture
-def settings() -> Settings:
+def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_IMAGE", raising=False)
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_BLOCK_NETWORK", raising=False)
     return Settings(_env_file=None)
 
 
 @pytest.fixture
-def raw_settings() -> Settings:
+def raw_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_IMAGE", raising=False)
+    monkeypatch.delenv("MIGRATOWL_SANDBOX_BLOCK_NETWORK", raising=False)
     return Settings(_env_file=None, sandbox_mode="raw")
 
 

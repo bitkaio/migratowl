@@ -21,7 +21,12 @@ import logging
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from migratowl.models.schemas import ScanAnalysisReport, ScanResult, ScanWebhookPayload
+from migratowl.models.schemas import (
+    OutdatedDependency,
+    ScanAnalysisReport,
+    ScanResult,
+    ScanWebhookPayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,4 +125,34 @@ def extract_report(agent_result: dict, payload: ScanWebhookPayload) -> ScanAnaly
     messages = agent_result.get("messages", [])
     report.total_input_tokens, report.total_output_tokens = _accumulate_tokens(messages)
 
+    # Fix the skipped list: only include outdated deps that weren't analyzed
+    analyzed_names = [r.dependency_name for r in report.reports]
+    report.skipped = compute_skipped(
+        report.scan_result.outdated, analyzed_names, report.skipped
+    )
+
     return report
+
+
+def compute_skipped(
+    outdated: list[OutdatedDependency],
+    analyzed_names: list[str],
+    agent_skipped: list[str],  # noqa: ARG001 — kept for API compatibility, ignored
+) -> list[str]:
+    """Compute the correct skipped list from outdated deps and analyzed reports.
+
+    The skipped list should only contain outdated dependencies that were not
+    analyzed (due to max_deps limit or other reasons). Non-outdated deps should
+    never appear in skipped — they simply weren't candidates for analysis.
+
+    Args:
+        outdated: List of outdated dependencies from the registry check.
+        analyzed_names: Names of dependencies that were actually analyzed.
+        agent_skipped: The agent's skipped list (ignored — we compute it correctly).
+
+    Returns:
+        List of outdated dependency names that were not analyzed.
+    """
+    outdated_names = {dep.name for dep in outdated}
+    analyzed_set = set(analyzed_names)
+    return [name for name in outdated_names if name not in analyzed_set]

@@ -26,15 +26,18 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.sandbox_connection_mode == "tunnel"
 
-    def test_default_sandbox_mode(self) -> None:
+    def test_default_sandbox_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SANDBOX_MODE", raising=False)
         settings = Settings(_env_file=None)
         assert settings.sandbox_mode == "agent-sandbox"
 
-    def test_default_sandbox_image(self) -> None:
+    def test_default_sandbox_image(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SANDBOX_IMAGE", raising=False)
         settings = Settings(_env_file=None)
         assert settings.sandbox_image == "python:3.12-slim"
 
-    def test_default_sandbox_block_network(self) -> None:
+    def test_default_sandbox_block_network(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SANDBOX_BLOCK_NETWORK", raising=False)
         settings = Settings(_env_file=None)
         assert settings.sandbox_block_network is True
 
@@ -93,7 +96,8 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.max_output_chars == 30_000
 
-    def test_default_model_provider(self) -> None:
+    def test_default_model_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MODEL_PROVIDER", raising=False)
         settings = Settings(_env_file=None)
         assert settings.model_provider == "anthropic"
 
@@ -205,6 +209,12 @@ class TestBaseUrlSettings:
         settings = Settings(_env_file=None)
         assert settings.openai_base_url is None
 
+    def test_default_litellm_base_url_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_LITELLM_BASE_URL", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.litellm_base_url is None
+
     def test_anthropic_base_url_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com/anthropic")
         settings = Settings()
@@ -214,6 +224,11 @@ class TestBaseUrlSettings:
         monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example.com/openai/v1")
         settings = Settings()
         assert settings.openai_base_url == "https://proxy.example.com/openai/v1"
+
+    def test_litellm_base_url_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://localhost:6655/litellm/v1")
+        settings = Settings()
+        assert settings.litellm_base_url == "http://localhost:6655/litellm/v1"
 
 
 class TestMigraTOwlPrefixedAliases:
@@ -260,6 +275,40 @@ class TestMigraTOwlPrefixedAliases:
         monkeypatch.delenv("GITHUB_API_URL", raising=False)
         settings = Settings(_env_file=None)
         assert settings.github_api_url == "https://github.corp.com/api/v3"
+
+    def test_migratowl_litellm_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_LITELLM_BASE_URL", "https://proxy.internal/litellm/v1")
+        monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+        settings = Settings()
+        assert settings.litellm_base_url == "https://proxy.internal/litellm/v1"
+
+
+class TestModelAliasSettings:
+    """Tests for model_alias setting — allows overriding model name for proxies."""
+
+    def test_default_model_alias_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MODEL_ALIAS", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.model_alias is None
+
+    def test_model_alias_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_ALIAS", "anthropic--claude-sonnet-latest")
+        settings = Settings()
+        assert settings.model_alias == "anthropic--claude-sonnet-latest"
+
+
+class TestLiteLLMProviderSettings:
+    """Tests for litellm as a valid model_provider option."""
+
+    def test_model_provider_accepts_litellm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "litellm")
+        settings = Settings(_env_file=None)
+        assert settings.model_provider == "litellm"
+
+    def test_invalid_model_provider_still_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "gemini")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)
 
 
 class TestGetSettings:

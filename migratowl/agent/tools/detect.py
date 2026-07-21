@@ -84,7 +84,7 @@ def create_detect_languages_tool(
         for filepath in lines:
             filename = os.path.basename(filepath)
             dirpath = os.path.dirname(filepath)
-            rel_root = os.path.relpath(dirpath, workspace_path)
+            rel_root = os.path.relpath(dirpath, workspace_path).replace("\\", "/")
             if rel_root == "":
                 rel_root = "."
 

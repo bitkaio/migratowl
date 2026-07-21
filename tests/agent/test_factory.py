@@ -63,8 +63,10 @@ class TestCreateMigratowlAgent:
         # 11 tools: clone, copy, detect, scan, check_outdated, update, validate, execute, changelog, read_manifest, patch_manifest
         assert len(call_kwargs["tools"]) == 11  # noqa: PLR2004
 
-    def test_uses_init_chat_model_with_provider_and_name(self) -> None:
+    def test_uses_init_chat_model_with_provider_and_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_manager = _make_mock_manager()
+        monkeypatch.delenv("MIGRATOWL_MODEL_PROVIDER", raising=False)
+        monkeypatch.delenv("MIGRATOWL_MODEL_ALIAS", raising=False)
         settings = Settings(_env_file=None)
 
         with (
@@ -129,6 +131,9 @@ class TestCreateMigratowlAgent:
 
     def test_passes_base_url_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_manager = _make_mock_manager()
+        monkeypatch.delenv("MIGRATOWL_MODEL_PROVIDER", raising=False)
+        monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_LITELLM_BASE_URL", raising=False)
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
         settings = Settings(_env_file=None)
 
@@ -216,6 +221,9 @@ class TestCreateMigratowlAgent:
     def test_no_base_url_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_LITELLM_BASE_URL", raising=False)
+        monkeypatch.delenv("MIGRATOWL_MODEL_PROVIDER", raising=False)
         mock_manager = _make_mock_manager()
         settings = Settings(_env_file=None)
 
@@ -229,6 +237,81 @@ class TestCreateMigratowlAgent:
 
         call_kwargs = mock_init.call_args[1]
         assert "base_url" not in call_kwargs
+
+    def test_litellm_provider_uses_openai_sdk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """LiteLLM is OpenAI-compatible, so it should use the openai SDK."""
+        mock_manager = _make_mock_manager()
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "litellm")
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://localhost:6655/litellm/v1")
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", None),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        model_id = mock_init.call_args[0][0]
+        # Should use openai SDK, not "litellm:" prefix
+        assert model_id.startswith("openai:")
+
+    def test_litellm_provider_uses_litellm_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """LiteLLM provider should use litellm_base_url setting."""
+        mock_manager = _make_mock_manager()
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "litellm")
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://localhost:6655/litellm/v1")
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", None),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs.get("base_url") == "http://localhost:6655/litellm/v1"
+
+    def test_model_alias_overrides_model_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """model_alias should be used instead of model_name when set."""
+        mock_manager = _make_mock_manager()
+        monkeypatch.setenv("MIGRATOWL_MODEL_ALIAS", "anthropic--claude-sonnet-latest")
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", None),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        model_id = mock_init.call_args[0][0]
+        assert "anthropic--claude-sonnet-latest" in model_id
+        assert "claude-sonnet-5" not in model_id
+
+    def test_model_alias_with_litellm_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """model_alias should work with litellm provider."""
+        mock_manager = _make_mock_manager()
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", "litellm")
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://localhost:6655/litellm/v1")
+        monkeypatch.setenv("MIGRATOWL_MODEL_ALIAS", "anthropic--claude-sonnet-latest")
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", None),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        model_id = mock_init.call_args[0][0]
+        assert model_id == "openai:anthropic--claude-sonnet-latest"
+
 
 class TestSystemPromptMajorVersionChangelog:
     def test_fetches_changelog_for_major_bump_when_tests_pass(self) -> None:

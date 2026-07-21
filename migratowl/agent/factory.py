@@ -111,6 +111,11 @@ For packages with confidence ≥ {confidence_threshold}:
 Collect all AnalysisReports (from your own analysis + subagent results) \
 into a final ScanAnalysisReport.
 
+The `skipped` field should ONLY contain the names of OUTDATED dependencies \
+(from check_outdated_deps) that were not analyzed due to the max_deps limit. \
+Never include dependencies that are already up-to-date (not in the outdated list) \
+— those are simply not candidates for analysis.
+
 ## Important Rules
 - NEVER execute code in source/ — it is the immutable reference.
 - Only call fetch_changelog_tool when a package causes errors or warnings, OR when \
@@ -228,22 +233,34 @@ def create_migratowl_agent(
         patch_manifest,
     ]
 
-    # Model with rate limiter — supports anthropic and openai via init_chat_model
+    # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model
     rate_limiter = InMemoryRateLimiter(
         requests_per_second=settings.model_rate_limit_rps,
         check_every_n_seconds=0.1,
         max_bucket_size=1,
     )
-    base_url = (
-        settings.anthropic_base_url
-        if settings.model_provider == "anthropic"
-        else settings.openai_base_url
-    )
+
+    # Determine effective model name (alias takes precedence)
+    effective_model_name = settings.model_alias or settings.model_name
+
+    # Determine provider and base_url
+    # LiteLLM is OpenAI-compatible — use openai SDK but route to litellm_base_url
+    if settings.model_provider == "litellm":
+        sdk_provider = "openai"
+        base_url = settings.litellm_base_url
+    elif settings.model_provider == "anthropic":
+        sdk_provider = "anthropic"
+        base_url = settings.anthropic_base_url
+    else:
+        sdk_provider = "openai"
+        base_url = settings.openai_base_url
+
     extra_kwargs: dict[str, Any] = {}
     if base_url:
         extra_kwargs["base_url"] = base_url
+
     model = init_chat_model(
-        f"{settings.model_provider}:{settings.model_name}",
+        f"{sdk_provider}:{effective_model_name}",
         rate_limiter=rate_limiter,
         max_retries=8,
         callbacks=[_langfuse_handler] if _langfuse_handler else None,

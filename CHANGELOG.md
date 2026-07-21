@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Generic LLM proxy support** — developers using internal proxies (LiteLLM, Azure API Management, etc.)
+  can now route LLM calls through their corporate infrastructure without code changes. Three new settings:
+  - `MIGRATOWL_MODEL_PROVIDER=litellm` — uses the OpenAI SDK to call any LiteLLM-compatible endpoint
+  - `LITELLM_BASE_URL` — unified proxy endpoint (e.g. `http://localhost:6655/litellm/v1`)
+  - `MIGRATOWL_MODEL_ALIAS` — override model name when proxy expects different naming conventions
+    (e.g. `anthropic--claude-sonnet-latest` instead of `claude-sonnet-5`)
+  See [`docs/proxy-setup.md`](docs/proxy-setup.md) for configuration examples.
+
+- **Local E2E test skill** — Claude Code users can now run `test it locally` to execute a full
+  production-like scan using a Kind cluster and HAI/LiteLLM proxy. Automatically sets up the cluster,
+  starts the server, triggers a scan, and reports results. See `.claude/skills/local-e2e-test.md`.
+
+### Fixed
+
+- **`skipped` list no longer includes non-outdated dependencies** — previously the LLM agent could
+  incorrectly include up-to-date dependencies (e.g. `@popperjs/core`) in the `skipped` field of
+  `ScanAnalysisReport`. The skipped list is now computed deterministically in code: only outdated
+  dependencies that weren't analyzed (due to `max_deps` limit) appear in `skipped`. Non-outdated
+  dependencies are never candidates for analysis and correctly don't appear anywhere except
+  `scan_result.all_deps`.
+
 ## [0.6.0] - 2026-07-16
 
 ### Changed

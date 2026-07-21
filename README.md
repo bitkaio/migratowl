@@ -176,46 +176,38 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 
 Migratowl runs a four-phase agent workflow inside an ephemeral Kubernetes sandbox.
 
-```text
-POST /webhook
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 1 — Setup                                        │
-│                                                         │
-│  clone_repo ──► detect_languages ──► scan_dependencies  │
-│                                           │             │
-│                                    check_outdated_deps  │
-└─────────────────────────┬───────────────────────────────┘
-                          │ outdated dep list
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 2 — Main Analysis                                │
-│                                                         │
-│  copy_source("main") ──► update_dependencies (all)      │
-│                               │                         │
-│                        execute_project (install + test) │
-└─────────────────────────┬───────────────────────────────┘
-                          │ pass / fail + error output
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 3 — Subagent Routing                             │
-│                                                         │
-│  All pass ──► every package: is_breaking=false          │
-│                                                         │
-│  Some fail ──► route per package                        │
-│    clear attribution ──► fetch_changelog + write report │
-│    ambiguous failure ──► delegate to package-analyzer   │
-│                          subagent (isolated run)        │
-└─────────────────────────┬───────────────────────────────┘
-                          │ AnalysisReport[]
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 4 — Compile Results                              │
-│                                                         │
-│  Merge reports from main agent + subagents              │
-│  ──► ScanAnalysisReport (POST to callback_url)          │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Phase1["Phase 1 — Setup"]
+        A[POST /webhook] --> B[clone_repo]
+        B --> C[detect_languages]
+        C --> D[scan_dependencies]
+        D --> E[check_outdated_deps]
+    end
+
+    subgraph Phase2["Phase 2 — Main Analysis"]
+        F["copy_source('main')"] --> G["update_dependencies (all)"]
+        G --> H["execute_project (install + test)"]
+    end
+
+    subgraph Phase3["Phase 3 — Subagent Routing"]
+        I{All tests pass?}
+        I -->|Yes| J["Every package: is_breaking=false"]
+        I -->|No| K{Clear attribution?}
+        K -->|Yes| L["fetch_changelog + write report"]
+        K -->|No| M["Delegate to package-analyzer subagent"]
+    end
+
+    subgraph Phase4["Phase 4 — Compile Results"]
+        N["Merge reports from main agent + subagents"]
+        N --> O["ScanAnalysisReport (POST to callback_url)"]
+    end
+
+    E -->|outdated dep list| F
+    H -->|pass/fail + error output| I
+    J --> N
+    L --> N
+    M --> N
 ```
 
 **Routing rules** (applied in Phase 3 when tests fail):
@@ -360,9 +352,14 @@ Poll the status of a scan job.
 
 **Job lifecycle:**
 
-```text
-PENDING ──► RUNNING ──► COMPLETED
-                   └──► FAILED
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> running
+    running --> completed
+    running --> failed
+    completed --> [*]
+    failed --> [*]
 ```
 
 | State | Meaning |
@@ -440,12 +437,37 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=anthropic` (default) |
-| `OPENAI_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=openai` |
-| `MIGRATOWL_MODEL_PROVIDER` | `anthropic` | LLM provider: `anthropic` or `openai` |
+| `OPENAI_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=openai` or `litellm` |
+| `MIGRATOWL_MODEL_PROVIDER` | `anthropic` | LLM provider: `anthropic`, `openai`, or `litellm` |
 | `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5` | Model name (must match provider) |
+| `MIGRATOWL_MODEL_ALIAS` | — | Override model name sent to provider (for proxies with different naming) |
 | `MIGRATOWL_MODEL_RATE_LIMIT_RPS` | `0.1` | Max LLM requests/second (0.1 = 6 req/min) |
 | `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API |
 | `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API |
+| `LITELLM_BASE_URL` | — | LiteLLM unified proxy endpoint (use with `MIGRATOWL_MODEL_PROVIDER=litellm`) |
+
+#### Using an LLM Proxy
+
+For developers routing through corporate proxies (LiteLLM, Azure API Management, etc.):
+
+**Pattern 1 — Provider-specific proxy** (Anthropic/OpenAI compatible):
+
+```bash
+ANTHROPIC_BASE_URL=https://proxy.mycompany.com/anthropic/v1
+ANTHROPIC_API_KEY=<proxy-provided-key>
+MIGRATOWL_MODEL_ALIAS=anthropic--claude-sonnet-latest  # if proxy uses different naming
+```
+
+**Pattern 2 — LiteLLM unified proxy** (one endpoint for all providers):
+
+```bash
+MIGRATOWL_MODEL_PROVIDER=litellm
+LITELLM_BASE_URL=https://proxy.mycompany.com/v1
+OPENAI_API_KEY=<proxy-provided-key>
+MIGRATOWL_MODEL_NAME=anthropic--claude-sonnet-latest
+```
+
+See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name mapping, and additional examples.
 
 ### Kubernetes Sandbox
 
@@ -613,45 +635,27 @@ GITHUB_API_URL=https://github.corp.com/api/v3
 
 ## Architecture
 
-```text
-                          ┌─────────────────────────────┐
-  HTTP client             │          FastAPI            │
-  ─────────────────────►  │  POST /webhook              │
-                          │  GET  /jobs/{id}            │
-                          │  GET  /healthz              │
-                          └──────────────┬──────────────┘
-                                         │ asyncio.create_task
-                                         ▼
-                          ┌─────────────────────────────┐
-                          │     Migratowl Agent         │
-                          │  (deepagents / LangGraph)   │
-                          │                             │
-                          │  Tools:                     │
-                          │  • clone_repo               │
-                          │  • detect_languages         │
-                          │  • scan_dependencies        │
-                          │  • check_outdated_deps      │
-                          │  • copy_source              │
-                          │  • update_dependencies      │
-                          │  • execute_project          │
-                          │  • fetch_changelog          │
-                          │  • read_manifest            │
-                          │  • patch_manifest           │
-                          │                             │
-                          │  Subagent:                  │
-                          │  • package-analyzer         │
-                          └──────────────┬──────────────┘
-                                         │ executes via
-                                         ▼
-                          ┌─────────────────────────────┐
-                          │   Kubernetes Sandbox        │
-                          │  (langchain-kubernetes)     │
-                          │                             │
-                          │  Ephemeral Pod              │
-                          │  • Non-root, no caps        │
-                          │  • Deny-all NetworkPolicy   │
-                          │  • gVisor / Kata isolation  │
-                          └─────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph API["FastAPI Server"]
+        W["POST /webhook"]
+        J["GET /jobs/{id}"]
+        H["GET /healthz"]
+    end
+
+    subgraph Agent["Migratowl Agent<br/>(deepagents / LangGraph)"]
+        direction TB
+        Tools["Tools:<br/>• clone_repo<br/>• detect_languages<br/>• scan_dependencies<br/>• check_outdated_deps<br/>• copy_source<br/>• update_dependencies<br/>• execute_project<br/>• fetch_changelog<br/>• read_manifest<br/>• patch_manifest"]
+        Sub["Subagent:<br/>• package-analyzer"]
+    end
+
+    subgraph Sandbox["Kubernetes Sandbox<br/>(langchain-kubernetes)"]
+        Pod["Ephemeral Pod<br/>• Non-root, no caps<br/>• Deny-all NetworkPolicy<br/>• gVisor / Kata isolation"]
+    end
+
+    Client["HTTP Client"] --> W
+    W -->|"asyncio.create_task"| Agent
+    Agent -->|"executes via"| Pod
 ```
 
 ---
