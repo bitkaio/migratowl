@@ -35,6 +35,10 @@ constraint-dependencies = [
     # Its direct dependents only declare open lower bounds, so the resolver would
     # otherwise keep the vulnerable 46.0.7 (GHSA-537c-gmf6-5ccf).
     "cryptography>=48.0.1",
+    # Security floor: pyasn1 0.6.3 has 3 known vulns (PYSEC-2026-3455/3456/3457),
+    # fixed in 0.6.4. Pulled in transitively via google-auth -> pyasn1-modules;
+    # dependents declare open lower bounds, so pin the floor to the fixed release.
+    "pyasn1>=0.6.4",
 ]
 
 [dependency-groups]
