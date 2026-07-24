@@ -239,25 +239,16 @@ class TestSubagentRecursionLimitPatch:
         mock_runnable.with_config.assert_called_once_with({"recursion_limit": 500})
 
 
-class TestLangchainKubernetesAnnotatedPatch:
-    def test_required_symbols_in_manager_globals(self) -> None:
-        import langchain_kubernetes.manager as lk_manager
-        from typing import Annotated
+class TestVestigialKubernetesPatchRemoved:
+    """The langchain_kubernetes.manager annotation patch is vestigial.
 
-        from langchain_core.messages import AnyMessage
-        from langgraph.graph.message import add_messages
-        from typing_extensions import TypedDict
+    langchain-kubernetes 0.4.0's manager.py no longer defines ``_AgentState``
+    inside ``create_agent()``, so the ``get_type_hints`` resolution quirk the
+    patch worked around no longer exists. The patch must be removed to avoid
+    reaching into library internals that are no longer relevant.
+    """
 
-        apply_patches()
-        assert getattr(lk_manager, "Annotated", None) is Annotated
-        assert getattr(lk_manager, "AnyMessage", None) is AnyMessage
-        assert getattr(lk_manager, "TypedDict", None) is TypedDict
-        assert getattr(lk_manager, "add_messages", None) is add_messages
+    def test_patch_function_removed(self) -> None:
+        import migratowl.patches as patches_mod
 
-    def test_idempotent(self) -> None:
-        import langchain_kubernetes.manager as lk_manager
-
-        apply_patches()
-        apply_patches()
-        assert hasattr(lk_manager, "Annotated")
-        assert hasattr(lk_manager, "AnyMessage")
+        assert not hasattr(patches_mod, "_patch_langchain_kubernetes_annotated")

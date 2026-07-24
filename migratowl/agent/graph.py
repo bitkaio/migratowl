@@ -12,28 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Migratowl agent — module-level graph for ``langgraph.json`` / deep-agents-ui.
+"""Migratowl agent graph — factory for ``langgraph.json`` / deep-agents-ui.
 
-The ``graph`` singleton is built eagerly at import time.  Sandbox acquisition
-is deferred to the first invocation per ``thread_id`` by
-``KubernetesSandboxManager.create_setup_node()``.
+``langgraph.json`` points at the zero-arg :func:`graph` factory. langgraph-cli
+detects a callable target and invokes it once to obtain the compiled graph, so
+the sandbox manager is provisioned lazily on first access rather than at module
+import time. This keeps ``import migratowl.agent.graph`` side-effect free (no
+K8s I/O, no ``atexit`` registration) — the FastAPI webhook path never imports
+this module and builds its own agent per scan.
 """
 
+from __future__ import annotations
+
 import atexit
+from typing import Any
 
 from migratowl.agent.factory import create_migratowl_agent  # noqa: F401 — re-export
 from migratowl.agent.sandbox import create_sandbox_manager
-from migratowl.config import get_settings
+from migratowl.config import Settings, get_settings
 from migratowl.observability import get_invoke_config as get_invoke_config  # re-export
 from migratowl.patches import apply_patches
 
-apply_patches()
+__all__ = ["build_graph", "graph", "create_migratowl_agent", "get_invoke_config"]
 
-settings = get_settings()
 
-_manager = create_sandbox_manager(settings)
-atexit.register(_manager.shutdown)
+def build_graph(settings: Settings | None = None) -> Any:
+    """Build the Migratowl agent graph with a fresh sandbox manager.
 
-graph = create_migratowl_agent(_manager, settings=settings)
+    Applies third-party monkey-patches, provisions a ``KubernetesSandboxManager``,
+    registers its shutdown at interpreter exit, and returns the compiled agent.
+    Called by :func:`graph` (the ``langgraph.json`` entrypoint) and available for
+    direct use in scripts/tests.
+    """
+    apply_patches()
+    if settings is None:
+        settings = get_settings()
+    manager = create_sandbox_manager(settings)
+    atexit.register(manager.shutdown)
+    return create_migratowl_agent(manager, settings=settings)
 
-__all__ = ["graph", "get_invoke_config"]
+
+def graph() -> Any:
+    """Zero-arg graph factory for ``langgraph.json`` (``graph.py:graph``).
+
+    langgraph-cli invokes this callable once to obtain the compiled graph.
+    """
+    return build_graph()

@@ -70,3 +70,17 @@ class TestCreateSandboxManagerRawMode:
             image=raw_settings.sandbox_image,
             block_network=raw_settings.sandbox_block_network,
         )
+
+
+class TestCreateSandboxManagerTTL:
+    def test_manager_created_with_ttls(self, settings: Settings) -> None:
+        """TTLs from settings are passed to the manager so leaked pods get reaped."""
+        with (
+            patch("migratowl.agent.sandbox.KubernetesProviderConfig"),
+            patch("migratowl.agent.sandbox.KubernetesSandboxManager") as mock_mgr,
+        ):
+            create_sandbox_manager(settings)
+
+        call_kwargs = mock_mgr.call_args[1]
+        assert call_kwargs["ttl_seconds"] == settings.sandbox_ttl_seconds
+        assert call_kwargs["ttl_idle_seconds"] == settings.sandbox_ttl_idle_seconds

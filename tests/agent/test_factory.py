@@ -334,3 +334,120 @@ class TestSystemPromptMajorVersionChangelog:
         prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
         important_rules_section = prompt.split("## Important Rules")[1]
         assert "major" in important_rules_section.lower()
+
+
+class TestCheckpointerAndRateLimiter:
+    """Phase 0d + Phase 4: injected rate_limiter and checkpointer."""
+
+    def test_checkpointer_defaults_none(self) -> None:
+        mock_manager = _make_mock_manager()
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        call_kwargs = mock_manager.create_agent.call_args[1]
+        assert call_kwargs.get("checkpointer") is None
+
+    def test_forwards_checkpointer_to_manager_create_agent(self) -> None:
+        mock_manager = _make_mock_manager()
+        settings = Settings(_env_file=None)
+        sentinel = object()
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings, checkpointer=sentinel)
+
+        call_kwargs = mock_manager.create_agent.call_args[1]
+        assert call_kwargs.get("checkpointer") is sentinel
+
+    def test_uses_injected_rate_limiter(self) -> None:
+        """An injected rate_limiter is passed to init_chat_model instead of a per-scan one."""
+        mock_manager = _make_mock_manager()
+        settings = Settings(_env_file=None)
+        injected = MagicMock()
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings, rate_limiter=injected)
+
+        assert mock_init.call_args[1]["rate_limiter"] is injected
+
+    def test_builds_default_rate_limiter_when_not_injected(self) -> None:
+        """Backwards compat: a rate_limiter is still built if none is injected."""
+        mock_manager = _make_mock_manager()
+        settings = Settings(_env_file=None)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=settings)
+
+        assert mock_init.call_args[1].get("rate_limiter") is not None
+
+
+class TestOnSandboxAcquired:
+    """Phase 5: the get_sandbox closure fires on_sandbox_acquired with the sandbox id."""
+
+    def _build_with_callback(self, callback):
+        """Build the agent and return the wrapped get_sandbox closure passed to tools."""
+        sandbox = MagicMock()
+        sandbox.id = "sbx-99"
+
+        mock_manager = _make_mock_manager()
+        mock_manager._make_backend_factory.return_value = lambda _: sandbox
+        settings = Settings(_env_file=None)
+
+        captured = {}
+
+        def fake_clone_tool(get_sandbox, **kwargs):
+            captured["get_sandbox"] = get_sandbox
+            return MagicMock()
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory.create_clone_repo_tool", side_effect=fake_clone_tool),
+        ):
+            create_migratowl_agent(
+                mock_manager, settings=settings, on_sandbox_acquired=callback
+            )
+        return captured["get_sandbox"], sandbox
+
+    def test_callback_fires_once_with_sandbox_id(self) -> None:
+        seen: list[str] = []
+        get_sandbox, sandbox = self._build_with_callback(lambda sid: seen.append(sid))
+
+        assert get_sandbox() is sandbox
+        assert get_sandbox() is sandbox
+        assert seen == ["sbx-99"]
+
+    def test_callback_fires_from_non_loop_thread(self) -> None:
+        """Tools run get_sandbox on a worker thread; the callback must work there
+        (regression guard against asyncio.create_task, which needs a running loop)."""
+        import threading
+
+        seen: list[str] = []
+        get_sandbox, _ = self._build_with_callback(lambda sid: seen.append(sid))
+
+        t = threading.Thread(target=get_sandbox)
+        t.start()
+        t.join()
+        assert seen == ["sbx-99"]
+
+    def test_no_callback_is_safe(self) -> None:
+        get_sandbox, sandbox = self._build_with_callback(None)
+        assert get_sandbox() is sandbox

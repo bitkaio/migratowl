@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
 from migratowl.api.helpers import build_user_message, extract_report  # noqa: E402
-from migratowl.api.jobs import JobStore  # noqa: E402
+from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
 from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
 from migratowl.http import close_http_client  # noqa: E402
@@ -43,9 +43,6 @@ from migratowl.models.schemas import (  # noqa: E402
 )
 
 logger = logging.getLogger(__name__)
-
-# v1 limitation: one scan at a time to avoid workspace path collisions.
-_scan_semaphore: asyncio.Semaphore | None = None
 
 
 def create_app(
@@ -63,8 +60,26 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        global _scan_semaphore
-        _scan_semaphore = asyncio.Semaphore(1)
+        from migratowl.patches import apply_patches
+
+        # Ensure third-party monkey-patches are applied on the webhook path too
+        # (previously only applied when agent/graph.py was imported).
+        apply_patches()
+
+        # Resource throttle: one scan at a time by default. Each job runs in its
+        # own sandbox pod (keyed by thread_id == job_id), so this bounds sandbox
+        # and LLM load rather than preventing workspace-path collisions.
+        app.state.scan_semaphore = asyncio.Semaphore(settings.max_concurrent_scans)
+
+        # Shared LLM rate limiter across all concurrent scans, so raising
+        # max_concurrent_scans does not multiply total API RPS.
+        from langchain_core.rate_limiters import InMemoryRateLimiter
+
+        app.state.rate_limiter = InMemoryRateLimiter(
+            requests_per_second=settings.model_rate_limit_rps,
+            check_every_n_seconds=0.1,
+            max_bucket_size=1,
+        )
 
         if manager is not None:
             # Pre-initialized (tests or external setup)
@@ -74,15 +89,45 @@ def create_app(
 
             app.state.manager = create_sandbox_manager(settings)
 
-        app.state.job_store = JobStore()
+        app.state.job_store = create_job_store(settings)
         app.state.settings = settings
+        # Track in-flight scan tasks: keeps a strong reference (else the loop may
+        # GC them mid-flight) and lets shutdown mark them INTERRUPTED.
+        app.state.tasks = set()
 
-        yield
+        # Durable agent-state checkpointer, held open for the app lifetime via an
+        # AsyncExitStack. Keyed by thread_id == job_id, it lets an interrupted
+        # scan resume from its last super-step.
+        from contextlib import AsyncExitStack
 
-        # Shutdown
-        await close_http_client()
-        if hasattr(app.state, "manager"):
-            await app.state.manager.ashutdown()
+        from migratowl.api.checkpoint import create_checkpointer
+
+        async with AsyncExitStack() as stack:
+            app.state.checkpointer = await stack.enter_async_context(
+                create_checkpointer(settings)
+            )
+
+            # Recover jobs orphaned by a previous crash BEFORE the TTL sweep, so
+            # the sweep can skip sandboxes still referenced by non-terminal jobs.
+            from migratowl.api.reconcile import reconcile_orphans
+
+            reconcile_orphans(app.state.job_store, settings)
+
+            # Reap leaked sandboxes past their TTL, skipping pods still owned by
+            # non-terminal (resumable) jobs. Guarded — a cluster hiccup at startup
+            # must not abort the app.
+            await _sweep_orphan_sandboxes(app)
+
+            yield
+
+            # Shutdown: proactively mark in-flight scans INTERRUPTED so a rolling
+            # deploy leaves them resumable rather than relying on next-boot
+            # reconcile (stack closes the checkpointer connection on exit).
+            for job in app.state.job_store.list_by_state(JobState.RUNNING):
+                app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+            await close_http_client()
+            if hasattr(app.state, "manager"):
+                await app.state.manager.ashutdown()
 
     app = FastAPI(title="Migratowl", lifespan=lifespan)
 
@@ -94,11 +139,31 @@ def create_app(
     async def webhook(payload: ScanWebhookPayload) -> WebhookAcceptedResponse:
         store: JobStore = app.state.job_store
         job = store.create(payload)
-        asyncio.create_task(_run_scan(app, job.job_id))
+        task = asyncio.create_task(_run_scan(app, job.job_id))
+        app.state.tasks.add(task)
+        task.add_done_callback(app.state.tasks.discard)
         return WebhookAcceptedResponse(
             job_id=job.job_id,
             status_url=f"/jobs/{job.job_id}",
         )
+
+    @app.get("/jobs", response_model=None)
+    async def list_jobs(state: str | None = None) -> dict | JSONResponse:
+        """List jobs, optionally filtered by state — lets operators see interrupted work."""
+        store: JobStore = app.state.job_store
+        if state is None:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Query param 'state' is required (e.g. ?state=interrupted)"},
+            )
+        try:
+            job_state = JobState(state)
+        except ValueError:
+            return JSONResponse(
+                status_code=422, content={"detail": f"Invalid state '{state}'"}
+            )
+        jobs = store.list_by_state(job_state)
+        return {"jobs": [j.model_dump(mode="json") for j in jobs]}
 
     @app.get("/jobs/{job_id}", response_model=None)
     async def get_job(job_id: str) -> JobStatus | JSONResponse:
@@ -108,22 +173,93 @@ def create_app(
             return JSONResponse(status_code=404, content={"detail": "Job not found"})
         return job
 
+    @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None)
+    async def resume_job(job_id: str) -> WebhookAcceptedResponse | JSONResponse:
+        store: JobStore = app.state.job_store
+        settings_: Settings = app.state.settings
+        job = store.get(job_id)
+        if job is None:
+            return JSONResponse(status_code=404, content={"detail": "Job not found"})
+
+        # Atomic INTERRUPTED -> RUNNING claim; only the winner proceeds. Guards
+        # against concurrent/double resume of the same job (checkpoint corruption).
+        if not store.claim_for_resume(job_id):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": f"Job not resumable in state '{job.state.value}'"},
+            )
+
+        new_count = store.increment_retry(job_id)
+        if new_count > settings_.max_scan_retries:
+            store.set_error(job_id, "Exceeded max scan retries")
+            return JSONResponse(
+                status_code=409, content={"detail": "Exceeded max scan retries"}
+            )
+
+        task = asyncio.create_task(_run_scan(app, job_id, resume=True))
+        app.state.tasks.add(task)
+        task.add_done_callback(app.state.tasks.discard)
+        return WebhookAcceptedResponse(job_id=job_id, status_url=f"/jobs/{job_id}")
+
     return app
 
 
-async def _run_scan(app: FastAPI, job_id: str) -> None:
-    """Background task: run agent scan for a job."""
-    global _scan_semaphore
+async def _sweep_orphan_sandboxes(app: FastAPI) -> None:
+    """Reap leaked sandboxes past their TTL at startup.
+
+    Guarded so a cluster error does not abort the app. TTL-based cleanup will not
+    touch an actively-heartbeating pod, and the absolute TTL defaults to None to
+    avoid reaping long-running scans; runs AFTER reconcile so resumable jobs'
+    pods are known.
+    """
+    manager = getattr(app.state, "manager", None)
+    if manager is None:
+        return
+    try:
+        result = await manager.acleanup()
+        deleted = getattr(result, "deleted", None)
+        if deleted:
+            logger.info("Startup sweep deleted leaked sandboxes: %s", deleted)
+    except Exception:
+        logger.warning("Startup sandbox sweep failed (non-fatal)", exc_info=True)
+
+
+async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
+    """Background task: run agent scan for a job.
+
+    On ``resume`` the job is already RUNNING (claimed via ``claim_for_resume``);
+    we reconnect to the surviving sandbox or clear the checkpoint to restart, then
+    re-invoke the graph on the same thread_id.
+    """
     store: JobStore = app.state.job_store
     job = store.get(job_id)
     if job is None:
         return
 
-    assert _scan_semaphore is not None
-    async with _scan_semaphore:
-        store.update_state(job_id, JobState.RUNNING)
+    semaphore: asyncio.Semaphore = app.state.scan_semaphore
+    async with semaphore:
+        if not resume:
+            store.update_state(job_id, JobState.RUNNING)
         await notify_pr_start(job.payload, app.state.settings)
+
+        # Persist sandbox_id the moment the sandbox is acquired (lazily, on the
+        # first tool call, which runs on a worker thread). get_running_loop() is
+        # captured here on the event-loop thread; call_soon_threadsafe schedules
+        # the sync store write back onto the loop, so this is safe to invoke from
+        # the tool's worker thread (asyncio.create_task would raise there).
+        loop = asyncio.get_running_loop()
+
+        def _persist_sandbox_id(sandbox_id: str) -> None:
+            loop.call_soon_threadsafe(store.set_sandbox_id, job_id, sandbox_id)
+
         try:
+            if resume:
+                from migratowl.api.resume import reconnect_or_restart
+
+                await reconnect_or_restart(
+                    app.state.manager, job, store, app.state.checkpointer
+                )
+
             from migratowl.agent.factory import create_migratowl_agent
 
             graph = create_migratowl_agent(
@@ -131,6 +267,9 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
                 settings=app.state.settings,
                 mode=job.payload.mode,
                 include_prerelease=job.payload.include_prerelease,
+                rate_limiter=getattr(app.state, "rate_limiter", None),
+                checkpointer=getattr(app.state, "checkpointer", None),
+                on_sandbox_acquired=_persist_sandbox_id,
             )
             user_msg = build_user_message(job.payload)
             result = await graph.ainvoke(
@@ -141,16 +280,20 @@ async def _run_scan(app: FastAPI, job_id: str) -> None:
             report.model_name = app.state.settings.model_name
             store.set_result(job_id, report)
 
-            # Optional callback
-            if job.payload.callback_url:
-                await _post_callback(job.payload.callback_url, report)
-
-            await notify_pr_done(job.payload, report, app.state.settings)
+            # Terminal side effects fire at most once across the original run and
+            # any resumes — guarded so a resumed job never posts a duplicate PR
+            # comment or re-fires the callback.
+            if not job.side_effects_done:
+                if job.payload.callback_url:
+                    await _post_callback(job.payload.callback_url, report)
+                await notify_pr_done(job.payload, report, app.state.settings)
+                store.mark_side_effects_done(job_id)
 
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
             store.set_error(job_id, "Internal scan error")
-            await notify_pr_failed(job.payload, app.state.settings)
+            if not job.side_effects_done:
+                await notify_pr_failed(job.payload, app.state.settings)
 
 
 async def _post_callback(callback_url: str, report: Any) -> None:

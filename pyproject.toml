@@ -18,6 +18,8 @@ dependencies = [
     "defusedxml>=0.7.1",
     "html2text>=2024.2.26",
     "langfuse",
+    "aiosqlite>=0.20",
+    "langgraph-checkpoint-sqlite>=2.0",
 ]
 
 [tool.uv]

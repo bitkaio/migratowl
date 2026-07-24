@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session awareness & crash recovery** — async scans now survive a process crash and can be resumed.
+  Job state is persisted (SQLite by default; `MIGRATOWL_PERSISTENCE_BACKEND=memory` for CI/ephemeral),
+  and the LangGraph agent state is checkpointed (`AsyncSqliteSaver`, keyed by `thread_id == job_id`).
+  On restart, jobs orphaned by a crash are reconciled from `RUNNING`/`PENDING` to a new `INTERRUPTED`
+  state (or `FAILED` past `MIGRATOWL_MAX_SCAN_RETRIES`). `POST /jobs/{id}/resume` re-runs an interrupted
+  job — reconnecting to the surviving sandbox pod and resuming from the checkpoint when the pod is still
+  alive, or clearing the checkpoint and restarting from scratch when it's gone (resuming stale reasoning
+  against an empty sandbox would produce wrong results). New settings:
+  - `MIGRATOWL_PERSISTENCE_BACKEND` (`sqlite` default / `memory`), `MIGRATOWL_JOBS_DB_PATH`,
+    `MIGRATOWL_CHECKPOINT_DB_PATH`
+  - `MIGRATOWL_MAX_SCAN_RETRIES` (default 3) — retry cap before an interrupted job is failed
+  - `MIGRATOWL_MAX_CONCURRENT_SCANS` (default 1) — resource throttle for concurrent scans (each job runs
+    in its own sandbox pod, so this bounds sandbox/LLM load rather than preventing collisions)
+  - `MIGRATOWL_SANDBOX_TTL_SECONDS` (default none) / `MIGRATOWL_SANDBOX_TTL_IDLE_SECONDS` (default 1800)
+    — TTLs for reaping leaked sandboxes; a guarded startup sweep cleans up orphaned pods
+  - New endpoints: `GET /jobs?state=<state>` to list jobs by state; `POST /jobs/{id}/resume`
+  - New dependencies: `aiosqlite`, `langgraph-checkpoint-sqlite`
+
 - **Generic LLM proxy support** — developers using internal proxies (LiteLLM, Azure API Management, etc.)
   can now route LLM calls through their corporate infrastructure without code changes. Three new settings:
   - `MIGRATOWL_MODEL_PROVIDER=litellm` — uses the OpenAI SDK to call any LiteLLM-compatible endpoint

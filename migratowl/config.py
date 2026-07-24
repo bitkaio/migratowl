@@ -56,6 +56,23 @@ class Settings(BaseSettings):
     # Workspace
     workspace_path: str = "/home/user/workspace"
 
+    # Concurrency — resource throttle limiting simultaneous scans (each job runs
+    # in its own sandbox pod, so this bounds sandbox/LLM load, NOT path collisions).
+    max_concurrent_scans: int = 1
+
+    # Sandbox TTL / leak reconciliation. Absolute TTL defaults to None (no
+    # guillotine — long compiles must not be reaped mid-scan); rely on the
+    # activity-aware idle TTL instead.
+    sandbox_ttl_seconds: int | None = None
+    sandbox_ttl_idle_seconds: int | None = 1800
+
+    # Persistence / crash recovery. "sqlite" (default) persists jobs + agent
+    # checkpoints so scans survive a restart; "memory" is non-durable (CI/ephemeral).
+    persistence_backend: Literal["memory", "sqlite"] = "sqlite"
+    jobs_db_path: str = "./migratowl_jobs.db"
+    checkpoint_db_path: str = "./migratowl_checkpoints.db"
+    max_scan_retries: int = 3
+
     # Registry scanning
     scan_registry_concurrency: int = 10
 

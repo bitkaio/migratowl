@@ -181,6 +181,7 @@ class JobState(enum.StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class JobStatus(BaseModel):
@@ -193,6 +194,15 @@ class JobStatus(BaseModel):
     payload: ScanWebhookPayload
     result: ScanAnalysisReport | None = None
     error: str | None = None
+    # Crash recovery
+    sandbox_id: str | None = None
+    retry_count: int = 0
+    # Guards duplicate PR comments / callbacks when a job is resumed.
+    side_effects_done: bool = False
+    # Lease — identifies the process that owns a RUNNING job, so a restarted
+    # process only reconciles jobs whose owner is gone (stale lease).
+    owner_pid: int | None = None
+    heartbeat_at: datetime | None = None
 
 
 class WebhookAcceptedResponse(BaseModel):

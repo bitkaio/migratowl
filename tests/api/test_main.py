@@ -9,7 +9,7 @@ import pytest
 import migratowl.api.main as main_mod
 from httpx import AsyncClient, ASGITransport
 
-from migratowl.api.jobs import JobStore
+from migratowl.api.jobs import InMemoryJobStore
 from migratowl.config import Settings
 
 
@@ -22,7 +22,11 @@ def settings() -> Settings:
 def mock_manager() -> MagicMock:
     from langchain_kubernetes import KubernetesSandboxManager
 
-    return MagicMock(spec=KubernetesSandboxManager)
+    mgr = MagicMock(spec=KubernetesSandboxManager)
+    # Async methods the lifespan awaits.
+    mgr.acleanup = AsyncMock(return_value=MagicMock(deleted=[]))
+    mgr.ashutdown = AsyncMock()
+    return mgr
 
 
 @pytest.fixture
@@ -31,8 +35,10 @@ def app(settings: Settings, mock_manager: MagicMock):
     application = main_mod.create_app(settings=settings, manager=mock_manager)
     # Manually set state that lifespan would set (ASGITransport doesn't trigger lifespan)
     application.state.manager = mock_manager
-    application.state.job_store = JobStore()
+    application.state.job_store = InMemoryJobStore()
     application.state.settings = settings
+    application.state.scan_semaphore = asyncio.Semaphore(1)
+    application.state.tasks = set()
     return application
 
 
@@ -92,7 +98,7 @@ class TestGetJob:
         assert get_resp.status_code == 200
         data = get_resp.json()
         assert data["job_id"] == job_id
-        assert data["state"] in ("pending", "running", "completed", "failed")
+        assert data["state"] in ("pending", "running", "completed", "failed", "interrupted")
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_job(self, client: AsyncClient) -> None:
@@ -105,7 +111,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_start_called_when_pr_and_sha_provided(
         self, app, client: AsyncClient
     ) -> None:
-        main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start") as mock_start, \
              patch("migratowl.api.main.notify_pr_done"), \
              patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
@@ -128,7 +133,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_done_called_on_success(
         self, app, client: AsyncClient
     ) -> None:
-        main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start"), \
              patch("migratowl.api.main.notify_pr_done") as mock_done, \
              patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
@@ -146,7 +150,6 @@ class TestWebhookNotifyIntegration:
     async def test_notify_pr_failed_called_on_scan_error(
         self, app, client: AsyncClient
     ) -> None:
-        main_mod._scan_semaphore = asyncio.Semaphore(1)
         with patch("migratowl.api.main.notify_pr_start"), \
              patch("migratowl.api.main.notify_pr_done"), \
              patch("migratowl.api.main.notify_pr_failed") as mock_failed, \
@@ -166,6 +169,64 @@ class TestWebhookNotifyIntegration:
         mock_failed.assert_awaited_once()
 
 
+class TestLifespanConfiguration:
+    @pytest.mark.asyncio
+    async def test_semaphore_uses_configured_concurrency(self, mock_manager: MagicMock) -> None:
+        """The lifespan builds the scan semaphore from settings.max_concurrent_scans."""
+        settings = Settings(_env_file=None, max_concurrent_scans=3, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        transport = ASGITransport(app=application)
+        async with AsyncClient(transport=transport, base_url="http://test"):
+            # ASGITransport alone doesn't run lifespan; trigger it explicitly.
+            async with application.router.lifespan_context(application):
+                assert application.state.scan_semaphore._value == 3
+
+    @pytest.mark.asyncio
+    async def test_lifespan_applies_patches(self, mock_manager: MagicMock) -> None:
+        """The webhook path must apply monkey-patches (previously only graph.py did)."""
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        with patch("migratowl.patches.apply_patches") as mock_patches:
+            async with application.router.lifespan_context(application):
+                mock_patches.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_lifespan_builds_shared_rate_limiter(self, mock_manager: MagicMock) -> None:
+        """One shared rate limiter is created so concurrent scans don't multiply API RPS."""
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        async with application.router.lifespan_context(application):
+            assert application.state.rate_limiter is not None
+
+    @pytest.mark.asyncio
+    async def test_lifespan_builds_checkpointer(self, mock_manager: MagicMock) -> None:
+        """The lifespan opens a checkpointer and exposes it on app.state."""
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        async with application.router.lifespan_context(application):
+            assert application.state.checkpointer is not None
+
+    @pytest.mark.asyncio
+    async def test_lifespan_reconciles_before_sweep(self, mock_manager: MagicMock) -> None:
+        """Orphan reconciliation runs, and the TTL sweep runs after it."""
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        order: list[str] = []
+        with (
+            patch(
+                "migratowl.api.reconcile.reconcile_orphans",
+                side_effect=lambda *a, **k: order.append("reconcile"),
+            ),
+            patch(
+                "migratowl.api.main._sweep_orphan_sandboxes",
+                new=AsyncMock(side_effect=lambda *a, **k: order.append("sweep")),
+            ),
+        ):
+            async with application.router.lifespan_context(application):
+                pass
+        assert order == ["reconcile", "sweep"]
+
+
 class TestRunScanSetsModelName:
     @pytest.mark.asyncio
     async def test_model_name_set_on_report(self, app) -> None:
@@ -181,7 +242,6 @@ class TestRunScanSetsModelName:
             total_duration_seconds=3.0,
         )
 
-        main_mod._scan_semaphore = asyncio.Semaphore(1)
 
         with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
              patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
@@ -201,3 +261,220 @@ class TestRunScanSetsModelName:
             result_job = app.state.job_store.get(job.job_id)
             assert result_job.result is not None
             assert result_job.result.model_name == app.state.settings.model_name
+
+    @pytest.mark.asyncio
+    async def test_run_scan_forwards_checkpointer_and_rate_limiter(self, app) -> None:
+        """_run_scan passes the app-scoped checkpointer + rate limiter into the factory."""
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        sentinel_cp = object()
+        sentinel_rl = object()
+        app.state.checkpointer = sentinel_cp
+        app.state.rate_limiter = sentinel_rl
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = {"messages": []}
+            mock_factory.return_value = mock_graph
+
+            payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+            job = app.state.job_store.create(payload)
+
+            await main_mod._run_scan(app, job.job_id)
+
+            call_kwargs = mock_factory.call_args[1]
+            assert call_kwargs["checkpointer"] is sentinel_cp
+            assert call_kwargs["rate_limiter"] is sentinel_rl
+
+    @pytest.mark.asyncio
+    async def test_run_scan_persists_sandbox_id(self, app) -> None:
+        """When the agent acquires a sandbox, its id is persisted to the job store."""
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        def fake_factory(*args, **kwargs):
+            # Simulate lazy acquisition firing the callback during the scan.
+            kwargs["on_sandbox_acquired"]("sbx-run")
+            graph = AsyncMock()
+            graph.ainvoke.return_value = {"messages": []}
+            return graph
+
+        with patch("migratowl.agent.factory.create_migratowl_agent", side_effect=fake_factory), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
+            job = app.state.job_store.create(payload)
+
+            await main_mod._run_scan(app, job.job_id)
+            # call_soon_threadsafe callbacks run on the loop; yield to let them fire.
+            await asyncio.sleep(0.01)
+
+            assert app.state.job_store.get(job.job_id).sandbox_id == "sbx-run"
+
+
+class TestResumeEndpoint:
+    @pytest.mark.asyncio
+    async def test_resume_404_for_unknown_job(self, client: AsyncClient) -> None:
+        resp = await client.post("/jobs/nope/resume")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_resume_409_when_not_interrupted(self, app, client: AsyncClient) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        resp = await client.post(f"/jobs/{job.job_id}/resume")  # PENDING, not INTERRUPTED
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_resume_accepts_interrupted_job(self, app, client: AsyncClient) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+
+        with patch("migratowl.api.main._run_scan", new_callable=AsyncMock) as mock_run:
+            resp = await client.post(f"/jobs/{job.job_id}/resume")
+            await asyncio.sleep(0.01)
+
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] == job.job_id
+        mock_run.assert_awaited_once()
+        assert mock_run.await_args.kwargs.get("resume") is True
+
+    @pytest.mark.asyncio
+    async def test_resume_increments_retry(self, app, client: AsyncClient) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+
+        with patch("migratowl.api.main._run_scan", new_callable=AsyncMock):
+            await client.post(f"/jobs/{job.job_id}/resume")
+
+        assert app.state.job_store.get(job.job_id).retry_count == 1
+
+    @pytest.mark.asyncio
+    async def test_resume_over_cap_returns_409(self, app, client: AsyncClient) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        for _ in range(app.state.settings.max_scan_retries):
+            app.state.job_store.increment_retry(job.job_id)
+        app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+
+        with patch("migratowl.api.main._run_scan", new_callable=AsyncMock) as mock_run:
+            resp = await client.post(f"/jobs/{job.job_id}/resume")
+
+        assert resp.status_code == 409
+        mock_run.assert_not_awaited()
+        assert app.state.job_store.get(job.job_id).state == JobState.FAILED
+
+    @pytest.mark.asyncio
+    async def test_double_resume_one_wins(self, app, client: AsyncClient) -> None:
+        """Two concurrent resume requests: exactly one 202, one 409."""
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+
+        with patch("migratowl.api.main._run_scan", new_callable=AsyncMock):
+            r1, r2 = await asyncio.gather(
+                client.post(f"/jobs/{job.job_id}/resume"),
+                client.post(f"/jobs/{job.job_id}/resume"),
+            )
+
+        assert sorted([r1.status_code, r2.status_code]) == [202, 409]
+
+
+class TestRunScanResumeGuards:
+    @pytest.mark.asyncio
+    async def test_resume_calls_reconnect_or_restart(self, app) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        app.state.checkpointer = MagicMock()
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        app.state.job_store.update_state(job.job_id, JobState.RUNNING)  # already claimed
+
+        with (
+            patch("migratowl.api.resume.reconnect_or_restart", new_callable=AsyncMock) as mock_rr,
+            patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory,
+            patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock),
+            patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock),
+        ):
+            graph = AsyncMock()
+            graph.ainvoke.return_value = {"messages": []}
+            mock_factory.return_value = graph
+            await main_mod._run_scan(app, job.job_id, resume=True)
+
+        mock_rr.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_side_effects_not_refired_when_already_done(self, app) -> None:
+        """A resumed job whose side effects already fired must NOT post again."""
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        app.state.checkpointer = MagicMock()
+        job = app.state.job_store.create(
+            ScanWebhookPayload(repo_url="https://github.com/x/y", pr_number=5)
+        )
+        app.state.job_store.mark_side_effects_done(job.job_id)
+        app.state.job_store.update_state(job.job_id, JobState.RUNNING)
+
+        with (
+            patch("migratowl.api.resume.reconnect_or_restart", new_callable=AsyncMock),
+            patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory,
+            patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock),
+            patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock) as mock_done,
+        ):
+            graph = AsyncMock()
+            graph.ainvoke.return_value = {"messages": []}
+            mock_factory.return_value = graph
+            await main_mod._run_scan(app, job.job_id, resume=True)
+
+        mock_done.assert_not_awaited()
+
+
+class TestListJobsEndpoint:
+    @pytest.mark.asyncio
+    async def test_requires_state_param(self, client: AsyncClient) -> None:
+        resp = await client.get("/jobs")
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_invalid_state_returns_422(self, client: AsyncClient) -> None:
+        resp = await client.get("/jobs?state=bogus")
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_filters_by_state(self, app, client: AsyncClient) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        b = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/z"))
+        app.state.job_store.update_state(b.job_id, JobState.INTERRUPTED)
+
+        resp = await client.get("/jobs?state=interrupted")
+        assert resp.status_code == 200
+        ids = [j["job_id"] for j in resp.json()["jobs"]]
+        assert ids == [b.job_id]
+
+
+class TestGracefulShutdown:
+    @pytest.mark.asyncio
+    async def test_running_jobs_marked_interrupted_on_shutdown(
+        self, mock_manager: MagicMock
+    ) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        async with application.router.lifespan_context(application):
+            job = application.state.job_store.create(
+                ScanWebhookPayload(repo_url="https://github.com/x/y")
+            )
+            application.state.job_store.update_state(job.job_id, JobState.RUNNING)
+            job_id = job.job_id
+        # After lifespan exit (shutdown), the running job is INTERRUPTED.
+        assert application.state.job_store.get(job_id).state == JobState.INTERRUPTED

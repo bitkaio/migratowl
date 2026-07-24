@@ -315,3 +315,62 @@ class TestGetSettings:
     def test_returns_settings_instance(self) -> None:
         result = get_settings()
         assert isinstance(result, Settings)
+
+
+class TestCrashRecoverySettings:
+    """Settings added for session-awareness / crash recovery."""
+
+    def test_default_max_concurrent_scans(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MAX_CONCURRENT_SCANS", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.max_concurrent_scans == 1
+
+    def test_env_override_max_concurrent_scans(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MAX_CONCURRENT_SCANS", "4")
+        settings = Settings(_env_file=None)
+        assert settings.max_concurrent_scans == 4
+
+    def test_default_sandbox_ttl_seconds_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SANDBOX_TTL_SECONDS", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_ttl_seconds is None
+
+    def test_default_sandbox_ttl_idle_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_SANDBOX_TTL_IDLE_SECONDS", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.sandbox_ttl_idle_seconds == 1800
+
+    def test_default_persistence_backend_is_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_PERSISTENCE_BACKEND", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.persistence_backend == "sqlite"
+
+    def test_env_override_persistence_backend_memory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_PERSISTENCE_BACKEND", "memory")
+        settings = Settings(_env_file=None)
+        assert settings.persistence_backend == "memory"
+
+    def test_invalid_persistence_backend_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_PERSISTENCE_BACKEND", "postgres")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)
+
+    def test_default_jobs_db_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_JOBS_DB_PATH", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.jobs_db_path == "./migratowl_jobs.db"
+
+    def test_default_checkpoint_db_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_CHECKPOINT_DB_PATH", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.checkpoint_db_path == "./migratowl_checkpoints.db"
+
+    def test_default_max_scan_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MIGRATOWL_MAX_SCAN_RETRIES", raising=False)
+        settings = Settings(_env_file=None)
+        assert settings.max_scan_retries == 3
+
+    def test_env_override_max_scan_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_MAX_SCAN_RETRIES", "5")
+        settings = Settings(_env_file=None)
+        assert settings.max_scan_retries == 5
