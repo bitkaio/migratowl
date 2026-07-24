@@ -12,6 +12,7 @@ Many organizations route LLM traffic through internal proxies for:
 - **Rate limiting** — shared quotas across teams
 
 Common proxy solutions include:
+
 - [LiteLLM](https://github.com/BerriAI/litellm) — unified OpenAI-compatible API for 100+ LLMs
 - Azure API Management
 - AWS API Gateway
