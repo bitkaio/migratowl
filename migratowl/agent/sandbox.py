@@ -54,5 +54,9 @@ def create_sandbox_manager(settings: Settings) -> KubernetesSandboxManager:
         )
         logger.info("KubernetesSandboxManager created (template=%s)", settings.sandbox_template)
 
-    manager = KubernetesSandboxManager(config)
+    manager = KubernetesSandboxManager(
+        config,
+        ttl_seconds=settings.sandbox_ttl_seconds,
+        ttl_idle_seconds=settings.sandbox_ttl_idle_seconds,
+    )
     return manager

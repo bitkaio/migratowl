@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langchain.chat_models import init_chat_model
@@ -170,6 +171,9 @@ def create_migratowl_agent(
     settings: Settings | None = None,
     mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
     include_prerelease: bool = False,
+    checkpointer: Any = None,
+    rate_limiter: InMemoryRateLimiter | None = None,
+    on_sandbox_acquired: Callable[[str], None] | None = None,
 ) -> Any:
     """Build the Migratowl agent graph.
 
@@ -181,14 +185,33 @@ def create_migratowl_agent(
             constraints, NORMAL compares against the global maximum version.
         include_prerelease: When True, pre-release versions are considered when
             determining whether a dependency is outdated.
+        checkpointer: LangGraph checkpointer for durable agent state across runs
+            (enables resume). ``None`` = no checkpointing.
+        rate_limiter: Shared LLM rate limiter. When ``None`` a per-agent limiter
+            is built — but callers running concurrent scans should inject ONE
+            shared limiter so total API RPS stays bounded.
+        on_sandbox_acquired: Optional callback invoked once with the sandbox id
+            when the sandbox is first acquired (for durable crash-recovery
+            persistence). Runs on the tool's worker thread — must be thread-safe.
     """
     if settings is None:
         settings = get_settings()
 
     backend_factory = manager._make_backend_factory()
 
+    # Fire on_sandbox_acquired exactly once, when the sandbox is first acquired
+    # (lazily, on the first tool call — which runs on a worker thread). The
+    # callback must therefore be thread-safe; callers persisting sandbox_id from
+    # an event loop should bridge via run_coroutine_threadsafe.
+    _acquired = False
+
     def get_sandbox():
-        return backend_factory(None)
+        nonlocal _acquired
+        sandbox = backend_factory(None)
+        if not _acquired and sandbox is not None and on_sandbox_acquired is not None:
+            _acquired = True
+            on_sandbox_acquired(sandbox.id)
+        return sandbox
 
     workspace_path = settings.workspace_path
     source_path = f"{workspace_path}/source"
@@ -233,12 +256,15 @@ def create_migratowl_agent(
         patch_manifest,
     ]
 
-    # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model
-    rate_limiter = InMemoryRateLimiter(
-        requests_per_second=settings.model_rate_limit_rps,
-        check_every_n_seconds=0.1,
-        max_bucket_size=1,
-    )
+    # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model.
+    # Prefer an injected shared limiter (bounds total API RPS across concurrent scans);
+    # fall back to a per-agent limiter when none is provided.
+    if rate_limiter is None:
+        rate_limiter = InMemoryRateLimiter(
+            requests_per_second=settings.model_rate_limit_rps,
+            check_every_n_seconds=0.1,
+            max_bucket_size=1,
+        )
 
     # Determine effective model name (alias takes precedence)
     effective_model_name = settings.model_alias or settings.model_name
@@ -286,5 +312,6 @@ def create_migratowl_agent(
             tools=tools,
             subagents=[package_analyzer],
             response_format=ScanAnalysisReport,
+            checkpointer=checkpointer,
         )
     )
