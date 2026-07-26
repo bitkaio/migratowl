@@ -1,0 +1,1 @@
+<project><dependencies><dependency><groupId>org.foo</groupId><artifactId>bar</artifactId><version>1.2.3</version></dependency></dependencies></project>

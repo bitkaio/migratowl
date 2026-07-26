@@ -252,7 +252,7 @@ jobs:
           npm install -g /tmp/markdownlint-cli2.tgz
 
       - name: Lint Markdown files
-        run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv"
+        run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv" "#fuzz/seeds"
 
   # CodeQL is handled by GitHub's Default Setup (repo Settings → Code Security).
   # A custom advanced-config job cannot coexist with Default Setup without conflict.
@@ -392,3 +392,48 @@ jobs:
           name: sbom
           path: sbom.cdx.json
           retention-days: 30
+
+  # ── Fuzz smoke run (parsers ingest untrusted repo content) ──────────────
+  fuzz:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      # Short coverage-guided run per harness, seeded (read-only) from the
+      # curated corpus. libFuzzer writes discoveries to the first corpus dir,
+      # so use a throwaway work dir and keep fuzz/seeds/ pristine. -atheris_runs
+      # bounds each harness so PR CI stays fast; a crash exits non-zero.
+      - name: Fuzz manifest parsers
+        run: |
+          mkdir -p /tmp/fuzz-parsers
+          PYTHONPATH=. uv run python fuzz/fuzz_parsers.py -atheris_runs=20000 /tmp/fuzz-parsers fuzz/seeds/parsers
+
+      - name: Fuzz changelog parsing
+        run: |
+          mkdir -p /tmp/fuzz-changelog
+          PYTHONPATH=. uv run python fuzz/fuzz_changelog.py -atheris_runs=20000 /tmp/fuzz-changelog fuzz/seeds/changelog
+

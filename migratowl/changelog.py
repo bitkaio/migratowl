@@ -504,6 +504,19 @@ def _parse_version(v: str) -> Version:
     return Version(v)
 
 
+def _coerce_comparable(version_str: str) -> Version | tuple[int, ...] | None:
+    """Return a comparable version: a packaging Version, or a numeric tuple
+    fallback, or None if neither works. Callers must only compare values of
+    the same kind (Version-vs-Version or tuple-vs-tuple)."""
+    try:
+        return _parse_version(version_str)
+    except InvalidVersion:
+        try:
+            return tuple(int(x) for x in version_str.split("."))
+        except (ValueError, AttributeError):
+            return None
+
+
 def filter_chunks_by_version_range(
     chunks: list[dict],
     current_version: str,
@@ -513,27 +526,21 @@ def filter_chunks_by_version_range(
     if not chunks:
         return []
 
-    try:
-        current = _parse_version(current_version)
-        latest = _parse_version(latest_version)
-    except InvalidVersion:
-        # Fallback: simple tuple comparison
-        try:
-            current = tuple(int(x) for x in current_version.split("."))  # type: ignore[assignment]
-            latest = tuple(int(x) for x in latest_version.split("."))  # type: ignore[assignment]
-        except (ValueError, AttributeError):
-            return chunks
+    current = _coerce_comparable(current_version)
+    latest = _coerce_comparable(latest_version)
+    # If the range bounds are unusable, don't filter — return everything.
+    if current is None or latest is None or type(current) is not type(latest):
+        return chunks
 
     filtered = []
     for chunk in chunks:
-        try:
-            v = _parse_version(chunk["version"])
-        except InvalidVersion:
-            try:
-                v = tuple(int(x) for x in chunk["version"].split("."))  # type: ignore[assignment]
-            except (ValueError, AttributeError):
-                continue
-
+        v = _coerce_comparable(chunk["version"])
+        if v is None or type(v) is not type(current):
+            # Unparseable or incomparable with the bounds — skip this chunk.
+            continue
+        # v, current, latest are all the same concrete type here (both Version
+        # or both tuple), so the ordering comparison is well-defined. mypy can't
+        # narrow the union across the runtime type() guard, hence the ignore.
         if current < v <= latest:  # type: ignore[operator]
             filtered.append(chunk)
 

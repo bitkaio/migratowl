@@ -253,6 +253,15 @@ class TestParsePackageJson:
 
         assert deps[0].current_version == "workspace:*"
 
+    def test_non_object_json_root_returns_empty(self) -> None:
+        """A package.json whose top-level JSON is not an object (int, string,
+        list, null) must not crash — malformed manifests come from untrusted
+        cloned repos. Found by fuzzing (AttributeError on int.get)."""
+        for content in ("434", '"a string"', "[1, 2, 3]", "null", "true"):
+            deps = parse_package_json(content, "package.json")
+            assert deps == [], f"expected [] for {content!r}, got {deps!r}"
+
+
     def test_workspace_protocol_caret_preserved(self) -> None:
         content = '{"dependencies": {"my-lib": "workspace:^1.0.0"}}'
         deps = parse_package_json(content, "package.json")
