@@ -39,6 +39,9 @@ constraint-dependencies = [
     # fixed in 0.6.4. Pulled in transitively via google-auth -> pyasn1-modules;
     # dependents declare open lower bounds, so pin the floor to the fixed release.
     "pyasn1>=0.6.4",
+    # Security floor: setuptools <83.0.0 has GHSA-h35f-9h28-mq5c (MANIFEST.in
+    # exclusion bypass). Dev/build-only dep; not in the runtime export.
+    "setuptools>=83.0.0",
 ]
 
 [dependency-groups]
