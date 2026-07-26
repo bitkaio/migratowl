@@ -33,21 +33,23 @@ import atheris
 with atheris.instrument_imports():
     from migratowl import parsers
 
-# Each parser paired with the exceptions it may legitimately raise on bad input.
-# Anything outside these is a real defect the fuzzer should surface.
-_TomlError = __import__("tomllib").TOMLDecodeError
-import json as _json  # noqa: E402
-import xml.etree.ElementTree as _stdET  # noqa: E402
+# Standard-library / third-party parse errors the parsers may legitimately
+# raise on malformed input. `defusedxml.ElementTree` re-exports ParseError, so
+# we avoid importing the stdlib `xml` module (flagged by semgrep's XXE rule;
+# the parser itself already uses defusedxml).
+import json  # noqa: E402
+import tomllib  # noqa: E402
 
+import defusedxml.ElementTree as DefusedET  # noqa: E402
 from defusedxml.common import DefusedXmlException  # noqa: E402
 
 _PARSERS = [
     (parsers.parse_requirements_txt, (ValueError,)),
-    (parsers.parse_pyproject_toml, (ValueError, _TomlError)),
-    (parsers.parse_package_json, (ValueError, _json.JSONDecodeError)),
+    (parsers.parse_pyproject_toml, (ValueError, tomllib.TOMLDecodeError)),
+    (parsers.parse_package_json, (ValueError, json.JSONDecodeError)),
     (parsers.parse_go_mod, (ValueError,)),
-    (parsers.parse_cargo_toml, (ValueError, _TomlError)),
-    (parsers.parse_pom_xml, (ValueError, _stdET.ParseError, DefusedXmlException)),
+    (parsers.parse_cargo_toml, (ValueError, tomllib.TOMLDecodeError)),
+    (parsers.parse_pom_xml, (ValueError, DefusedET.ParseError, DefusedXmlException)),
     (parsers.parse_build_gradle, (ValueError,)),
 ]
 

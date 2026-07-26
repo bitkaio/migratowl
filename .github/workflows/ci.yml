@@ -252,7 +252,7 @@ jobs:
           npm install -g /tmp/markdownlint-cli2.tgz
 
       - name: Lint Markdown files
-        run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv"
+        run: markdownlint-cli2 "**/*.md" "#node_modules" "#.venv" "#fuzz/seeds"
 
   # CodeQL is handled by GitHub's Default Setup (repo Settings → Code Security).
   # A custom advanced-config job cannot coexist with Default Setup without conflict.
