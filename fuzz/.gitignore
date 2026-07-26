@@ -1,0 +1,6 @@
+# Generated fuzzing artifacts — keep the curated seeds/ only.
+corpus/
+crash-*
+oom-*
+timeout-*
+leak-*

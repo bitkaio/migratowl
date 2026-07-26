@@ -73,6 +73,15 @@ wheels = [
 ]
 
 [[package]]
+name = "atheris"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/18/e19718c384fd7d801d0da7485407daef9af6194b6d8c8818175bec5efec6/atheris-3.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f8a9f51ce8369026e8eb7b7174835e8c4c85a1a6db5d9add36c15100779d2a39", size = 36800563, upload-time = "2026-06-17T00:04:04.559Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/ff/ae7a5bfe99033e510bea4ed09934e636d93777317a48147369bc0dc2b71f/atheris-3.1.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:315a0b5c819852b1ffe1ca72efc389c7724881f2c33e4aacb8c6bcec49bd5011", size = 36772569, upload-time = "2026-06-17T00:04:07.702Z" },
+]
+
+[[package]]
 name = "backoff"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1234,6 +1243,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "atheris", marker = "sys_platform == 'linux'" },
     { name = "bandit" },
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "mypy" },
@@ -1265,6 +1275,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "atheris", marker = "sys_platform == 'linux'", specifier = ">=2.3.0" },
     { name = "bandit", extras = ["toml"], specifier = ">=1.7" },
     { name = "langgraph-cli", extras = ["inmem"] },
     { name = "mypy", specifier = ">=1.10" },

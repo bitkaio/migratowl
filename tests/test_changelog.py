@@ -77,6 +77,24 @@ class TestFilterChunksByVersionRange:
         result = filter_chunks_by_version_range(chunks, "not.a.version", "also.not")
         assert result == chunks
 
+    def test_mixed_version_and_tuple_comparison_does_not_crash(self) -> None:
+        """Valid current/latest (parsed as Version) alongside a chunk whose
+        version parses only via the numeric-tuple fallback must not raise
+        TypeError from mixing Version and tuple. Found by fuzzing.
+
+        "1.-1" fails packaging.Version but splits to the int tuple (1, -1),
+        so the chunk takes the fallback path while current/latest are Versions.
+        """
+        chunks = [
+            {"version": "1.2.3", "content": "valid semver"},
+            {"version": "1.-1", "content": "tuple-only fallback"},
+        ]
+        # Must not raise; returns a list.
+        result = filter_chunks_by_version_range(chunks, "1.0.0", "3.0.0")
+        assert isinstance(result, list)
+
+
+
 
 class TestExtractChangelogLink:
     def test_markdown_link_with_keyword(self) -> None:

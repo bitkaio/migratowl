@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Coverage-guided fuzzing for untrusted-input parsers** ([#12](https://github.com/bitkaio/migratowl/issues/12)) —
+  Atheris harnesses (`fuzz/fuzz_parsers.py`, `fuzz/fuzz_changelog.py`) fuzz the manifest and changelog
+  parsers, which ingest content from arbitrary upstream repos. A new **Fuzz Smoke** CI job runs each
+  harness on every PR and fails on any discovered crash. Adds `atheris` to the dev dependency group
+  (Linux-only). See [`fuzz/README.md`](fuzz/README.md).
+
 - **Session awareness & crash recovery** — async scans now survive a process crash and can be resumed.
   Job state is persisted (SQLite by default; `MIGRATOWL_PERSISTENCE_BACKEND=memory` for CI/ephemeral),
   and the LangGraph agent state is checkpointed (`AsyncSqliteSaver`, keyed by `thread_id == job_id`).
@@ -40,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts the server, triggers a scan, and reports results. See `.claude/skills/local-e2e-test.md`.
 
 ### Fixed
+
+- **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
+  `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on
+  non-dict dependency sections / non-string version values; it returns `[]` or coerces safely.
+  `filter_chunks_by_version_range` no longer raises `TypeError` when a changelog has a malformed version
+  heading (e.g. `1.-1`) alongside valid version bounds — incomparable chunks are skipped.
 
 - **`skipped` list no longer includes non-outdated dependencies** — previously the LLM agent could
   incorrectly include up-to-date dependencies (e.g. `@popperjs/core`) in the `skipped` field of

@@ -132,13 +132,24 @@ def parse_package_json(content: str, manifest_path: str) -> list[Dependency]:
         return []
 
     data = json.loads(content)
+    if not isinstance(data, dict):
+        # Malformed manifest (top-level JSON is an int/str/list/null) — no deps.
+        return []
     deps: list[Dependency] = []
 
     all_deps: dict[str, str] = {}
-    all_deps.update(data.get("dependencies", {}))
-    all_deps.update(data.get("devDependencies", {}))
+    deps_section = data.get("dependencies", {})
+    dev_deps_section = data.get("devDependencies", {})
+    if isinstance(deps_section, dict):
+        all_deps.update(deps_section)
+    if isinstance(dev_deps_section, dict):
+        all_deps.update(dev_deps_section)
 
     for name, version_str in all_deps.items():
+        # Version values are normally strings; a malformed manifest may supply
+        # a non-string (e.g. {"express": 5}) — coerce defensively.
+        if not isinstance(version_str, str):
+            version_str = str(version_str)
         # Strip exactly one leading operator prefix; workspace: and bare versions are unaffected
         version = re.sub(r"^(?:\^|~|>=|<=|>|<|=)\s*", "", version_str, count=1)
         deps.append(
