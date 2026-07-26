@@ -6,6 +6,7 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Monday 06:00 UTC
   branch_protection_rule:
+  workflow_dispatch:  # allow manual re-scan (e.g. after fixing flagged issues)
 
 permissions:
   contents: read
