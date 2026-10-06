@@ -31,10 +31,6 @@ dependencies = [
 # Lift this cap once langchain-kubernetes supports the newer client.
 constraint-dependencies = [
     "k8s-agent-sandbox<0.3",
-    # Security floor on a transitive dep (pulled in via google-auth / kubernetes).
-    # Its direct dependents only declare open lower bounds, so the resolver would
-    # otherwise keep the vulnerable 46.0.7 (GHSA-537c-gmf6-5ccf).
-    "cryptography>=48.0.1",
     # Security floor: pyasn1 0.6.3 has 3 known vulns (PYSEC-2026-3455/3456/3457),
     # fixed in 0.6.4. Pulled in transitively via google-auth -> pyasn1-modules;
     # dependents declare open lower bounds, so pin the floor to the fixed release.
@@ -42,6 +38,28 @@ constraint-dependencies = [
     # Security floor: setuptools <83.0.0 has GHSA-h35f-9h28-mq5c (MANIFEST.in
     # exclusion bypass). Dev/build-only dep; not in the runtime export.
     "setuptools>=83.0.0",
+    # Security floors on transitive deps; dependents only declare open lower
+    # bounds, so pin each to the release that fixes the open Dependabot alerts.
+    # PyJWT: 2.15.0 is the first release outside every advisory range
+    # (incl. GHSA-42vr-xj54-vc7v and GHSA-gvp8-978c-rx2q); pulled in via
+    # langchain-kubernetes / kubernetes auth.
+    "pyjwt>=2.15.0",
+    # urllib3 <2.8.0: GHSA-8988-9cw3-xx77, GHSA-vxq7-64xx-v4gw, GHSA-gh4c-6fx4-qh6g.
+    "urllib3>=2.8.0",
+    # anyio <4.14.2: GHSA-82r6-8w77-94w6 (TLS host name spoofing), GHSA-5p39-cfhj-2xmp.
+    "anyio>=4.14.2",
+    # oauthlib <4.0.0: GHSA-xpv3-w29h-x7cv, GHSA-hj66-6f7g-4r5v.
+    "oauthlib>=4.0.0",
+    # cryptography <50.0.0: GHSA-g6cj-pr64-35w5 (PKCS#7 Bleichenbacher oracle).
+    # Transitive via google-auth / kubernetes (earlier floor: GHSA-537c-gmf6-5ccf).
+    "cryptography>=50.0.0",
+    # langgraph-checkpoint-sqlite <3.1.1: GHSA-47pj-3jcm-6whg.
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    # langgraph-sdk <0.4.4: CVE-2026-104873.
+    "langgraph-sdk>=0.4.4",
+    # click <8.3.3: PYSEC-2026-2132 (GHSA-47fr-3ffg-hgmw). Dev-only, via langgraph-cli;
+    # still scanned by Scorecard/OSV, which reads all of uv.lock.
+    "click>=8.3.3",
 ]
 
 [dependency-groups]
