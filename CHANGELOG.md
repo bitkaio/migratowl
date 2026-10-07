@@ -128,7 +128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the scan fails (previously failures only set a status). `callback_url` is now called on failure too,
   with `{job_id, state: "failed", error, repo_url, branch_name}`; the success body is unchanged. Both
   carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers, and a non-2xx reply is logged as a
-  warning. A failing comment no longer prevents the commit status from being set, or vice versa.
+  warning. A failing comment no longer prevents the commit status from being set, or vice versa. The error text
+  that reaches the PR comment, the callback and `GET /jobs` has URL credentials and GitHub/GitLab tokens
+  redacted; the raw text stays in the server log.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

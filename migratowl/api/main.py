@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -339,8 +340,23 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
         await _release_sandbox(app.state.manager, job_id)
 
 
+# Credentials that can surface in error text (e.g. a clone URL echoed by git).
+_URL_USERINFO = re.compile(r"(?<=://)[^/\s@'\"]+@")
+_TOKENS = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})")
+
+
+def redact_secrets(text: str) -> str:
+    """Strip URL credentials and known token formats before text leaves the server."""
+    return _TOKENS.sub("***", _URL_USERINFO.sub("***@", text))
+
+
 async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
-    """Mark the job failed and fire the failure side effects (at most once)."""
+    """Mark the job failed and fire the failure side effects (at most once).
+
+    ``error`` goes to the job store, the PR comment and the callback, so it is
+    redacted first; the raw text stays in the server log only.
+    """
+    error = redact_secrets(error)
     store: JobStore = app.state.job_store
     store.set_error(job.job_id, error)
     if job.side_effects_done:

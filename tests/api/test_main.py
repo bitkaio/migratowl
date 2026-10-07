@@ -698,3 +698,40 @@ class TestCallbackOnEveryOutcome:
         assert seen["x-migratowl-job-id"] == "job-1"
         assert seen["x-migratowl-job-state"] == "failed"
         assert any("returned 500" in r.getMessage() for r in caplog.records)
+
+
+class TestFailureErrorsAreRedacted:
+    def test_redact_strips_url_credentials_and_tokens(self) -> None:
+        from migratowl.api.main import redact_secrets
+
+        raw = (
+            "fatal: unable to access 'https://oauth2:glpat-abcdefghij1234567890@gitlab.com/g/r.git/': 403\n"
+            "remote: https://x-access-token:ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/o/r\n"
+            "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 and github_pat_11ABCDEFG0123456789_abcdefghijklmnop"
+        )
+        out = redact_secrets(raw)
+        for secret in ("glpat-abcdefghij1234567890", "oauth2:", "x-access-token:", "ghs_ABCDEF", "ghp_ABCDEF",
+                       "github_pat_11ABCDEFG"):
+            assert secret not in out
+        assert "https://***@gitlab.com/g/r.git/" in out
+        assert "unable to access" in out  # the useful part survives
+
+    @pytest.mark.asyncio
+    async def test_failure_sinks_get_the_redacted_error(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError(
+            "Failed to clone https://bob:ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/x/y"
+        )
+        with patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url="https://github.com/x/y", callback_url="https://cb.example/r", pr_number=1)
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        for sink in (cb.call_args.args[2]["error"], failed.call_args.kwargs["error"],
+                     app.state.job_store.get(job.job_id).error):
+            assert "ghp_" not in sink and "bob:" not in sink
+            assert sink == "Failed to clone https://***@github.com/x/y"
