@@ -45,7 +45,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _LEADING_OPERATORS = re.compile(r"^[\s^~>=<!v]+")
-_UPDATE_FAILURE = re.compile(r"^\s+(?P<name>[^:]+): FAILED \(exit -?\d+\)(?: — (?P<detail>.*))?$")
+# Lazy name match anchored on the suffix: Java names are groupId:artifactId and contain ":".
+_UPDATE_FAILURE = re.compile(r"^\s+(?P<name>.+?): FAILED \(exit -?\d+\)(?: — (?P<detail>.*))?$")
 
 
 class PipelineError(Exception):
@@ -228,21 +229,30 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
     provably not major. Unknown versions are never assumed safe.
     """
     passed = {v.ecosystem: v.passed for v in prepared.validations}
-    resolved: list[AnalysisReport] = []
-    pending: list[OutdatedDependency] = []
-    for dep in prepared.candidates:
-        safe = (
+
+    def is_safe(dep: OutdatedDependency) -> bool:
+        return (
             passed.get(dep.ecosystem.value, False)
             and dep.name not in prepared.update_failures
             and is_major_bump(dep.current_version, dep.latest_version) is False
         )
-        if safe:
+
+    # One name can appear in several manifests; the report has one verdict per name, so
+    # if any entry needs the LLM, every entry of that name does.
+    unsafe_names = {dep.name.lower() for dep in prepared.candidates if not is_safe(dep)}
+    resolved: list[AnalysisReport] = []
+    pending: list[OutdatedDependency] = []
+    seen_resolved: set[str] = set()
+    for dep in prepared.candidates:
+        key = dep.name.lower()
+        if key in unsafe_names:
+            pending.append(dep)
+        elif key not in seen_resolved:
+            seen_resolved.add(key)
             resolved.append(AnalysisReport(
                 dependency_name=dep.name, is_breaking=False, error_summary="",
                 changelog_citation="", suggested_human_fix="", confidence=1.0,
             ))
-        else:
-            pending.append(dep)
     return resolved, pending
 
 

@@ -42,38 +42,47 @@ from migratowl.models.schemas import OutdatedCheckMode, PackageVerdicts
 from migratowl.observability import _langfuse_handler
 from migratowl.registry import CheckOptions
 
-SYSTEM_PROMPT = """\
-You are Migratowl's analysis step. Code has already done the mechanical work: the
-repository is cloned to /home/user/workspace/source/, every outdated package was
-updated to its latest version in /home/user/workspace/main/, and main/ was built
-and tested. You receive the result as a brief that starts with "Repository:".
-
+# Only for agent-driven entrypoints (deep-agents-ui); the webhook runs the pipeline itself.
+PREPARE_SCAN_HINT = """\
 If you were not given a brief, call prepare_scan(repo_url, branch, max_deps) once
 to produce one. Never call it twice.
 
+"""
+
+SYSTEM_PROMPT = """\
+You are Migratowl's analysis step. Code has already done the mechanical work: the
+repository is cloned to /home/user/workspace/source/, an update of every outdated
+package to its latest version was attempted in /home/user/workspace/main/, and main/
+was built and tested. You receive the result as a brief that starts with "Repository:".
+
+""" + PREPARE_SCAN_HINT + """\
 Your job: for each package under "Packages to analyze", decide whether updating
-it breaks the project, and return one AnalysisReport per package.
+it breaks the project, and return one AnalysisReport per package. Apply the FIRST
+rule below that matches the package.
 
 ## How to decide
-- Validation PASSED for the package's ecosystem: the package is listed because it is
-  a major-version bump (or its bump size is unknown). Call fetch_changelog_tool for it,
-  look for breaking changes, set is_breaking accordingly, confidence=0.9, and cite the
-  changelog.
-- Validation FAILED: read the output tail and give each package a confidence between
-  0.0 and 1.0 that it caused the failure:
-  - the error names the package, one of its modules or APIs → 0.8 or higher
-  - a large major jump with no direct mention → 0.3–0.6
-  - no plausible link → below 0.3. The build stopped at the first error, so a package
-    not reached by the failing run is not proven safe; a major bump keeps confidence ≥ 0.3.
-- confidence = 0 only when the package cannot plausibly be involved; report it directly
-  with is_breaking=false and do not delegate it.
-- confidence ≥ {confidence_threshold}: call fetch_changelog_tool, then report
-  is_breaking=true with error_summary, changelog_citation and suggested_human_fix.
-- 0 < confidence < {confidence_threshold}: delegate to the "package-analyzer" subagent
-  via task() for isolated testing. Dispatch ONE package at a time, sequentially — never
-  in parallel. Give it name, current_version, latest_version, ecosystem.
-- A package under "Update failures" could not be installed at its latest version:
-  report is_breaking=true, confidence=0.9, error_summary = the failure detail.
+1. The package is listed under "Update failures": it could not be installed at its
+   latest version. Report is_breaking=true, confidence=0.9, error_summary = the
+   failure detail. Do nothing else for it.
+2. Validation PASSED for the package's ecosystem: the build and tests are green with
+   the update, so the package is listed only because it is a major-version bump (or
+   its bump size is unknown). Call fetch_changelog_tool for it. Report is_breaking=true
+   only if the changelog names a breaking change that this project plausibly uses;
+   otherwise is_breaking=false. Use confidence=0.9 and cite the changelog.
+3. Validation FAILED for the package's ecosystem: read the output tail and give the
+   package a confidence between 0.0 and 1.0 that it caused the failure:
+   - the error names the package, one of its modules or APIs → 0.8 or higher
+   - a large major jump with no direct mention → 0.3–0.6
+   - no plausible link → below 0.3. The build stopped at the first error, so a package
+     not reached by the failing run is not proven safe; a major bump keeps confidence ≥ 0.3.
+   Then, still for a FAILED ecosystem only:
+   - confidence ≥ {confidence_threshold}: call fetch_changelog_tool, then report
+     is_breaking=true with error_summary, changelog_citation and suggested_human_fix.
+   - 0 < confidence < {confidence_threshold}: delegate to the "package-analyzer" subagent
+     via task() for isolated testing. Dispatch ONE package at a time, sequentially — never
+     in parallel. Give it name, current_version, latest_version, ecosystem.
+   - confidence = 0 only when the package cannot plausibly be involved; report it directly
+     with is_breaking=false and do not delegate it.
 
 ## Important Rules
 - Only call fetch_changelog_tool for packages that are a major bump or that the
@@ -162,6 +171,7 @@ def create_migratowl_agent(
     manager: KubernetesSandboxManager,
     *,
     tools: MigratowlTools | None = None,
+    include_prepare_scan: bool = True,
     settings: Settings | None = None,
     mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
     include_prerelease: bool = False,
@@ -176,6 +186,8 @@ def create_migratowl_agent(
             acquisition via LangGraph's create_setup_node() mechanism.
         tools: Prebuilt sandbox tools (see ``build_tools``). Built here when ``None``;
             pass them to share one tool set with the deterministic pipeline.
+        include_prepare_scan: Give the agent the ``prepare_scan`` tool. ``False`` when the caller
+            already ran the pipeline (webhook), so a model cannot re-run it without the payload filters.
         settings: Optional settings override; defaults to ``get_settings()``.
         mode: How to resolve the latest version — SAFE respects declared semver
             constraints, NORMAL compares against the global maximum version.
@@ -202,8 +214,9 @@ def create_migratowl_agent(
             on_sandbox_acquired=on_sandbox_acquired,
         )
 
-    prepare_scan_tool = create_prepare_scan_tool(tools, tail_chars=settings.analysis_tail_chars)
-    agent_tools = [prepare_scan_tool, tools.fetch_changelog, tools.read_manifest]
+    agent_tools = [tools.fetch_changelog, tools.read_manifest]
+    if include_prepare_scan:
+        agent_tools.insert(0, create_prepare_scan_tool(tools, tail_chars=settings.analysis_tail_chars))
 
     # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model.
     # Prefer an injected shared limiter (bounds total API RPS across concurrent scans);
@@ -253,6 +266,8 @@ def create_migratowl_agent(
     )
 
     system_prompt = SYSTEM_PROMPT.format(confidence_threshold=settings.confidence_threshold)
+    if not include_prepare_scan:
+        system_prompt = system_prompt.replace(PREPARE_SCAN_HINT, "")
 
     return apply_session_injection(
         manager.create_agent(

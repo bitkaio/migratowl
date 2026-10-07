@@ -598,6 +598,7 @@ class TestRunScanPipeline:
         user_msg = mock_factory.return_value.ainvoke.await_args.args[0]["messages"][0][1]
         assert user_msg.startswith("Repository: https://github.com/x/y")
         assert "tools" in mock_factory.call_args.kwargs
+        assert mock_factory.call_args.kwargs["include_prepare_scan"] is False
         done = app.state.job_store.get(job.job_id)
         assert done.result.scan_result.manifests_found == ["pyproject.toml"]
         assert done.result.reports[0].is_breaking is True

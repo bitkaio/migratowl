@@ -106,20 +106,27 @@ def assemble_report(
     canonical name; unknown names are dropped, and candidates without a verdict go
     to ``skipped`` so they are never reported as safe by omission.
     """
-    canonical = {dep.name.lower(): dep.name for dep in prepared.candidates}
+    canonical: dict[str, str] = {}
+    for dep in prepared.candidates:
+        canonical.setdefault(dep.name.lower(), dep.name)
     by_name: dict[str, AnalysisReport] = {}
     for report in reports:
         name = canonical.get(report.dependency_name.lower())
-        if name is not None and name not in by_name:
+        if name is None:
+            continue
+        current = by_name.get(name)
+        # Several verdicts for one name (same package in several manifests): breaking wins.
+        if current is None or (report.is_breaking and not current.is_breaking):
             by_name[name] = report.model_copy(update={"dependency_name": name})
-    missing = [dep.name for dep in prepared.candidates if dep.name not in by_name]
+    names = list(canonical.values())
+    missing = [name for name in names if name not in by_name]
     if missing:
         logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))
     return ScanAnalysisReport(
         repo_url=payload.repo_url,
         branch_name=payload.branch_name,
         scan_result=prepared.scan_result,
-        reports=[by_name[dep.name] for dep in prepared.candidates if dep.name in by_name],
+        reports=[by_name[name] for name in names if name in by_name],
         skipped=prepared.skipped + missing,
         total_duration_seconds=round(duration, 1),
         total_input_tokens=tokens[0],

@@ -506,3 +506,28 @@ class TestAnalysisPrompt:
         assert "prepare_scan" in prompt
         assert "already" in prompt.lower()
         assert "clone_repo" not in prompt and "validate_project" not in prompt
+
+
+class TestWebhookAgentVariant:
+    def test_without_prepare_scan_drops_tool_and_prompt_hint(self) -> None:
+        mgr = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection"),
+        ):
+            create_migratowl_agent(mgr, settings=Settings(_env_file=None), include_prepare_scan=False)
+
+        kwargs = mgr.create_agent.call_args.kwargs
+        assert [t.name for t in kwargs["tools"]] == ["fetch_changelog_tool", "read_manifest"]
+        assert "prepare_scan" not in kwargs["system_prompt"]
+
+    def test_prompt_rules_ordered_for_literal_models(self) -> None:
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        update_rule = prompt.index('under "Update failures"')
+        passed_rule = prompt.index("Validation PASSED")
+        failed_rule = prompt.index("Validation FAILED")
+        threshold_rule = prompt.index("confidence ≥ 0.7")
+        assert update_rule < passed_rule < failed_rule < threshold_rule

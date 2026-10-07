@@ -43,3 +43,22 @@ async def test_reports_when_nothing_needs_analysis() -> None:
         out = await create_prepare_scan_tool(MagicMock(), tail_chars=100).ainvoke({"repo_url": "https://x/y"})
 
     assert "nothing to analyze" in out.lower()
+
+
+async def test_pipeline_error_returned_to_agent_not_raised() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+    from migratowl.pipeline import PipelineError
+
+    with patch("migratowl.agent.tools.prepare.prepare_scan", AsyncMock(side_effect=PipelineError("Failed to clone x"))):
+        out = await create_prepare_scan_tool(MagicMock(), tail_chars=100).ainvoke({"repo_url": "https://x/y"})
+
+    assert out == "prepare_scan failed: Failed to clone x"
+
+
+async def test_invalid_arguments_returned_to_agent_not_raised() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+
+    tool = create_prepare_scan_tool(MagicMock(), tail_chars=100)
+    out = await tool.ainvoke({"repo_url": "https://x/y", "max_deps": 0})
+
+    assert out.startswith("prepare_scan failed:")

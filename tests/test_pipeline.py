@@ -291,3 +291,25 @@ class TestAnalysisBrief:
         assert "python: FAILED at step \"test\"" in brief
         assert "cannot import name 'escape' from 'flask'" in brief
         assert "flask: warning only" in brief
+
+
+class TestReviewFixes:
+    def test_java_coordinates_update_failure_parsed(self) -> None:
+        from migratowl.pipeline import parse_update_failures
+
+        summary = "Errors updating packages in main/\n  org.springframework:spring-core: FAILED (exit 1) — boom\n"
+
+        assert parse_update_failures(summary) == {"org.springframework:spring-core": "boom"}
+
+    def test_same_name_in_two_manifests_pending_together(self) -> None:
+        from migratowl.models.schemas import Ecosystem
+        from migratowl.pipeline import presolve
+
+        minor = _dep("lodash", "^4.17.0", "4.17.21", Ecosystem.NODEJS)
+        major = _dep("lodash", "^3.10.0", "4.17.21", Ecosystem.NODEJS)
+        prepared = _prepared([minor, major], [{"ecosystem": "nodejs", "passed": True}])
+
+        resolved, pending = presolve(prepared)
+
+        assert resolved == []
+        assert [d.current_version for d in pending] == ["^4.17.0", "^3.10.0"]

@@ -109,3 +109,29 @@ class TestAssembleReport:
         assert [r.dependency_name for r in report.reports] == ["Flask"]
         assert report.reports[0].is_breaking is True
         assert report.skipped == ["requests"]
+
+
+class TestAssembleDuplicateNames:
+    def test_breaking_verdict_wins_and_name_reported_once(self) -> None:
+        from migratowl.api.helpers import assemble_report
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanResult
+        from migratowl.pipeline import PreparedScan
+
+        deps = [
+            OutdatedDependency(name="lodash", current_version=v, latest_version="4.17.21", ecosystem=Ecosystem.NODEJS,
+                               manifest_path=m)
+            for v, m in (("^4.17.0", "a/package.json"), ("^3.10.0", "b/package.json"))
+        ]
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=deps, manifests_found=[], scan_duration_seconds=0.0),
+            candidates=deps,
+            skipped=[],
+        )
+        safe = _verdict("lodash").model_copy(update={"confidence": 1.0})
+        report = assemble_report(
+            ScanWebhookPayload(repo_url="https://x/y"), prepared, [safe, _verdict("lodash", True)],
+            duration=0, tokens=(0, 0),
+        )
+
+        assert [(r.dependency_name, r.is_breaking) for r in report.reports] == [("lodash", True)]
+        assert report.skipped == []

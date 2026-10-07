@@ -289,6 +289,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 graph = create_migratowl_agent(
                     app.state.manager,
                     tools=tools,
+                    include_prepare_scan=False,
                     settings=settings,
                     mode=job.payload.mode,
                     include_prerelease=job.payload.include_prerelease,
