@@ -3,6 +3,7 @@
 """Tests for FastAPI webhook app."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,17 +15,42 @@ from migratowl.config import Settings
 
 
 def _ok_result() -> dict:
-    """Minimal successful agent result: a valid structured report."""
-    from migratowl.models.schemas import ScanAnalysisReport, ScanResult
+    """Minimal successful agent result: verdicts for the fake pipeline's one pending package."""
+    from migratowl.models.schemas import AnalysisReport, PackageVerdicts
 
-    report = ScanAnalysisReport(
-        repo_url="https://github.com/x/y",
-        branch_name="main",
-        scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0),
-        reports=[],
-        total_duration_seconds=0.0,
+    verdict = AnalysisReport(dependency_name="flask", is_breaking=True, error_summary="ImportError",
+                             changelog_citation="", suggested_human_fix="", confidence=0.9)
+    return {"messages": [], "structured_response": PackageVerdicts(reports=[verdict])}
+
+
+def _prepared_scan(*, pending: bool = True):
+    from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanResult
+    from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+    dep = OutdatedDependency(name="flask", current_version="2.0", latest_version="3.0" if pending else "2.1",
+                             ecosystem=Ecosystem.PYTHON, manifest_path="pyproject.toml")
+    validation = EcosystemValidation(
+        ecosystem="python",
+        passed=not pending,
+        failed_step="test" if pending else None,
+        output_tail="ImportError: flask" if pending else "",
     )
-    return {"messages": [], "structured_response": report}
+    return PreparedScan(
+        scan_result=ScanResult(
+            all_deps=[], outdated=[dep], manifests_found=["pyproject.toml"], scan_duration_seconds=0.0
+        ),
+        candidates=[dep],
+        skipped=[],
+        validations=[validation],
+    )
+
+
+@pytest.fixture(autouse=True)
+def fake_pipeline():
+    """Every _run_scan test gets a pipeline that needs the LLM for one package (flask)."""
+    with patch("migratowl.agent.factory.build_tools", return_value=MagicMock()) as mock_build, \
+         patch("migratowl.pipeline.prepare_scan", AsyncMock(return_value=_prepared_scan())) as mock_prepare:
+        yield SimpleNamespace(build_tools=mock_build, prepare_scan=mock_prepare)
 
 
 @pytest.fixture
@@ -247,27 +273,13 @@ class TestLifespanConfiguration:
 class TestRunScanSetsModelName:
     @pytest.mark.asyncio
     async def test_model_name_set_on_report(self, app) -> None:
-        from migratowl.models.schemas import ScanAnalysisReport, ScanResult, ScanWebhookPayload
-
-        completed_report = ScanAnalysisReport(
-            repo_url="https://github.com/x/y",
-            branch_name="main",
-            scan_result=ScanResult(
-                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=1.0
-            ),
-            reports=[],
-            total_duration_seconds=3.0,
-        )
-
+        from migratowl.models.schemas import ScanWebhookPayload
 
         with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
              patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
              patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
             mock_graph = AsyncMock()
-            mock_graph.ainvoke.return_value = {
-                "structured_response": completed_report,
-                "messages": [],
-            }
+            mock_graph.ainvoke.return_value = _ok_result()
             mock_factory.return_value = mock_graph
 
             payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
@@ -306,20 +318,16 @@ class TestRunScanSetsModelName:
             assert call_kwargs["rate_limiter"] is sentinel_rl
 
     @pytest.mark.asyncio
-    async def test_run_scan_persists_sandbox_id(self, app) -> None:
-        """When the agent acquires a sandbox, its id is persisted to the job store."""
+    async def test_run_scan_persists_sandbox_id(self, app, fake_pipeline) -> None:
+        """When the pipeline's tools acquire a sandbox, its id is persisted to the job store."""
         from migratowl.models.schemas import ScanWebhookPayload
 
-        def fake_factory(*args, **kwargs):
-            # Simulate lazy acquisition firing the callback during the scan.
-            kwargs["on_sandbox_acquired"]("sbx-run")
-            graph = AsyncMock()
-            graph.ainvoke.return_value = {"messages": []}
-            return graph
+        fake_pipeline.build_tools.side_effect = lambda *a, **kw: kw["on_sandbox_acquired"]("sbx-run") or MagicMock()
 
-        with patch("migratowl.agent.factory.create_migratowl_agent", side_effect=fake_factory), \
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
              patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
              patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_factory.return_value.ainvoke = AsyncMock(return_value=_ok_result())
             payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
             job = app.state.job_store.create(payload)
 
@@ -558,3 +566,53 @@ class TestRunScanWithoutReport:
         assert "structured report" in job["error"]
         mock_failed.assert_awaited_once()
         mock_done.assert_not_awaited()
+
+
+class TestRunScanPipeline:
+    async def test_no_llm_when_nothing_pending(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        fake_pipeline.prepare_scan.return_value = _prepared_scan(pending=False)
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock):
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        mock_factory.assert_not_called()
+        done = app.state.job_store.get(job.job_id)
+        assert done.state == "completed"
+        assert done.result.reports[0].dependency_name == "flask"
+        assert done.result.reports[0].confidence == 1.0
+
+    async def test_llm_gets_brief_and_report_is_assembled(self, app) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock):
+            mock_factory.return_value.ainvoke = AsyncMock(return_value=_ok_result())
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        user_msg = mock_factory.return_value.ainvoke.await_args.args[0]["messages"][0][1]
+        assert user_msg.startswith("Repository: https://github.com/x/y")
+        assert "tools" in mock_factory.call_args.kwargs
+        done = app.state.job_store.get(job.job_id)
+        assert done.result.scan_result.manifests_found == ["pyproject.toml"]
+        assert done.result.reports[0].is_breaking is True
+
+    async def test_pipeline_error_fails_job_with_message(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError("Failed to clone https://github.com/x/y")
+        with patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as mock_failed:
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        failed = app.state.job_store.get(job.job_id)
+        assert failed.state == "failed"
+        assert failed.error == "Failed to clone https://github.com/x/y"
+        mock_failed.assert_awaited_once()

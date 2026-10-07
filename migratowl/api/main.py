@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -30,7 +31,12 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
-from migratowl.api.helpers import ReportExtractionError, build_user_message, extract_report  # noqa: E402
+from migratowl.api.helpers import (  # noqa: E402
+    ReportExtractionError,
+    _accumulate_tokens,
+    assemble_report,
+    extract_verdicts,
+)
 from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
 from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
@@ -41,6 +47,7 @@ from migratowl.models.schemas import (  # noqa: E402
     ScanWebhookPayload,
     WebhookAcceptedResponse,
 )
+from migratowl.pipeline import PipelineError  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -260,24 +267,45 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     app.state.manager, job, store, app.state.checkpointer
                 )
 
-            from migratowl.agent.factory import create_migratowl_agent
+            from migratowl.agent.factory import build_tools, create_migratowl_agent
+            from migratowl.pipeline import build_analysis_brief, prepare_scan, presolve
 
-            graph = create_migratowl_agent(
+            settings = app.state.settings
+            config = {"configurable": {"thread_id": job_id}}
+            started = time.monotonic()
+            tools = build_tools(
                 app.state.manager,
-                settings=app.state.settings,
+                settings=settings,
                 mode=job.payload.mode,
                 include_prerelease=job.payload.include_prerelease,
-                rate_limiter=getattr(app.state, "rate_limiter", None),
-                checkpointer=getattr(app.state, "checkpointer", None),
                 on_sandbox_acquired=_persist_sandbox_id,
             )
-            user_msg = build_user_message(job.payload)
-            result = await graph.ainvoke(
-                {"messages": [("user", user_msg)]},
-                config={"configurable": {"thread_id": job_id}},
+            prepared = await prepare_scan(tools, job.payload, config, tail_chars=settings.analysis_tail_chars)
+            resolved, pending = presolve(prepared)
+
+            verdicts: list = []
+            tokens = (0, 0)
+            if pending:
+                graph = create_migratowl_agent(
+                    app.state.manager,
+                    tools=tools,
+                    settings=settings,
+                    mode=job.payload.mode,
+                    include_prerelease=job.payload.include_prerelease,
+                    rate_limiter=getattr(app.state, "rate_limiter", None),
+                    checkpointer=getattr(app.state, "checkpointer", None),
+                )
+                result = await graph.ainvoke(
+                    {"messages": [("user", build_analysis_brief(job.payload, prepared, pending))]},
+                    config=config,
+                )
+                verdicts = extract_verdicts(result)
+                tokens = _accumulate_tokens(result.get("messages", []))
+
+            report = assemble_report(
+                job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
             )
-            report = extract_report(result, job.payload)
-            report.model_name = app.state.settings.model_name
+            report.model_name = settings.model_name
             store.set_result(job_id, report)
 
             # Terminal side effects fire at most once across the original run and
@@ -289,7 +317,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 await notify_pr_done(job.payload, report, app.state.settings)
                 store.mark_side_effects_done(job_id)
 
-        except ReportExtractionError as exc:
+        except (PipelineError, ReportExtractionError) as exc:
             logger.error("Scan for job %s produced no report: %s", job_id, exc)
             store.set_error(job_id, str(exc))
             if not job.side_effects_done:
