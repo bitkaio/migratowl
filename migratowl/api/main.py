@@ -29,6 +29,7 @@ load_dotenv()  # inject .env into os.environ so third-party SDKs (anthropic, etc
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
+from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
 from migratowl.api.helpers import (  # noqa: E402
@@ -271,7 +272,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             from migratowl.pipeline import build_analysis_brief, prepare_scan, presolve
 
             settings = app.state.settings
-            config = {"configurable": {"thread_id": job_id}}
+            config: RunnableConfig = {"configurable": {"thread_id": job_id}}
             started = time.monotonic()
             tools = build_tools(
                 app.state.manager,
