@@ -41,6 +41,12 @@ def parse_requirements_txt(content: str, manifest_path: str) -> list[Dependency]
         if comment_idx != -1:
             line = line[:comment_idx].strip()
 
+        # Strip PEP 508 environment markers (`; python_version < "3.8"`)
+        if ";" in line:
+            line = line[: line.index(";")].strip()
+        if not line:
+            continue
+
         # Split name from version spec
         # Sort longest-first so ">=" is matched before ">" (avoids prefix collision)
         name = line

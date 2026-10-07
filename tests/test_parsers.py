@@ -532,3 +532,24 @@ class TestParseBuildGradle:
 
     def test_empty_content(self) -> None:
         assert parse_build_gradle("", "build.gradle") == []
+
+class TestParseRequirementsTxtMarkers:
+    """PEP 508 environment markers (`; python_version < "3.8"`) are not part of the version."""
+
+    def _one(self, line: str) -> tuple[str, str]:
+        deps = parse_requirements_txt(line + "\n", MANIFEST_PATH)
+        assert len(deps) == 1
+        return deps[0].name, deps[0].current_version
+
+    def test_pinned_with_marker(self) -> None:
+        assert self._one('foo==1.0; python_version < "3.8"') == ("foo", "1.0")
+
+    def test_range_with_spaced_marker(self) -> None:
+        assert self._one('bar>=2.0 ; sys_platform == "linux"') == ("bar", ">=2.0")
+
+    def test_marker_without_version(self) -> None:
+        # The ">=" inside the marker must not be read as the version operator.
+        assert self._one('baz ; python_version >= "3.8"') == ("baz", "")
+
+    def test_marker_and_inline_comment(self) -> None:
+        assert self._one('qux==3.1 ; os_name == "nt"  # windows only') == ("qux", "3.1")
