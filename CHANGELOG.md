@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `git clone` and package installs failed. New `k8s/sandbox-egress-raw.yaml` re-opens DNS to kube-dns
   and HTTP/HTTPS to public addresses only; ingress, pod/service CIDRs, node networks and cloud metadata
   stay blocked. Apply it next to `k8s/rbac-raw.yaml`.
+- **Python per-package runs were not isolated** — every working folder installed into the same
+  site-packages, so the package-analyzer's single-package run tested against whatever `main/` had
+  already upgraded. Each folder now gets its own venv (`<workspace>/.venvs/<folder>`), used by
+  `update_dependencies`, `validate_project` and `execute_project`. Bumped versions are also re-applied
+  after `pip install -e .`, which could otherwise downgrade them back inside the project's declared
+  range (e.g. `requests<3`) and test the old version.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

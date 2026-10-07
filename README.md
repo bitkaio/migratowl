@@ -227,7 +227,8 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 /home/user/workspace/
 ├── source/          # Immutable clone — never executed
 ├── main/            # All deps bumped, executed in Phase 2
-└── <package-name>/  # Per-package isolation (created on demand by subagent)
+├── <package-name>/  # Per-package isolation (created on demand by subagent)
+└── .venvs/<folder>/ # One Python venv per working folder (Python projects only)
 ```
 
 ---

@@ -375,3 +375,27 @@ class TestStepTruncation:
 
         assert step["truncated"] is False
         assert step["output"] == "ok"
+
+
+class TestValidatePythonVenv:
+    def _commands(self, folder: str = "main") -> list[str]:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),           # install
+            ExecResult(output="", exit_code=0),           # detect → found
+            ExecResult(output="1 passed\n", exit_code=0),  # pytest
+        ]
+        _make_tool(backend).invoke({"folder_name": folder, "ecosystem": "python"})
+        return [c[0][0] for c in backend.execute.call_args_list]
+
+    def test_install_and_tests_run_in_folder_venv(self) -> None:
+        install_cmd, _, test_cmd = self._commands("requests")
+        activate = f". {DEFAULT_WORKSPACE}/.venvs/requests/bin/activate"
+        assert activate in install_cmd
+        assert activate in test_cmd
+
+    def test_reapplies_pins_after_project_install(self) -> None:
+        install_cmd = self._commands()[0]
+        pins = f"{DEFAULT_WORKSPACE}/.venvs/main/pins"
+        assert f'cat "{pins}"/* | pip install -r /dev/stdin' in install_cmd
+        assert install_cmd.index("pip install -r requirements.txt") < install_cmd.index(f'cat "{pins}"')

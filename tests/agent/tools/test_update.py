@@ -544,3 +544,36 @@ class TestUpdateJava:
 
         # Should still attempt something and not crash
         assert "com.example:library" in result
+
+class TestPythonVenvIsolation:
+    """Each working folder installs into its own venv, so per-package runs are isolated."""
+
+    def _update(self, folder: str, name: str = "requests", version: str = "2.31.0") -> str:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        tool = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        tool.invoke({
+            "folder_name": folder,
+            "ecosystem": "python",
+            "packages_json": json.dumps([{"name": name, "latest_version": version}]),
+        })
+        return backend.execute.call_args_list[0][0][0]
+
+    def test_pip_runs_inside_the_folder_venv(self) -> None:
+        cmd = self._update("main")
+        venv = f"{DEFAULT_WORKSPACE}/.venvs/main"
+        assert f"python3 -m venv {venv}" in cmd
+        assert f". {venv}/bin/activate" in cmd
+        assert cmd.index("activate") < cmd.index("pip install requests==2.31.0")
+
+    def test_each_folder_gets_its_own_venv(self) -> None:
+        assert f"{DEFAULT_WORKSPACE}/.venvs/requests/bin/activate" in self._update("requests")
+        assert f"{DEFAULT_WORKSPACE}/.venvs/main/" not in self._update("requests")
+
+    def test_records_pin_after_successful_install(self) -> None:
+        # validate_project re-applies pins after `pip install -e .`, which would
+        # otherwise downgrade the bump to whatever the project's constraint allows.
+        cmd = self._update("main")
+        pin = f'echo "requests==2.31.0" > "{DEFAULT_WORKSPACE}/.venvs/main/pins/requests"'
+        assert pin in cmd
+        assert cmd.index("pip install requests==2.31.0 &&") < cmd.index(pin)

@@ -21,7 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from migratowl.agent.tools.update import _sh
+from migratowl.agent.tools.update import _sh, activate_venv, reapply_pins, venv_path
 
 
 def create_validate_project_tool(
@@ -66,7 +66,9 @@ def create_validate_project_tool(
         elif ecosystem == "rust":
             result = _validate_rust(backend, folder_path, max_output_chars)
         elif ecosystem == "python":
-            result = _validate_python(backend, folder_path, max_output_chars)
+            result = _validate_python(
+                backend, folder_path, venv_path(workspace_path, folder_name), max_output_chars
+            )
         elif ecosystem == "nodejs":
             result = _validate_nodejs(backend, folder_path, max_output_chars)
         elif ecosystem == "java":
@@ -154,16 +156,18 @@ def _validate_rust(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
     return {"steps": steps, "passed": _is_passing(steps)}
 
 
-def _validate_python(backend: Any, folder_path: str, max_chars: int) -> dict[str, Any]:
+def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
 
-    # Step 1: Install — try test extras first, fall back to bare install, then requirements.txt
+    # Step 1: Install into the folder's venv — try test extras first, fall back to
+    # bare install, then requirements.txt — then re-apply the bumped versions.
     install_cmd = (
-        f"cd {folder_path} && "
+        f"{activate_venv(venv)} && cd {folder_path} && ("
         f"pip install -e '.[tests]' 2>/dev/null || "
         f"pip install -e '.[test]' 2>/dev/null || "
         f"pip install -e . 2>/dev/null || "
         f"pip install -r requirements.txt"
+        f") && {reapply_pins(venv)}"
     )
     install_r = backend.execute(_sh(install_cmd))
     steps.append(_step(
@@ -186,7 +190,7 @@ def _validate_python(backend: Any, folder_path: str, max_chars: int) -> dict[str
         return {"steps": steps, "passed": True}
 
     # Step 3: Run pytest
-    test_r = backend.execute(_sh(f"cd {folder_path} && python3 -m pytest -x --tb=short"))
+    test_r = backend.execute(_sh(f"{activate_venv(venv)} && cd {folder_path} && python3 -m pytest -x --tb=short"))
     steps.append(_step("test", "python3 -m pytest -x --tb=short", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 

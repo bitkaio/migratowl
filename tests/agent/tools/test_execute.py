@@ -158,3 +158,15 @@ class TestExecuteProjectTool:
         test_cmd = backend.execute.call_args_list[1][0][0]
         assert f"{DEFAULT_WORKSPACE}/requests" in install_cmd
         assert f"{DEFAULT_WORKSPACE}/requests" in test_cmd
+
+class TestExecuteProjectVenv:
+    def test_activates_folder_venv_when_present(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        tool = create_execute_project_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        tool.invoke({"folder_name": "requests", "install_command": "pip install -e .", "test_command": "pytest"})
+
+        venv = f"{DEFAULT_WORKSPACE}/.venvs/requests"
+        for call in backend.execute.call_args_list:
+            assert f'if [ -f "{venv}/bin/activate" ]; then . "{venv}/bin/activate"; fi' in call[0][0]

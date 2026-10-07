@@ -71,6 +71,7 @@ def create_update_dependencies_tool(
                 ecosystem, name, version, folder_path,
                 current_version=current_version,
                 manifest_abs_path=manifest_abs,
+                venv=venv_path(workspace_path, folder_name),
             )
             pkg_succeeded = True
             for cmd in cmds:
@@ -132,6 +133,32 @@ def _sh(cmd: str) -> str:
     externally-managed containers (harmless for non-pip commands).
     """
     return f"sh -c 'export PIP_BREAK_SYSTEM_PACKAGES=1 && {cmd}'"
+
+
+def venv_path(workspace_path: str, folder_name: str) -> str:
+    """Python venv for one working folder.
+
+    Every folder gets its own venv so a per-package run never sees packages
+    another folder installed. It lives outside the project tree so test
+    discovery and manifest scans never walk into it.
+    """
+    return f"{workspace_path}/.venvs/{folder_name}"
+
+
+def activate_venv(venv: str) -> str:
+    """Shell fragment that creates the venv on first use and activates it."""
+    return f"(test -x {venv}/bin/python || python3 -m venv {venv}) && . {venv}/bin/activate"
+
+
+def reapply_pins(venv: str) -> str:
+    """Shell fragment that re-installs the versions update_dependencies pinned.
+
+    ``pip install -e .`` resolves the project's own constraints and can
+    downgrade a bumped package (e.g. ``requests<3``); re-applying the pins
+    afterwards keeps the bumped versions under test.
+    """
+    pins = f"{venv}/pins"
+    return f'if [ -d "{pins}" ]; then cat "{pins}"/* | pip install -r /dev/stdin; fi'
 
 
 def _is_major_bump(current: str, latest: str) -> bool:
@@ -220,6 +247,7 @@ def _build_update_cmd(
     *,
     current_version: str | None = None,
     manifest_abs_path: str | None = None,
+    venv: str | None = None,
 ) -> list[str]:
     """Build the shell command(s) to update a single package.
 
@@ -227,7 +255,12 @@ def _build_update_cmd(
     non-zero exit code (the caller is responsible for the break).
     """
     if ecosystem == "python":
-        cmds = [_sh(f"cd {folder_path} && pip install {name}=={version}")]
+        venv = venv or venv_path(os.path.dirname(folder_path), os.path.basename(folder_path))
+        pins = f"{venv}/pins"
+        cmds = [_sh(
+            f"{activate_venv(venv)} && cd {folder_path} && pip install {name}=={version} && "
+            f'mkdir -p "{pins}" && echo "{name}=={version}" > "{pins}/{name}"'
+        )]
         if current_version and manifest_abs_path:
             cmds.append(
                 _build_python_manifest_patch_cmd(
