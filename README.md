@@ -174,37 +174,40 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 
 ## How It Works
 
-Migratowl runs a four-phase agent workflow inside an ephemeral Kubernetes sandbox.
+Migratowl runs inside an ephemeral Kubernetes sandbox. Phases 1–2 are mechanical and run as
+plain code (`migratowl/pipeline.py`); the LLM only does the judgement step (Phase 3), and the
+final report is assembled in code. This keeps the model's context small, so smaller and free
+models can run scans too.
 
 ```mermaid
 flowchart TB
-    subgraph Phase1["Phase 1 — Setup"]
+    subgraph Phase1["Phase 1 — Setup (code)"]
         A[POST /webhook] --> B[clone_repo]
-        B --> C[detect_languages]
-        C --> D[scan_dependencies]
+        B --> D[scan_dependencies]
         D --> E[check_outdated_deps]
+        E --> S["select candidates<br/>(exclude/check deps, ecosystems, max_deps)"]
     end
 
-    subgraph Phase2["Phase 2 — Main Analysis"]
-        F["copy_source('main')"] --> G["update_dependencies (all)"]
-        G --> H["execute_project (install + test)"]
+    subgraph Phase2["Phase 2 — Update + validate (code)"]
+        F["copy_source('main')"] --> G["update_dependencies (all, per ecosystem)"]
+        G --> H["validate_project (build + test, per ecosystem)"]
     end
 
-    subgraph Phase3["Phase 3 — Subagent Routing"]
-        I{All tests pass?}
-        I -->|Yes| J["Every package: is_breaking=false"]
-        I -->|No| K{Clear attribution?}
-        K -->|Yes| L["fetch_changelog + write report"]
-        K -->|No| M["Delegate to package-analyzer subagent"]
+    subgraph Phase3["Phase 3 — Analysis (LLM)"]
+        P{"Ecosystem green and<br/>not a major bump?"}
+        P -->|Yes| J["is_breaking=false, confidence 1.0<br/>(no LLM call)"]
+        P -->|No| K["Agent reads a short brief"]
+        K --> L["fetch_changelog + verdict"]
+        K --> M["Delegate to package-analyzer subagent"]
     end
 
-    subgraph Phase4["Phase 4 — Compile Results"]
-        N["Merge reports from main agent + subagents"]
-        N --> O["ScanAnalysisReport (POST to callback_url)"]
+    subgraph Phase4["Phase 4 — Compile Results (code)"]
+        N["assemble ScanAnalysisReport"]
+        N --> O["Job result / PR comment / callback_url"]
     end
 
-    E -->|outdated dep list| F
-    H -->|pass/fail + error output| I
+    S -->|candidates| F
+    H -->|pass/fail + output tail| P
     J --> N
     L --> N
     M --> N
@@ -490,6 +493,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_CONFIDENCE_THRESHOLD` | `0.7` | Packages above this are analyzed directly; below → subagent |
 | `MIGRATOWL_SCAN_REGISTRY_CONCURRENCY` | `10` | Concurrent registry queries when checking outdated deps |
 | `MIGRATOWL_MAX_OUTPUT_CHARS` | `30000` | Truncation limit for sandbox command output |
+| `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
 
@@ -645,9 +649,11 @@ flowchart TB
         H["GET /healthz"]
     end
 
+    Pipe["Pipeline (code)<br/>clone · scan · outdated · update · validate"]
+
     subgraph Agent["Migratowl Agent<br/>(deepagents / LangGraph)"]
         direction TB
-        Tools["Tools:<br/>• clone_repo<br/>• detect_languages<br/>• scan_dependencies<br/>• check_outdated_deps<br/>• copy_source<br/>• update_dependencies<br/>• execute_project<br/>• fetch_changelog<br/>• read_manifest<br/>• patch_manifest"]
+        Tools["Tools:<br/>• prepare_scan (runs the pipeline)<br/>• fetch_changelog<br/>• read_manifest"]
         Sub["Subagent:<br/>• package-analyzer"]
     end
 
@@ -656,7 +662,9 @@ flowchart TB
     end
 
     Client["HTTP Client"] --> W
-    W -->|"asyncio.create_task"| Agent
+    W -->|"asyncio.create_task"| Pipe
+    Pipe -->|"brief (only if needed)"| Agent
+    Pipe -->|"executes via"| Pod
     Agent -->|"executes via"| Pod
 ```
 
@@ -669,10 +677,10 @@ migratowl/
 ├── api/
 │   ├── main.py          # FastAPI app, /webhook + /jobs endpoints, lifespan
 │   ├── jobs.py          # In-memory JobStore (PENDING→RUNNING→COMPLETED|FAILED)
-│   └── helpers.py       # build_user_message, extract_report
+│   └── helpers.py       # extract_verdicts, assemble_report
 ├── agent/
 │   ├── graph.py         # graph singleton + sandbox lifecycle (langgraph.json entrypoint)
-│   ├── factory.py       # create_migratowl_agent() — builds the LangGraph
+│   ├── factory.py       # build_tools(), create_migratowl_agent() — builds the LangGraph
 │   ├── sandbox.py       # KubernetesProvider init/teardown helpers
 │   ├── subagents.py     # package-analyzer subagent definition
 │   ├── session_graph.py # Patches ainvoke/astream to inject LangFuse session IDs
@@ -684,9 +692,11 @@ migratowl/
 │       ├── update.py    # update_dependencies
 │       ├── execute.py   # execute_project (runs install + test in sandbox)
 │       ├── changelog.py # fetch_changelog (PyPI / npm / GitHub / raw HTTP)
-│       └── manifest.py  # read_manifest, patch_manifest (sandbox file I/O)
+│       ├── manifest.py  # read_manifest, patch_manifest (sandbox file I/O)
+│       └── prepare.py   # prepare_scan (pipeline as an agent tool, for deep-agents-ui)
 ├── models/
 │   └── schemas.py       # All Pydantic models (ScanWebhookPayload, ScanAnalysisReport, …)
+├── pipeline.py          # Deterministic Phases 1–2, presolve, LLM brief
 ├── config.py            # pydantic-settings Settings class (MIGRATOWL_ prefix)
 ├── observability.py     # LangFuse CallbackHandler setup + session ID injection
 ├── registry.py          # Registry query logic (PyPI, npm, crates.io, Go proxy)

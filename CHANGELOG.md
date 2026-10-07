@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Scans run their mechanical phases in code** — cloning, dependency scanning, the outdated
+  check, updating `main/` and validation now run as a fixed pipeline (`migratowl/pipeline.py`)
+  instead of being driven by the LLM. `max_deps`, `exclude_deps`, `check_deps` and `ecosystems`
+  are enforced in code. Packages whose ecosystem passes validation with a non-major bump are
+  marked safe without an LLM call, and a scan with nothing to review makes no LLM call at all.
+  The LLM gets a short brief and returns only per-package verdicts; the final report is assembled
+  in code. The agent's tool list shrinks to `prepare_scan`, `fetch_changelog_tool` and
+  `read_manifest`. Makes small/free models usable and cuts token use for every model.
+  New setting `MIGRATOWL_ANALYSIS_TAIL_CHARS` (default `4000`).
+- **`validate_project` keeps the tail of long output** — the failure summary that test runners
+  print last is no longer cut off.
+
 ### Added
 
 - **Coverage-guided fuzzing for untrusted-input parsers** ([#12](https://github.com/bitkaio/migratowl/issues/12)) —
