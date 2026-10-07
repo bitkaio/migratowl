@@ -169,4 +169,4 @@ class TestExecuteProjectVenv:
 
         venv = f"{DEFAULT_WORKSPACE}/.venvs/requests"
         for call in backend.execute.call_args_list:
-            assert f'if [ -f "{venv}/bin/activate" ]; then . "{venv}/bin/activate"; fi' in call[0][0]
+            assert f"if [ -f {venv}/bin/activate ]; then . {venv}/bin/activate; fi" in call[0][0]

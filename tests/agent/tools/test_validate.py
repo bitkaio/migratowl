@@ -397,5 +397,5 @@ class TestValidatePythonVenv:
     def test_reapplies_pins_after_project_install(self) -> None:
         install_cmd = self._commands()[0]
         pins = f"{DEFAULT_WORKSPACE}/.venvs/main/pins"
-        assert f'cat "{pins}"/* | pip install -r /dev/stdin' in install_cmd
-        assert install_cmd.index("pip install -r requirements.txt") < install_cmd.index(f'cat "{pins}"')
+        assert f"cat {pins}/* | pip install -r /dev/stdin" in install_cmd
+        assert install_cmd.index("pip install -r requirements.txt") < install_cmd.index(f"cat {pins}")

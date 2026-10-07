@@ -21,6 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.update import q
 from migratowl.models.schemas import Ecosystem, LanguageDetection
 
 # Ordered by priority — first match for (project_root, ecosystem) wins.
@@ -50,7 +51,7 @@ def create_detect_languages_tool(
     )
 
     find_cmd = (
-        f"find {workspace_path} -maxdepth 5 "
+        f"find {q(workspace_path)} -maxdepth 5 "
         f"{exclude_clauses} "
         f"\\( {name_clauses} \\) -type f"
     )

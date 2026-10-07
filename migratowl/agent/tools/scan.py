@@ -22,6 +22,7 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.update import q
 from migratowl.models.schemas import Dependency, Ecosystem
 from migratowl.parsers import (
     parse_build_gradle,
@@ -64,7 +65,7 @@ def create_scan_dependencies_tool(
     exclude_clauses = " ".join(f"-not -path '*/{d}/*'" for d in _NOISE_DIRS)
 
     find_cmd = (
-        f"find {workspace_path} -maxdepth 5 "
+        f"find {q(workspace_path)} -maxdepth 5 "
         f"{exclude_clauses} "
         f"\\( {name_clauses} \\) -type f"
     )
@@ -98,7 +99,7 @@ def create_scan_dependencies_tool(
 
             parser_fn, _ecosystem = parser_entry
 
-            cat_result = backend.execute(f"cat {filepath}")
+            cat_result = backend.execute(f"cat {q(filepath)}")
             if cat_result.exit_code != 0:
                 continue
 

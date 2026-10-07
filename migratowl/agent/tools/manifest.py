@@ -19,7 +19,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from migratowl.agent.tools.update import _manifest_patch_cmd
+from migratowl.agent.tools.update import _manifest_patch_cmd, q
 
 
 def create_read_manifest_tool(get_backend: Callable[[], Any], workspace_path: str) -> Any:
@@ -31,7 +31,7 @@ def create_read_manifest_tool(get_backend: Callable[[], Any], workspace_path: st
 
         Use this instead of the broken built-in read_file tool.
         """
-        result = get_backend().execute(f"cat {path}")
+        result = get_backend().execute(f"cat {q(path)}")
         return result.output if result.exit_code == 0 else f"ERROR reading {path}: {result.output}"
 
     return read_manifest

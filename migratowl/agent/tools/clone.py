@@ -19,6 +19,8 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.update import q
+
 
 def create_clone_repo_tool(
     get_backend: Callable[[], Any],
@@ -47,19 +49,19 @@ def create_clone_repo_tool(
         backend = get_backend()
 
         # Check if source/ already has files
-        check = backend.execute(f"ls {source_path}")
+        check = backend.execute(f"ls {q(source_path)}")
         if check.exit_code == 0 and check.output.strip():
             return f"source already present at {source_path} — skipping clone"
 
         # Clone into source/
-        cmd = f"git clone --branch {branch} --depth 1 {repo_url} {source_path}"
+        cmd = f"git clone --branch {q(branch)} --depth 1 -- {q(repo_url)} {q(source_path)}"
         result = backend.execute(cmd)
 
         if result.exit_code != 0:
             if branch == "main":
                 # Fallback: retry with repo's default branch
-                backend.execute(f"rm -rf {source_path}")
-                cmd_default = f"git clone --depth 1 {repo_url} {source_path}"
+                backend.execute(f"rm -rf {q(source_path)}")
+                cmd_default = f"git clone --depth 1 -- {q(repo_url)} {q(source_path)}"
                 result_default = backend.execute(cmd_default)
                 if result_default.exit_code == 0:
                     result = result_default
@@ -72,7 +74,7 @@ def create_clone_repo_tool(
             else:
                 return f"Failed to clone {repo_url} (exit code {result.exit_code}): {result.output}"
 
-        verify = backend.execute(f"ls {source_path}")
+        verify = backend.execute(f"ls {q(source_path)}")
         if not verify.output.strip():
             return (
                 f"Failed to clone {repo_url}: workspace is empty after clone "
@@ -107,20 +109,20 @@ def create_copy_source_tool(
         target_path = f"{workspace_path}/{folder_name}"
 
         # Verify source/ exists and is non-empty
-        check = backend.execute(f"ls {source_path}")
+        check = backend.execute(f"ls {q(source_path)}")
         if check.exit_code != 0:
             return f"source does not exist at {source_path} — clone the repository first"
         if not check.output.strip():
             return f"source is empty at {source_path} — no files to copy"
 
         # Create target and copy
-        backend.execute(f"mkdir -p {target_path}")
-        cp_result = backend.execute(f"cp -a {source_path}/. {target_path}/")
+        backend.execute(f"mkdir -p {q(target_path)}")
+        cp_result = backend.execute(f"cp -a {q(source_path + '/.')} {q(target_path + '/')}")
         if cp_result.exit_code != 0:
             return f"Failed to copy source to {target_path} (exit code {cp_result.exit_code}): {cp_result.output}"
 
         # Verify target has files
-        verify = backend.execute(f"ls {target_path}")
+        verify = backend.execute(f"ls {q(target_path)}")
         if not verify.output.strip():
             return f"Copy failed: {target_path} is empty after copy"
 

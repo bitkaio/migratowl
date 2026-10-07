@@ -67,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `git clone` and package installs failed. New `k8s/sandbox-egress-raw.yaml` re-opens DNS to kube-dns
   and HTTP/HTTPS to public addresses only; ingress, pod/service CIDRs, node networks and cloud metadata
   stay blocked. Apply it next to `k8s/rbac-raw.yaml`.
+- **Sandbox commands broke on quotes and untrusted values** — `execute_project` and every
+  `sh -c '…'` wrapper put the inner command inside single quotes, so an agent command such as
+  `pip install -e '.[tests]'` (which the system prompt itself suggests) lost its quoting. Package
+  names, versions, paths, the repo URL and the branch were also interpolated unquoted; several of these
+  come from untrusted manifests. Every value is now passed as one shell argument, the `sh -c` script is
+  quoted as a whole, and `git clone` takes the URL after `--`.
+
 - **Python per-package runs were not isolated** — every working folder installed into the same
   site-packages, so the package-analyzer's single-package run tested against whatever `main/` had
   already upgraded. Each folder now gets its own venv (`<workspace>/.venvs/<folder>`), used by

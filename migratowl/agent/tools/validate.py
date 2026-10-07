@@ -21,7 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
-from migratowl.agent.tools.update import _sh, activate_venv, reapply_pins, venv_path
+from migratowl.agent.tools.update import _sh, activate_venv, q, reapply_pins, venv_path
 
 
 def create_validate_project_tool(
@@ -116,19 +116,19 @@ def _validate_go(backend: Any, folder_path: str, max_chars: int) -> dict[str, An
     steps: list[dict[str, Any]] = []
 
     # Step 1: Build — catches API-breaking dep changes at compile time
-    build_r = backend.execute(_sh(f"cd {folder_path} && go build ./..."))
+    build_r = backend.execute(_sh(f"cd {q(folder_path)} && go build ./..."))
     steps.append(_step("build", "go build ./...", build_r, max_chars))
     if build_r.exit_code != 0:
         return {"steps": steps, "passed": False}
 
     # Step 2: Detect test files
-    detect_r = backend.execute(_sh(f'find {folder_path} -name "*_test.go" -maxdepth 5 | head -1'))
+    detect_r = backend.execute(_sh(f'find {q(folder_path)} -name "*_test.go" -maxdepth 5 | head -1'))
     if not detect_r.output.strip():
         steps.append(_skipped("test", "no *_test.go files found"))
         return {"steps": steps, "passed": True}
 
     # Step 3: Run tests
-    test_r = backend.execute(_sh(f"cd {folder_path} && go test ./..."))
+    test_r = backend.execute(_sh(f"cd {q(folder_path)} && go test ./..."))
     steps.append(_step("test", "go test ./...", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 
@@ -137,21 +137,21 @@ def _validate_rust(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
     steps: list[dict[str, Any]] = []
 
     # Step 1: Build — catches API-breaking dep changes at compile time
-    build_r = backend.execute(_sh(f"cd {folder_path} && cargo build"))
+    build_r = backend.execute(_sh(f"cd {q(folder_path)} && cargo build"))
     steps.append(_step("build", "cargo build", build_r, max_chars))
     if build_r.exit_code != 0:
         return {"steps": steps, "passed": False}
 
     # Step 2: Detect #[test] functions in Rust source files
     detect_r = backend.execute(_sh(
-        f'grep -rl "#\\[test\\]" {folder_path} --include="*.rs" 2>/dev/null | head -1'
+        f'grep -rl "#\\[test\\]" {q(folder_path)} --include="*.rs" 2>/dev/null | head -1'
     ))
     if not detect_r.output.strip():
         steps.append(_skipped("test", "no #[test] functions found"))
         return {"steps": steps, "passed": True}
 
     # Step 3: Run tests
-    test_r = backend.execute(_sh(f"cd {folder_path} && cargo test"))
+    test_r = backend.execute(_sh(f"cd {q(folder_path)} && cargo test"))
     steps.append(_step("test", "cargo test", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 
@@ -162,7 +162,7 @@ def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) 
     # Step 1: Install into the folder's venv — try test extras first, fall back to
     # bare install, then requirements.txt — then re-apply the bumped versions.
     install_cmd = (
-        f"{activate_venv(venv)} && cd {folder_path} && ("
+        f"{activate_venv(venv)} && cd {q(folder_path)} && ("
         f"pip install -e '.[tests]' 2>/dev/null || "
         f"pip install -e '.[test]' 2>/dev/null || "
         f"pip install -e . 2>/dev/null || "
@@ -181,16 +181,16 @@ def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) 
 
     # Step 2: Detect pytest (config file or tests/ directory)
     detect_r = backend.execute(_sh(
-        f"test -f {folder_path}/pytest.ini || "
-        f"test -f {folder_path}/conftest.py || "
-        f"test -d {folder_path}/tests"
+        f"test -f {q(folder_path + '/pytest.ini')} || "
+        f"test -f {q(folder_path + '/conftest.py')} || "
+        f"test -d {q(folder_path + '/tests')}"
     ))
     if detect_r.exit_code != 0:
         steps.append(_skipped("test", "no pytest configuration or tests/ directory found"))
         return {"steps": steps, "passed": True}
 
     # Step 3: Run pytest
-    test_r = backend.execute(_sh(f"{activate_venv(venv)} && cd {folder_path} && python3 -m pytest -x --tb=short"))
+    test_r = backend.execute(_sh(f"{activate_venv(venv)} && cd {q(folder_path)} && python3 -m pytest -x --tb=short"))
     steps.append(_step("test", "python3 -m pytest -x --tb=short", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 
@@ -199,15 +199,15 @@ def _validate_nodejs(backend: Any, folder_path: str, max_chars: int) -> dict[str
     steps: list[dict[str, Any]] = []
 
     # Step 1: Install
-    install_r = backend.execute(_sh(f"cd {folder_path} && npm install"))
+    install_r = backend.execute(_sh(f"cd {q(folder_path)} && npm install"))
     steps.append(_step("install", "npm install", install_r, max_chars))
     if install_r.exit_code != 0:
         return {"steps": steps, "passed": False}
 
     # Step 2: TypeScript check (if tsconfig.json present)
-    ts_detect_r = backend.execute(_sh(f"test -f {folder_path}/tsconfig.json"))
+    ts_detect_r = backend.execute(_sh(f"test -f {q(folder_path + '/tsconfig.json')}"))
     if ts_detect_r.exit_code == 0:
-        tsc_r = backend.execute(_sh(f"cd {folder_path} && npx tsc --noEmit"))
+        tsc_r = backend.execute(_sh(f"cd {q(folder_path)} && npx tsc --noEmit"))
         steps.append(_step("typescript", "tsc --noEmit", tsc_r, max_chars))
         if tsc_r.exit_code != 0:
             return {"steps": steps, "passed": False}
@@ -226,7 +226,7 @@ def _validate_nodejs(backend: Any, folder_path: str, max_chars: int) -> dict[str
         steps.append(_skipped("test", "no test script in package.json"))
         return {"steps": steps, "passed": _is_passing(steps)}
 
-    test_r = backend.execute(_sh(f"cd {folder_path} && npm test"))
+    test_r = backend.execute(_sh(f"cd {q(folder_path)} && npm test"))
     steps.append(_step("test", "npm test", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}
 
@@ -235,7 +235,7 @@ def _validate_java(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
     steps: list[dict[str, Any]] = []
 
     # Detect build system: Maven (pom.xml) takes priority over Gradle
-    has_pom = backend.execute(_sh(f"test -f {folder_path}/pom.xml"))
+    has_pom = backend.execute(_sh(f"test -f {q(folder_path + '/pom.xml')}"))
     use_maven = has_pom.exit_code == 0
 
     if use_maven:
@@ -246,20 +246,20 @@ def _validate_java(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
         test_cmd = "gradle test"
 
     # Step 1: Compile — catches API-breaking dep changes
-    build_r = backend.execute(_sh(f"cd {folder_path} && {build_cmd}"))
+    build_r = backend.execute(_sh(f"cd {q(folder_path)} && {build_cmd}"))
     steps.append(_step("build", build_cmd, build_r, max_chars))
     if build_r.exit_code != 0:
         return {"steps": steps, "passed": False}
 
     # Step 2: Detect test sources (src/test is the Maven/Gradle standard layout)
     detect_r = backend.execute(_sh(
-        f'find {folder_path}/src/test -name "*.java" -maxdepth 5 2>/dev/null | head -1'
+        f'find {q(folder_path + '/src/test')} -name "*.java" -maxdepth 5 2>/dev/null | head -1'
     ))
     if not detect_r.output.strip():
         steps.append(_skipped("test", "no Java test sources found in src/test"))
         return {"steps": steps, "passed": True}
 
     # Step 3: Run tests
-    test_r = backend.execute(_sh(f"cd {folder_path} && {test_cmd}"))
+    test_r = backend.execute(_sh(f"cd {q(folder_path)} && {test_cmd}"))
     steps.append(_step("test", test_cmd, test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}

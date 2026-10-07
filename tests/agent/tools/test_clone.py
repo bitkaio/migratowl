@@ -78,7 +78,7 @@ class TestCloneRepoTool:
 
         clone_cmd = backend.execute.call_args_list[1][0][0]
         assert clone_cmd == (
-            "git clone --branch develop --depth 1 "
+            "git clone --branch develop --depth 1 -- "
             "https://github.com/psf/requests /home/user/workspace/source"
         )
 

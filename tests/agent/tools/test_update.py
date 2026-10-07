@@ -574,6 +574,6 @@ class TestPythonVenvIsolation:
         # validate_project re-applies pins after `pip install -e .`, which would
         # otherwise downgrade the bump to whatever the project's constraint allows.
         cmd = self._update("main")
-        pin = f'echo "requests==2.31.0" > "{DEFAULT_WORKSPACE}/.venvs/main/pins/requests"'
+        pin = f"echo requests==2.31.0 > {DEFAULT_WORKSPACE}/.venvs/main/pins/requests"
         assert pin in cmd
         assert cmd.index("pip install requests==2.31.0 &&") < cmd.index(pin)

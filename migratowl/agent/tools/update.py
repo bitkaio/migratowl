@@ -16,6 +16,7 @@
 
 import json
 import os
+import re
 import shlex
 from collections.abc import Callable
 from typing import Any
@@ -96,7 +97,7 @@ def create_update_dependencies_tool(
         if ecosystem == "go":
             dirs_to_tidy = go_tidy_dirs if go_tidy_dirs else {folder_path}
             for tidy_dir in sorted(dirs_to_tidy):
-                tidy = backend.execute(_sh(f"cd {tidy_dir} && go mod tidy"))
+                tidy = backend.execute(_sh(f"cd {q(tidy_dir)} && go mod tidy"))
                 results.append({
                     "package": "(go mod tidy)",
                     "exit_code": tidy.exit_code,
@@ -129,10 +130,18 @@ def _sh(cmd: str) -> str:
     The sandbox backend executes commands directly (no shell), so builtins
     like ``cd`` and operators like ``&&`` require an explicit shell wrapper.
 
+    The whole script is quoted as one argument, so quotes inside ``cmd``
+    survive. Values interpolated into ``cmd`` must still go through ``q()``.
+
     Sets ``PIP_BREAK_SYSTEM_PACKAGES=1`` so pip works in PEP 668
     externally-managed containers (harmless for non-pip commands).
     """
-    return f"sh -c 'export PIP_BREAK_SYSTEM_PACKAGES=1 && {cmd}'"
+    return "sh -c " + q(f"export PIP_BREAK_SYSTEM_PACKAGES=1 && {cmd}")
+
+
+def q(value: str) -> str:
+    """Quote one shell argument. Names, versions and paths may come from untrusted manifests."""
+    return shlex.quote(value)
 
 
 def venv_path(workspace_path: str, folder_name: str) -> str:
@@ -147,7 +156,7 @@ def venv_path(workspace_path: str, folder_name: str) -> str:
 
 def activate_venv(venv: str) -> str:
     """Shell fragment that creates the venv on first use and activates it."""
-    return f"(test -x {venv}/bin/python || python3 -m venv {venv}) && . {venv}/bin/activate"
+    return f"(test -x {q(venv + '/bin/python')} || python3 -m venv {q(venv)}) && . {q(venv + '/bin/activate')}"
 
 
 def reapply_pins(venv: str) -> str:
@@ -157,8 +166,8 @@ def reapply_pins(venv: str) -> str:
     downgrade a bumped package (e.g. ``requests<3``); re-applying the pins
     afterwards keeps the bumped versions under test.
     """
-    pins = f"{venv}/pins"
-    return f'if [ -d "{pins}" ]; then cat "{pins}"/* | pip install -r /dev/stdin; fi'
+    pins = q(f"{venv}/pins")
+    return f"if [ -d {pins} ]; then cat {pins}/* | pip install -r /dev/stdin; fi"
 
 
 def _is_major_bump(current: str, latest: str) -> bool:
@@ -257,9 +266,11 @@ def _build_update_cmd(
     if ecosystem == "python":
         venv = venv or venv_path(os.path.dirname(folder_path), os.path.basename(folder_path))
         pins = f"{venv}/pins"
+        spec = f"{name}=={version}"
+        pin_file = f"{pins}/{re.sub(r'[^A-Za-z0-9._-]', '_', name)}"
         cmds = [_sh(
-            f"{activate_venv(venv)} && cd {folder_path} && pip install {name}=={version} && "
-            f'mkdir -p "{pins}" && echo "{name}=={version}" > "{pins}/{name}"'
+            f"{activate_venv(venv)} && cd {q(folder_path)} && pip install {q(spec)} && "
+            f"mkdir -p {q(pins)} && echo {q(spec)} > {q(pin_file)}"
         )]
         if current_version and manifest_abs_path:
             cmds.append(
@@ -269,35 +280,35 @@ def _build_update_cmd(
             )
         return cmds
     elif ecosystem == "nodejs":
-        return [_sh(f"cd {folder_path} && npm install {name}@{version}")]
+        return [_sh(f"cd {q(folder_path)} && npm install {q(f'{name}@{version}')}")]
     elif ecosystem == "go":
         run_dir = os.path.dirname(manifest_abs_path) if manifest_abs_path else folder_path
         clean_version = version.lstrip("v")
-        return [_sh(f"cd {run_dir} && go get {name}@v{clean_version}")]
+        return [_sh(f"cd {q(run_dir)} && go get {q(f'{name}@v{clean_version}')}")]
     elif ecosystem == "rust":
         if current_version and _is_major_bump(current_version, version) and manifest_abs_path:
             return [
                 _build_rust_manifest_patch_cmd(
                     manifest_abs_path, name, current_version, version
                 ),
-                _sh(f"cd {folder_path} && cargo check"),
+                _sh(f"cd {q(folder_path)} && cargo check"),
             ]
         elif current_version:
             # Use only the major version as the @specifier so it matches the
             # lockfile-resolved version (e.g. tempfile@3 matches 3.27.0, whereas
             # tempfile@3.0.0 would fail when the lockfile has 3.27.0).
             major = current_version.lstrip("^~>=<").split(".")[0]
-            return [_sh(f"cd {folder_path} && cargo update -p {name}@{major} --precise {version}")]
+            return [_sh(f"cd {q(folder_path)} && cargo update -p {q(f'{name}@{major}')} --precise {q(version)}")]
         else:
-            return [_sh(f"cd {folder_path} && cargo update -p {name} --precise {version}")]
+            return [_sh(f"cd {q(folder_path)} && cargo update -p {q(name)} --precise {q(version)}")]
     elif ecosystem == "java":
         if manifest_abs_path and os.path.basename(manifest_abs_path) == "pom.xml":
             group_id, artifact_id = name.split(":", 1) if ":" in name else (name, "")
             run_dir = os.path.dirname(manifest_abs_path)
             return [_sh(
-                f"cd {run_dir} && mvn versions:use-dep-version"
-                f" -DdepVersion={version}"
-                f" -Dincludes={group_id}:{artifact_id}"
+                f"cd {q(run_dir)} && mvn versions:use-dep-version"
+                f" -DdepVersion={q(version)}"
+                f" -Dincludes={q(f'{group_id}:{artifact_id}')}"
                 f" -DforceVersion=true"
                 f" -DgenerateBackupPoms=false"
                 f" -q"
@@ -310,6 +321,6 @@ def _build_update_cmd(
                 f"{name}:{version}",
             )]
         else:
-            return [f"echo 'Cannot update {name}: missing manifest path or current version'"]
+            return ["echo " + q(f"Cannot update {name}: missing manifest path or current version")]
     else:
-        return [f"echo 'Unsupported ecosystem: {ecosystem}'"]
+        return ["echo " + q(f"Unsupported ecosystem: {ecosystem}")]
