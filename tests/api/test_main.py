@@ -768,3 +768,26 @@ class TestFailureErrorsAreRedacted:
                      app.state.job_store.get(job.job_id).error):
             assert "ghp_" not in sink and "bob:" not in sink
             assert sink == "Failed to clone https://***@github.com/x/y"
+
+
+class TestConfiguredTokensAreRedacted:
+    @pytest.mark.asyncio
+    async def test_configured_git_tokens_are_redacted_whatever_their_format(self, app, fake_pipeline) -> None:
+        # Tokens with no recognisable prefix (fine-grained, GHES, self-hosted GitLab) are
+        # caught by value.
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        app.state.settings = app.state.settings.model_copy(
+            update={"github_token": "plainGithubToken123", "gitlab_token": "selfhostedLabToken456"}
+        )
+        fake_pipeline.prepare_scan.side_effect = PipelineError(
+            "auth failed for plainGithubToken123 and selfhostedLabToken456"
+        )
+        with patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y", pr_number=1))
+            await main_mod._run_scan(app, job.job_id)
+
+        error = failed.call_args.kwargs["error"]
+        assert "plainGithubToken123" not in error and "selfhostedLabToken456" not in error
+        assert app.state.job_store.get(job.job_id).error == error

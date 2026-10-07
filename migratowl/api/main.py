@@ -382,9 +382,13 @@ _URL_USERINFO = re.compile(r"(?<=://)[^/\s@'\"]+@")
 _TOKENS = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})")
 
 
-def redact_secrets(text: str) -> str:
-    """Strip URL credentials and known token formats before text leaves the server."""
-    return _TOKENS.sub("***", _URL_USERINFO.sub("***@", text))
+def redact_secrets(text: str, known_secrets: tuple[str, ...] = ()) -> str:
+    """Strip URL credentials, known token formats and ``known_secrets`` (by value)."""
+    text = _TOKENS.sub("***", _URL_USERINFO.sub("***@", text))
+    for secret in known_secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
 
 
 async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
@@ -393,7 +397,8 @@ async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
     ``error`` goes to the job store, the PR comment and the callback, so it is
     redacted first; the raw text stays in the server log only.
     """
-    error = redact_secrets(error)
+    settings_: Settings = app.state.settings
+    error = redact_secrets(error, (settings_.github_token, settings_.gitlab_token))
     store: JobStore = app.state.job_store
     store.set_error(job.job_id, error)
     if job.side_effects_done:
