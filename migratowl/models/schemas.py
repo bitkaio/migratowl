@@ -160,6 +160,12 @@ class AnalysisReport(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class PackageVerdicts(BaseModel):
+    """LLM output of the analysis step: one report per package it was asked about."""
+
+    reports: list[AnalysisReport]
+
+
 class ScanAnalysisReport(BaseModel):
     """Top-level pipeline output combining scan and analysis results."""
 

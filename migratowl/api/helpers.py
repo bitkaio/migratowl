@@ -18,14 +18,20 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import AIMessage, BaseMessage
 
 from migratowl.models.schemas import (
+    AnalysisReport,
     OutdatedDependency,
+    PackageVerdicts,
     ScanAnalysisReport,
     ScanWebhookPayload,
 )
+
+if TYPE_CHECKING:
+    from migratowl.pipeline import PreparedScan
 
 logger = logging.getLogger(__name__)
 
@@ -151,3 +157,65 @@ def compute_skipped(
     outdated_names = {dep.name for dep in outdated}
     analyzed_set = set(analyzed_names)
     return [name for name in outdated_names if name not in analyzed_set]
+
+
+def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
+    """Read ``PackageVerdicts`` from ``structured_response``, else from JSON in messages.
+
+    Raises ``ReportExtractionError`` when neither yields verdicts.
+    """
+    structured = agent_result.get("structured_response")
+    if structured is not None:
+        try:
+            verdicts = (
+                structured
+                if isinstance(structured, PackageVerdicts)
+                else PackageVerdicts.model_validate(structured)
+            )
+            return verdicts.reports
+        except Exception:
+            logger.debug("structured_response present but failed validation")
+    for msg in reversed(agent_result.get("messages", [])):
+        content = _message_text(msg)
+        if not content:
+            continue
+        try:
+            return PackageVerdicts.model_validate(json.loads(content)).reports
+        except Exception:
+            continue
+    raise ReportExtractionError("Agent finished without returning a structured report")
+
+
+def assemble_report(
+    payload: ScanWebhookPayload,
+    prepared: PreparedScan,
+    reports: list[AnalysisReport],
+    *,
+    duration: float,
+    tokens: tuple[int, int],
+) -> ScanAnalysisReport:
+    """Build the final report in code; the LLM only contributes per-package verdicts.
+
+    Verdict names are matched case-insensitively to candidates and rewritten to the
+    canonical name; unknown names are dropped, and candidates without a verdict go
+    to ``skipped`` so they are never reported as safe by omission.
+    """
+    canonical = {dep.name.lower(): dep.name for dep in prepared.candidates}
+    by_name: dict[str, AnalysisReport] = {}
+    for report in reports:
+        name = canonical.get(report.dependency_name.lower())
+        if name is not None and name not in by_name:
+            by_name[name] = report.model_copy(update={"dependency_name": name})
+    missing = [dep.name for dep in prepared.candidates if dep.name not in by_name]
+    if missing:
+        logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))
+    return ScanAnalysisReport(
+        repo_url=payload.repo_url,
+        branch_name=payload.branch_name,
+        scan_result=prepared.scan_result,
+        reports=[by_name[dep.name] for dep in prepared.candidates if dep.name in by_name],
+        skipped=prepared.skipped + missing,
+        total_duration_seconds=round(duration, 1),
+        total_input_tokens=tokens[0],
+        total_output_tokens=tokens[1],
+    )
