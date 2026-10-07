@@ -34,7 +34,8 @@ class TestSettingsDefaults:
     def test_default_sandbox_image(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_SANDBOX_IMAGE", raising=False)
         settings = Settings(_env_file=None)
-        assert settings.sandbox_image == "python:3.12-slim"
+        # Raw mode needs git plus every ecosystem toolchain; slim language images lack git.
+        assert settings.sandbox_image == "ghcr.io/bitkaio/migratowl-runtime:latest"
 
     def test_default_sandbox_block_network(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_SANDBOX_BLOCK_NETWORK", raising=False)

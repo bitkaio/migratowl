@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update_dependencies`, `validate_project` and `execute_project`. Bumped versions are also re-applied
   after `pip install -e .`, which could otherwise downgrade them back inside the project's declared
   range (e.g. `requests<3`) and test the old version.
+- **Raw mode's default image could not clone** — `MIGRATOWL_SANDBOX_IMAGE` defaulted to
+  `python:3.12-slim`, which has no `git`, so a default raw-mode scan failed at `clone_repo`. The default
+  is now `ghcr.io/bitkaio/migratowl-runtime:latest`, the image the GitHub Action and GitLab component
+  already use.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

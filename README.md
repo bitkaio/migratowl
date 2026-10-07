@@ -483,7 +483,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SANDBOX_CONNECTION_MODE` | `tunnel` | Connection mode: `tunnel` or `direct` (agent-sandbox mode only) |
 | `MIGRATOWL_SANDBOX_KUBE_API_URL` | in-cluster URL | Kubernetes API used to list and delete SandboxClaims (agent-sandbox mode only). Off-cluster, run `kubectl proxy` and set `http://localhost:8001`; otherwise TTL sweep and shutdown cleanup can't run |
 | `MIGRATOWL_SANDBOX_KUBE_TOKEN` | — | Bearer token for `MIGRATOWL_SANDBOX_KUBE_API_URL` (not needed with `kubectl proxy` or in-cluster) |
-| `MIGRATOWL_SANDBOX_IMAGE` | `python:3.12-slim` | Container image for sandbox pods (raw mode only). Must include the runtime for the target ecosystem — e.g. `python:3.13-slim`, `node:22-slim`, `golang:1.24-bookworm`, `rust:1.86-slim`, `maven:3.9-eclipse-temurin-21-alpine`. For mixed-ecosystem repos use a fat image that bundles all runtimes (see `k8s/runtime/`). |
+| `MIGRATOWL_SANDBOX_IMAGE` | `ghcr.io/bitkaio/migratowl-runtime:latest` | Container image for sandbox pods (raw mode only). The default bundles git and every supported toolchain (built from `k8s/runtime/`). A custom image must include `git`, `python3` and the toolchains for the ecosystems you scan — slim language images such as `python:3.13-slim` have no `git`, so the clone fails. |
 | `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it). Apply `k8s/sandbox-egress-raw.yaml` so scans can still reach DNS, git hosts and registries |
 | `MIGRATOWL_WORKSPACE_PATH` | `/home/user/workspace` | Workspace root inside the sandbox |
 
@@ -560,7 +560,7 @@ kubectl apply -f k8s/warm-pool.yaml
 
 ```bash
 MIGRATOWL_SANDBOX_MODE=raw          # set in .env
-MIGRATOWL_SANDBOX_IMAGE=python:3.12-slim
+MIGRATOWL_SANDBOX_IMAGE=ghcr.io/bitkaio/migratowl-runtime:latest  # default; needs git + toolchains
 MIGRATOWL_SANDBOX_BLOCK_NETWORK=true  # requires Calico/Cilium; set false for kind (kindnet ignores NetworkPolicy)
 ```
 

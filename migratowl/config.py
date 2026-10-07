@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     sandbox_template: str = "migratowl-sandbox-template"
     sandbox_namespace: str = "default"
     sandbox_connection_mode: str = "tunnel"
-    sandbox_image: str = "python:3.12-slim"
+    # Raw mode only. Needs git plus each ecosystem toolchain (see k8s/runtime/).
+    sandbox_image: str = "ghcr.io/bitkaio/migratowl-runtime:latest"
     sandbox_block_network: bool = True
     # Kubernetes API for SandboxClaim list/delete (agent-sandbox mode). Unset means
     # the in-cluster URL; off-cluster point it at `kubectl proxy` (http://localhost:8001)
