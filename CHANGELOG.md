@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Optional API authentication and callback SSRF protection** — new `MIGRATOWL_API_TOKEN`: when set,
+  `POST /webhook` and all `/jobs` endpoints require `Authorization: Bearer <token>` (`/healthz` stays
+  open); when unset, the server logs a startup warning. `callback_url` must be an http(s) URL and may not
+  target private, loopback or link-local addresses (`422`); hostnames are resolved again before the
+  callback is sent and redirects are not followed. `MIGRATOWL_CALLBACK_ALLOW_PRIVATE=true` lifts the
+  address check for local development. `docs/examples/with-migratowl-server.yml` sends the token from the
+  `MIGRATOWL_API_TOKEN` repository secret.
+
 ### Changed
 
 - **Scans run their mechanical phases in code** — cloning, dependency scanning, the outdated

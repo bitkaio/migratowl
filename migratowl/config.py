@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     # Registry output cap
     max_outdated_deps: int = 100
 
+    # API security. When api_token is set, /webhook and /jobs* require
+    # "Authorization: Bearer <token>". callback_url may not target private,
+    # loopback or link-local addresses unless callback_allow_private is set.
+    api_token: str | None = None
+    callback_allow_private: bool = False
+
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000

@@ -17,18 +17,21 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import ipaddress
 import logging
 import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 load_dotenv()  # inject .env into os.environ so third-party SDKs (anthropic, etc.) can read it
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
@@ -75,6 +78,12 @@ def create_app(
         # Ensure third-party monkey-patches are applied on the webhook path too
         # (previously only applied when agent/graph.py was imported).
         apply_patches()
+
+        if not settings.api_token:
+            logger.warning(
+                "MIGRATOWL_API_TOKEN is not set: /webhook and /jobs accept unauthenticated requests. "
+                "Set a token unless the server is only reachable from localhost."
+            )
 
         # Resource throttle: one scan at a time by default. Each job runs in its
         # own sandbox pod (keyed by thread_id == job_id), so this bounds sandbox
@@ -141,12 +150,30 @@ def create_app(
 
     app = FastAPI(title="Migratowl", lifespan=lifespan)
 
+    async def require_token(authorization: str | None = Header(default=None)) -> None:
+        """Enforce ``Authorization: Bearer <MIGRATOWL_API_TOKEN>`` when a token is configured."""
+        if not settings.api_token:
+            return
+        expected = f"Bearer {settings.api_token}".encode()
+        if authorization is None or not hmac.compare_digest(authorization.encode(), expected):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing API token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    authenticated = [Depends(require_token)]
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/webhook", status_code=202)
+    @app.post("/webhook", status_code=202, dependencies=authenticated)
     async def webhook(payload: ScanWebhookPayload) -> WebhookAcceptedResponse:
+        if payload.callback_url:
+            problem = callback_url_problem(payload.callback_url, allow_private=settings.callback_allow_private)
+            if problem:
+                raise HTTPException(status_code=422, detail=problem)
         store: JobStore = app.state.job_store
         job = store.create(payload)
         task = asyncio.create_task(_run_scan(app, job.job_id))
@@ -157,7 +184,7 @@ def create_app(
             status_url=f"/jobs/{job.job_id}",
         )
 
-    @app.get("/jobs", response_model=None)
+    @app.get("/jobs", response_model=None, dependencies=authenticated)
     async def list_jobs(state: str | None = None) -> dict | JSONResponse:
         """List jobs, optionally filtered by state — lets operators see interrupted work."""
         store: JobStore = app.state.job_store
@@ -175,7 +202,7 @@ def create_app(
         jobs = store.list_by_state(job_state)
         return {"jobs": [j.model_dump(mode="json") for j in jobs]}
 
-    @app.get("/jobs/{job_id}", response_model=None)
+    @app.get("/jobs/{job_id}", response_model=None, dependencies=authenticated)
     async def get_job(job_id: str) -> JobStatus | JSONResponse:
         store: JobStore = app.state.job_store
         job = store.get(job_id)
@@ -183,7 +210,7 @@ def create_app(
             return JSONResponse(status_code=404, content={"detail": "Job not found"})
         return job
 
-    @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None)
+    @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None, dependencies=authenticated)
     async def resume_job(job_id: str) -> WebhookAcceptedResponse | JSONResponse:
         store: JobStore = app.state.job_store
         settings_: Settings = app.state.settings
@@ -322,7 +349,11 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             if not job.side_effects_done:
                 if job.payload.callback_url:
                     await _post_callback(
-                        job.payload.callback_url, job_id, report.model_dump(mode="json"), state="completed"
+                        job.payload.callback_url,
+                        job_id,
+                        report.model_dump(mode="json"),
+                        state="completed",
+                        allow_private=app.state.settings.callback_allow_private,
                     )
                 await notify_pr_done(job.payload, report, app.state.settings)
                 store.mark_side_effects_done(job_id)
@@ -369,7 +400,13 @@ async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
             "repo_url": job.payload.repo_url,
             "branch_name": job.payload.branch_name,
         }
-        await _post_callback(job.payload.callback_url, job.job_id, body, state=JobState.FAILED.value)
+        await _post_callback(
+            job.payload.callback_url,
+            job.job_id,
+            body,
+            state=JobState.FAILED.value,
+            allow_private=app.state.settings.callback_allow_private,
+        )
     await notify_pr_failed(job.payload, app.state.settings, error=error)
     store.mark_side_effects_done(job.job_id)
 
@@ -388,14 +425,61 @@ async def _release_sandbox(manager: Any, job_id: str) -> None:
         logger.warning("Failed to delete sandbox %s for job %s", sandbox.id, job_id, exc_info=True)
 
 
-async def _post_callback(callback_url: str, job_id: str, body: dict[str, Any], *, state: str) -> None:
+def callback_url_problem(url: str, *, allow_private: bool) -> str | None:
+    """Why ``url`` is not an acceptable callback target, or None if it is.
+
+    Literal internal IPs and ``localhost`` are rejected here; hostnames are
+    resolved and checked again right before the callback is sent.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return "callback_url must be an http(s) URL"
+    if allow_private:
+        return None
+    host = parts.hostname.lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return "callback_url must not point to localhost"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not ip.is_global:
+        return "callback_url must not point to a private, loopback or link-local address"
+    return None
+
+
+async def _resolve_host(host: str) -> list[str]:
+    """IP addresses ``host`` resolves to."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    return [str(info[4][0]) for info in infos]
+
+
+async def _post_callback(
+    callback_url: str,
+    job_id: str,
+    body: dict[str, Any],
+    *,
+    state: str,
+    allow_private: bool = False,
+) -> None:
     """POST the outcome to the caller's callback URL.
 
     A completed job sends the ``ScanAnalysisReport``; a failed one sends
     ``{job_id, state, error, repo_url, branch_name}``. Both carry the job id and
     state in ``X-Migratowl-Job-Id`` / ``X-Migratowl-Job-State`` headers.
+
+    Unless ``allow_private`` is set, the host is resolved first and the call is
+    skipped if any address is not public (DNS can point a public-looking name at
+    an internal service). Redirects are never followed.
     """
     try:
+        if not allow_private:
+            host = urlsplit(callback_url).hostname or ""
+            addresses = await _resolve_host(host)
+            if not addresses or any(not ipaddress.ip_address(a.split("%")[0]).is_global for a in addresses):
+                logger.warning("Callback to %s skipped: host resolves to a non-public address", callback_url)
+                return
+
         from migratowl.http import get_http_client
 
         client = get_http_client()
@@ -404,6 +488,7 @@ async def _post_callback(callback_url: str, job_id: str, body: dict[str, Any], *
             json=body,
             headers={"X-Migratowl-Job-Id": job_id, "X-Migratowl-Job-State": state},
             timeout=30.0,
+            follow_redirects=False,
         )
         if resp.is_success:
             logger.info("Callback POST to %s returned %s", callback_url, resp.status_code)

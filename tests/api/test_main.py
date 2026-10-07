@@ -681,9 +681,13 @@ class TestCallbackOnEveryOutcome:
         assert app.state.job_store.get(job.job_id).side_effects_done is True
 
     @pytest.mark.asyncio
-    async def test_callback_sends_job_headers_and_logs_non_2xx(self, caplog) -> None:
+    async def test_callback_sends_job_headers_and_logs_non_2xx(self, caplog, monkeypatch) -> None:
         import httpx
 
+        async def public(host: str) -> list[str]:
+            return ["93.184.216.34"]
+
+        monkeypatch.setattr(main_mod, "_resolve_host", public)
         seen: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
