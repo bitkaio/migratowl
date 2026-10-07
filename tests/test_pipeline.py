@@ -101,3 +101,121 @@ class TestSummarizeValidation:
 
         assert v.passed is False
         assert v.output_tail == "Error: sandbox exploded"
+
+
+class _FakeTool:
+    """Records ainvoke calls and returns canned output (str or callable(args) -> str)."""
+
+    def __init__(self, output) -> None:
+        self.output = output
+        self.calls: list[tuple[dict, dict]] = []
+
+    async def ainvoke(self, args: dict, config: dict | None = None) -> str:
+        self.calls.append((args, config or {}))
+        return self.output(args) if callable(self.output) else self.output
+
+
+def _fake_tools(*, clone="Successfully cloned", deps=None, outdated=None, update="Updated 1 package(s) in main/",
+                validate=None):
+    from types import SimpleNamespace
+
+    deps = deps if deps is not None else [
+        {"name": "flask", "current_version": "2.0.0", "ecosystem": "python", "manifest_path": "pyproject.toml"},
+    ]
+    outdated = outdated if outdated is not None else [
+        {"name": "flask", "current_version": "2.0.0", "latest_version": "3.1.0", "ecosystem": "python",
+         "manifest_path": "pyproject.toml"},
+    ]
+    validate = validate or json.dumps({"steps": [{"name": "test", "exit_code": 0, "output": ""}], "passed": True})
+    return SimpleNamespace(
+        clone_repo=_FakeTool(clone),
+        scan_dependencies=_FakeTool(json.dumps(deps)),
+        check_outdated_deps=_FakeTool(json.dumps({"outdated": outdated, "failures": [], "warning": None})),
+        copy_source=_FakeTool("Successfully copied source to /w/main"),
+        update_dependencies=_FakeTool(update),
+        validate_project=_FakeTool(validate),
+    )
+
+
+CONFIG = {"configurable": {"thread_id": "job-1"}}
+
+
+class TestPrepareScan:
+    async def test_runs_phases_in_order_with_thread_config(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        tools = _fake_tools()
+        prepared = await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y", branch_name="dev"), CONFIG)
+
+        assert tools.clone_repo.calls[0] == ({"repo_url": "https://x/y", "branch": "dev"}, CONFIG)
+        assert tools.copy_source.calls[0][0] == {"folder_name": "main"}
+        update_args = tools.update_dependencies.calls[0][0]
+        assert update_args["folder_name"] == "main" and update_args["ecosystem"] == "python"
+        assert json.loads(update_args["packages_json"])[0]["latest_version"] == "3.1.0"
+        assert tools.validate_project.calls[0][0] == {"folder_name": "main", "ecosystem": "python"}
+        assert [d.name for d in prepared.candidates] == ["flask"]
+        assert prepared.scan_result.manifests_found == ["pyproject.toml"]
+        assert prepared.validations[0].passed is True
+
+    async def test_clone_failure_raises(self) -> None:
+        import pytest
+
+        from migratowl.pipeline import PipelineError, prepare_scan
+
+        tools = _fake_tools(clone="Failed to clone https://x/y (exit code 128): not found")
+        with pytest.raises(PipelineError, match="Failed to clone"):
+            await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+    async def test_no_outdated_skips_copy_update_validate(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        tools = _fake_tools(outdated=[])
+        prepared = await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+        assert prepared.candidates == []
+        assert tools.copy_source.calls == []
+        assert tools.update_dependencies.calls == []
+        assert tools.validate_project.calls == []
+
+    async def test_ecosystem_filter_applies_before_registry(self) -> None:
+        from migratowl.models.schemas import Ecosystem
+        from migratowl.pipeline import prepare_scan
+
+        deps = [
+            {"name": "flask", "current_version": "2.0", "ecosystem": "python", "manifest_path": "pyproject.toml"},
+            {"name": "react", "current_version": "17.0", "ecosystem": "nodejs", "manifest_path": "package.json"},
+        ]
+        tools = _fake_tools(deps=deps)
+        await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y", ecosystems=[Ecosystem.PYTHON]), CONFIG)
+
+        sent = json.loads(tools.check_outdated_deps.calls[0][0]["dependencies_json"])
+        assert [d["name"] for d in sent] == ["flask"]
+
+    async def test_updates_all_ecosystems_before_validating(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        order: list[str] = []
+        outdated = [
+            {"name": "flask", "current_version": "2.0", "latest_version": "3.0", "ecosystem": "python",
+             "manifest_path": "pyproject.toml"},
+            {"name": "react", "current_version": "17.0", "latest_version": "19.0", "ecosystem": "nodejs",
+             "manifest_path": "package.json"},
+        ]
+        ok = json.dumps({"steps": [], "passed": True})
+        tools = _fake_tools(outdated=outdated)
+        tools.update_dependencies.output = lambda a: order.append(f"update:{a['ecosystem']}") or "Updated"
+        tools.validate_project.output = lambda a: order.append(f"validate:{a['ecosystem']}") or ok
+
+        prepared = await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+        assert order[:2] == ["update:nodejs", "update:python"] or order[:2] == ["update:python", "update:nodejs"]
+        assert all(step.startswith("validate") for step in order[2:])
+        assert {v.ecosystem for v in prepared.validations} == {"python", "nodejs"}
+
+    async def test_records_update_failures(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        tools = _fake_tools(update="Errors updating packages in main/\n  flask: FAILED (exit 1) — no dist\n")
+        prepared = await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+        assert prepared.update_failures == {"flask": "no dist"}

@@ -24,10 +24,22 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+from typing import TYPE_CHECKING
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from migratowl.models.schemas import OutdatedDependency, ScanResult, ScanWebhookPayload
+from migratowl.models.schemas import (
+    Dependency,
+    OutdatedDependency,
+    RegistryFailure,
+    ScanResult,
+    ScanWebhookPayload,
+)
+
+if TYPE_CHECKING:
+    from migratowl.agent.factory import MigratowlTools
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +139,82 @@ def summarize_validation(ecosystem: str, raw: str, tail_chars: int) -> Ecosystem
         failed_step=failed.get("name"),
         output_tail=str(failed.get("output", ""))[-tail_chars:],
     )
+
+
+async def prepare_scan(
+    tools: MigratowlTools,
+    payload: ScanWebhookPayload,
+    config: RunnableConfig,
+    *,
+    tail_chars: int = 4000,
+) -> PreparedScan:
+    """Clone, scan, check outdated, update ``main/`` and validate — no LLM involved."""
+    started = time.monotonic()
+
+    clone_out = await tools.clone_repo.ainvoke(
+        {"repo_url": payload.repo_url, "branch": payload.branch_name}, config=config
+    )
+    if clone_out.startswith("Failed"):
+        raise PipelineError(clone_out)
+
+    deps_raw = await tools.scan_dependencies.ainvoke({}, config=config)
+    try:
+        deps = [Dependency(**item) for item in json.loads(deps_raw)]
+    except (ValueError, TypeError) as exc:
+        raise PipelineError(f"Dependency scan failed: {deps_raw[:500]}") from exc
+    if payload.ecosystems:
+        deps = [dep for dep in deps if dep.ecosystem in payload.ecosystems]
+
+    outdated: list[OutdatedDependency] = []
+    failures: list[RegistryFailure] = []
+    if deps:
+        raw = await tools.check_outdated_deps.ainvoke(
+            {"dependencies_json": json.dumps([dep.model_dump(mode="json") for dep in deps])}, config=config
+        )
+        data = json.loads(raw)
+        outdated = [OutdatedDependency(**item) for item in data["outdated"]]
+        failures = [RegistryFailure(**item) for item in data["failures"]]
+
+    candidates, skipped = select_candidates(outdated, payload)
+    prepared = PreparedScan(
+        scan_result=ScanResult(
+            all_deps=deps,
+            outdated=outdated,
+            manifests_found=sorted({dep.manifest_path for dep in deps}),
+            scan_duration_seconds=round(time.monotonic() - started, 1),
+            registry_failures=failures,
+        ),
+        candidates=candidates,
+        skipped=skipped,
+    )
+    if not candidates:
+        return prepared
+
+    copy_out = await tools.copy_source.ainvoke({"folder_name": "main"}, config=config)
+    if not copy_out.startswith("Successfully"):
+        raise PipelineError(copy_out)
+
+    by_ecosystem: dict[str, list[OutdatedDependency]] = {}
+    for dep in candidates:
+        by_ecosystem.setdefault(dep.ecosystem.value, []).append(dep)
+
+    for ecosystem, packages in by_ecosystem.items():
+        packages_json = json.dumps([
+            {"name": p.name, "current_version": p.current_version, "latest_version": p.latest_version,
+             "manifest_path": p.manifest_path}
+            for p in packages
+        ])
+        summary = await tools.update_dependencies.ainvoke(
+            {"folder_name": "main", "ecosystem": ecosystem, "packages_json": packages_json}, config=config
+        )
+        prepared.update_failures.update(parse_update_failures(summary))
+
+    for ecosystem in by_ecosystem:
+        raw = await tools.validate_project.ainvoke({"folder_name": "main", "ecosystem": ecosystem}, config=config)
+        prepared.validations.append(summarize_validation(ecosystem, raw, tail_chars))
+
+    logger.info(
+        "Pipeline prepared %d candidate(s), %d skipped, validations=%s",
+        len(candidates), len(skipped), {v.ecosystem: v.passed for v in prepared.validations},
+    )
+    return prepared
