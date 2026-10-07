@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `interrupted`; jobs still queued behind the scan semaphore stayed `pending` until the next boot, and
   in-flight scan tasks were not cancelled. Shutdown now cancels in-flight scans (their sandbox and
   checkpoint are kept for resume) and marks both running and queued jobs `interrupted`.
+- **Runtime image could not build Java projects** — `k8s/runtime/Dockerfile` had no JDK, Maven or
+  Gradle, so `validate_project` failed on every Java repo. The image now ships Eclipse Temurin 21,
+  Maven 3.9.16 and Gradle 9.8.0. Go moves from the end-of-life 1.23.6 to 1.27.1, and every downloaded
+  archive (Go, JDK, Maven, Gradle) is checksum-verified before it is unpacked. The image also no longer
+  builds against a stale checksum: `https://sh.rustup.rs` serves a new script on every rustup release,
+  so the image now installs a pinned `rustup-init` 1.29.1 binary instead.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on
