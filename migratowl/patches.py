@@ -33,6 +33,7 @@ def apply_patches() -> None:
     _patch_filesystem_middleware_eviction()
     _patch_summarization_threshold()
     _patch_subagent_recursion_limit()
+    _patch_sandbox_execute_errors()
     apply_patches._applied = True  # type: ignore[attr-defined]
 
 
@@ -171,3 +172,63 @@ def _patch_subagent_recursion_limit() -> None:
 
     _subagents_mod._build_task_tool = _patched_build_task_tool  # type: ignore[assignment]
     logger.info("Patched _build_task_tool to inject recursion_limit=500 for subagents")
+
+
+# RuntimeError text langchain-kubernetes raises when the sandbox-router returns
+# 5xx — in practice the router's own 180s proxy timeout on a long command.
+_GATEWAY_FAILURE_MARKER = "Failed to communicate with the sandbox"
+_TIMEOUT_EXIT_CODE = 124  # same code coreutils `timeout` uses
+
+
+def _patch_sandbox_execute_errors() -> None:
+    """Return sandbox exec timeouts to the agent instead of raising.
+
+    deepagents' ``execute`` tool only catches ``NotImplementedError`` and
+    ``ValueError``, and Migratowl's own tools call ``backend.execute()``
+    directly.  A ``TimeoutError`` from the raw-mode exec transport, or the
+    gateway ``RuntimeError`` from the sandbox-router, therefore propagates
+    out of the graph and fails the whole scan — e.g. one slow ``pytest``
+    run.  This wraps ``KubernetesSandbox.execute``/``aexecute`` so those
+    errors become a failed ``ExecuteResponse`` the agent can reason about.
+    """
+    from deepagents.backends.protocol import ExecuteResponse
+    from langchain_kubernetes.sandbox import KubernetesSandbox
+
+    def _as_failed_response(exc: Exception) -> ExecuteResponse | None:
+        if isinstance(exc, TimeoutError) or (isinstance(exc, RuntimeError) and _GATEWAY_FAILURE_MARKER in str(exc)):
+            return ExecuteResponse(
+                output=(
+                    f"Error: {exc} The command did not finish. Run a narrower "
+                    "command (e.g. a subset of tests) or pass a larger timeout."
+                ),
+                exit_code=_TIMEOUT_EXIT_CODE,
+                truncated=False,
+            )
+        return None
+
+    original_execute = KubernetesSandbox.execute
+    original_aexecute = KubernetesSandbox.aexecute
+
+    def execute_patched(self: KubernetesSandbox, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        try:
+            return original_execute(self, command, timeout=timeout)
+        except (TimeoutError, RuntimeError) as exc:
+            response = _as_failed_response(exc)
+            if response is None:
+                raise
+            logger.warning("Sandbox exec failed, returned to agent: %s", exc)
+            return response
+
+    async def aexecute_patched(self: KubernetesSandbox, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        try:
+            return await original_aexecute(self, command, timeout=timeout)
+        except (TimeoutError, RuntimeError) as exc:
+            response = _as_failed_response(exc)
+            if response is None:
+                raise
+            logger.warning("Sandbox exec failed, returned to agent: %s", exc)
+            return response
+
+    KubernetesSandbox.execute = execute_patched  # type: ignore[method-assign]
+    KubernetesSandbox.aexecute = aexecute_patched  # type: ignore[method-assign]
+    logger.info("Patched KubernetesSandbox.execute/aexecute to return timeouts to the agent")

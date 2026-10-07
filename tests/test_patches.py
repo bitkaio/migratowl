@@ -252,3 +252,55 @@ class TestVestigialKubernetesPatchRemoved:
         import migratowl.patches as patches_mod
 
         assert not hasattr(patches_mod, "_patch_langchain_kubernetes_annotated")
+
+
+class _RaisingBackend:
+    """Minimal KubernetesBackendProtocol stand-in whose execute() raises."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.id = "fake-sandbox"
+
+    def execute(self, command: str, *, timeout: int | None = None):
+        raise self._exc
+
+    async def aexecute(self, command: str, *, timeout: int | None = None):
+        raise self._exc
+
+
+class TestSandboxExecuteErrorPatch:
+    """A slow or unreachable command must come back to the agent as a failed
+    ExecuteResponse instead of an exception that kills the whole scan."""
+
+    RAW_TIMEOUT = TimeoutError("Command timed out after 120s in pod 'deepagents-47a1fb55': 'cd /w && pytest -x'")
+    GATEWAY_FAILURE = RuntimeError(
+        "Failed to communicate with the sandbox via the gateway at http://127.0.0.1:56825/execute."
+    )
+
+    def _sandbox(self, exc: Exception):
+        from langchain_kubernetes.sandbox import KubernetesSandbox
+
+        apply_patches()
+        return KubernetesSandbox(backend=_RaisingBackend(exc))  # type: ignore[arg-type]
+
+    def test_timeout_returns_failed_response(self) -> None:
+        result = self._sandbox(self.RAW_TIMEOUT).execute("pytest -x", timeout=120)
+        assert result.exit_code == 124
+        assert "timed out after 120s" in result.output
+
+    async def test_async_timeout_returns_failed_response(self) -> None:
+        result = await self._sandbox(self.RAW_TIMEOUT).aexecute("pytest -x", timeout=120)
+        assert result.exit_code == 124
+        assert "timed out after 120s" in result.output
+
+    def test_gateway_failure_returns_failed_response(self) -> None:
+        result = self._sandbox(self.GATEWAY_FAILURE).execute("pytest -x")
+        assert result.exit_code == 124
+        assert "Failed to communicate with the sandbox" in result.output
+
+    def test_unrelated_runtime_error_still_raises(self) -> None:
+        import pytest
+
+        sandbox = self._sandbox(RuntimeError("no thread_id in LangGraph config"))
+        with pytest.raises(RuntimeError, match="no thread_id"):
+            sandbox.execute("ls")
