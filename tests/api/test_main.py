@@ -654,3 +654,47 @@ class TestRunScanTokenUsage:
         result = app.state.job_store.get(job.job_id).result
         assert (result.total_input_tokens, result.total_output_tokens) == (1500, 150)
         assert (result.total_cache_read_tokens, result.total_cache_creation_tokens) == (600, 200)
+
+
+class TestCallbackOnEveryOutcome:
+    @pytest.mark.asyncio
+    async def test_failed_scan_posts_failure_callback(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError("Failed to clone https://x/y")
+        with patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url="https://github.com/x/y", callback_url="https://cb.example/r", pr_number=1)
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        cb.assert_awaited_once()
+        url, job_id, body = cb.call_args.args
+        assert (url, job_id) == ("https://cb.example/r", job.job_id)
+        assert body == {
+            "job_id": job.job_id, "state": "failed", "error": "Failed to clone https://x/y",
+            "repo_url": "https://github.com/x/y", "branch_name": "main",
+        }
+        assert failed.call_args.kwargs["error"] == "Failed to clone https://x/y"
+        assert app.state.job_store.get(job.job_id).side_effects_done is True
+
+    @pytest.mark.asyncio
+    async def test_callback_sends_job_headers_and_logs_non_2xx(self, caplog) -> None:
+        import httpx
+
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.update(request.headers)
+            return httpx.Response(500)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with patch("migratowl.http.get_http_client", return_value=client), caplog.at_level("WARNING"):
+            await main_mod._post_callback("https://cb.example/r", "job-1", {"state": "failed"}, state="failed")
+        await client.aclose()
+
+        assert seen["x-migratowl-job-id"] == "job-1"
+        assert seen["x-migratowl-job-state"] == "failed"
+        assert any("returned 500" in r.getMessage() for r in caplog.records)

@@ -122,6 +122,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `total_cache_read_tokens` and `total_cache_creation_tokens`, and the PR comment's cost estimate prices
   cache reads and writes at their own rates. The price table now covers Claude Fable 5.1, Opus 5.5 and
   Sonnet 5.5, and fixes `claude-sonnet-5`, which was priced at $3/$15 instead of $2/$10 per 1M tokens.
+- **PR notifications and callbacks followed different rules per outcome** — a commit status is now set
+  whenever `commit_sha` is given (previously the start and final statuses also required `pr_number`), and a
+  PR/MR comment is posted whenever `pr_number` is given — including a short failure notice with the error
+  when the scan fails (previously failures only set a status). `callback_url` is now called on failure too,
+  with `{job_id, state: "failed", error, repo_url, branch_name}`; the success body is unchanged. Both
+  carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers, and a non-2xx reply is logged as a
+  warning. A failing comment no longer prevents the commit status from being set, or vice versa.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

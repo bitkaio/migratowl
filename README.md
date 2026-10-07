@@ -282,7 +282,7 @@ curl -X POST http://localhost:8000/webhook \
 
 ### POST /webhook
 
-Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the background and POSTs the result to `callback_url` when done.
+Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the background and POSTs the outcome (report or failure) to `callback_url` when done.
 
 **Request body** (`ScanWebhookPayload`):
 
@@ -291,9 +291,9 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `repo_url` | `string` | **required** | Git repository URL to scan |
 | `branch_name` | `string` | `"main"` | Branch to clone and analyze |
 | `git_provider` | `"github" \| "gitlab"` | `"github"` | Git provider — determines which API is used for PR/MR comments and commit statuses |
-| `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result |
-| `commit_sha` | `string \| null` | `null` | Full commit SHA — when set, Migratowl posts a pending status at scan start and a success/failure status on completion |
-| `callback_url` | `string \| null` | `null` | URL to POST `ScanAnalysisReport` on completion |
+| `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result, or a short failure notice if the scan fails |
+| `commit_sha` | `string \| null` | `null` | Full commit SHA — when set (with or without `pr_number`), Migratowl posts a pending status at scan start and a success/failure/error status at the end |
+| `callback_url` | `string \| null` | `null` | URL to POST the outcome to: the `ScanAnalysisReport` when the scan completes, or `{job_id, state: "failed", error, repo_url, branch_name}` when it fails. Both requests carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers |
 | `exclude_deps` | `string[]` | `[]` | Dependency names to skip entirely |
 | `check_deps` | `string[]` | `[]` | When non-empty, only these dependencies are checked (all others are ignored) |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |

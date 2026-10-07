@@ -320,25 +320,42 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             # comment or re-fires the callback.
             if not job.side_effects_done:
                 if job.payload.callback_url:
-                    await _post_callback(job.payload.callback_url, report)
+                    await _post_callback(
+                        job.payload.callback_url, job_id, report.model_dump(mode="json"), state="completed"
+                    )
                 await notify_pr_done(job.payload, report, app.state.settings)
                 store.mark_side_effects_done(job_id)
 
         except (PipelineError, ReportExtractionError) as exc:
             logger.error("Scan for job %s produced no report: %s", job_id, exc)
-            store.set_error(job_id, str(exc))
-            if not job.side_effects_done:
-                await notify_pr_failed(job.payload, app.state.settings)
+            await _fail_job(app, job, str(exc))
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
-            store.set_error(job_id, "Internal scan error")
-            if not job.side_effects_done:
-                await notify_pr_failed(job.payload, app.state.settings)
+            await _fail_job(app, job, "Internal scan error")
 
         # Terminal outcome: free the sandbox now instead of leaving the pod running
         # until shutdown or the TTL sweep. Not reached on cancellation (shutdown),
         # so interrupted jobs keep their sandbox for resume.
         await _release_sandbox(app.state.manager, job_id)
+
+
+async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
+    """Mark the job failed and fire the failure side effects (at most once)."""
+    store: JobStore = app.state.job_store
+    store.set_error(job.job_id, error)
+    if job.side_effects_done:
+        return
+    if job.payload.callback_url:
+        body = {
+            "job_id": job.job_id,
+            "state": JobState.FAILED.value,
+            "error": error,
+            "repo_url": job.payload.repo_url,
+            "branch_name": job.payload.branch_name,
+        }
+        await _post_callback(job.payload.callback_url, job.job_id, body, state=JobState.FAILED.value)
+    await notify_pr_failed(job.payload, app.state.settings, error=error)
+    store.mark_side_effects_done(job.job_id)
 
 
 async def _release_sandbox(manager: Any, job_id: str) -> None:
@@ -355,18 +372,27 @@ async def _release_sandbox(manager: Any, job_id: str) -> None:
         logger.warning("Failed to delete sandbox %s for job %s", sandbox.id, job_id, exc_info=True)
 
 
-async def _post_callback(callback_url: str, report: Any) -> None:
-    """POST result to the caller's callback URL."""
+async def _post_callback(callback_url: str, job_id: str, body: dict[str, Any], *, state: str) -> None:
+    """POST the outcome to the caller's callback URL.
+
+    A completed job sends the ``ScanAnalysisReport``; a failed one sends
+    ``{job_id, state, error, repo_url, branch_name}``. Both carry the job id and
+    state in ``X-Migratowl-Job-Id`` / ``X-Migratowl-Job-State`` headers.
+    """
     try:
         from migratowl.http import get_http_client
 
         client = get_http_client()
         resp = await client.post(
             callback_url,
-            json=report.model_dump(mode="json"),
+            json=body,
+            headers={"X-Migratowl-Job-Id": job_id, "X-Migratowl-Job-State": state},
             timeout=30.0,
         )
-        logger.info("Callback POST to %s returned %s", callback_url, resp.status_code)
+        if resp.is_success:
+            logger.info("Callback POST to %s returned %s", callback_url, resp.status_code)
+        else:
+            logger.warning("Callback POST to %s returned %s", callback_url, resp.status_code)
     except Exception:
         logger.warning("Failed to POST callback to %s", callback_url, exc_info=True)
 
