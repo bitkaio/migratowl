@@ -617,3 +617,40 @@ class TestRunScanPipeline:
         assert failed.state == "failed"
         assert failed.error == "Failed to clone https://github.com/x/y"
         mock_failed.assert_awaited_once()
+
+
+
+class TestRunScanTokenUsage:
+    @pytest.mark.asyncio
+    async def test_counts_every_model_call_including_subagent_and_cache(self, app) -> None:
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        def llm_end(cb, inp: int, out: int, cache_read: int = 0, cache_creation: int = 0) -> None:
+            usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out,
+                     "input_token_details": {"cache_read": cache_read, "cache_creation": cache_creation}}
+            msg = AIMessage(content="", usage_metadata=usage, response_metadata={"model_name": "m"})
+            cb.on_llm_end(LLMResult(generations=[[ChatGeneration(message=msg)]]))
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+
+            async def ainvoke(*args, **kwargs):
+                cb = mock_factory.call_args[1]["usage_callback"]
+                llm_end(cb, 1000, 100, cache_read=600)          # main agent
+                llm_end(cb, 500, 50, cache_creation=200)        # package-analyzer subagent
+                return _ok_result()                             # its messages carry no usage
+
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.side_effect = ainvoke
+            mock_factory.return_value = mock_graph
+
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        result = app.state.job_store.get(job.job_id).result
+        assert (result.total_input_tokens, result.total_output_tokens) == (1500, 150)
+        assert (result.total_cache_read_tokens, result.total_cache_creation_tokens) == (600, 200)

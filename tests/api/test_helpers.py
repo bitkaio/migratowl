@@ -2,37 +2,31 @@
 
 """Tests for webhook helper functions."""
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
-from migratowl.api.helpers import _accumulate_tokens
+from migratowl.api.helpers import TokenUsage, sum_usage
 from migratowl.models.schemas import Ecosystem, ScanWebhookPayload
 
 
-class TestAccumulateTokens:
-    def test_returns_zeros_for_empty_messages(self) -> None:
-        assert _accumulate_tokens([]) == (0, 0)
+class TestSumUsage:
+    def test_returns_zeros_when_nothing_ran(self) -> None:
+        assert sum_usage([]) == TokenUsage()
 
-    def test_sums_usage_metadata_from_ai_messages(self) -> None:
-        msgs = [
-            AIMessage(content="hello", usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}),
-            AIMessage(content="world", usage_metadata={"input_tokens": 200, "output_tokens": 80, "total_tokens": 280}),
+    def test_sums_every_model_call(self) -> None:
+        usages = [
+            {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            {"input_tokens": 200, "output_tokens": 80, "total_tokens": 280},
         ]
-        assert _accumulate_tokens(msgs) == (300, 130)
+        assert sum_usage(usages) == TokenUsage(input=300, output=130)
 
-    def test_ignores_non_ai_messages(self) -> None:
-        msgs = [
-            HumanMessage(content="scan this"),
-            AIMessage(content="ok", usage_metadata={"input_tokens": 50, "output_tokens": 20, "total_tokens": 70}),
+    def test_sums_cache_details(self) -> None:
+        usages = [
+            {"input_tokens": 100, "output_tokens": 5, "total_tokens": 105,
+             "input_token_details": {"cache_read": 60, "cache_creation": 10}},
+            {"input_tokens": 50, "output_tokens": 5, "total_tokens": 55,
+             "input_token_details": {"cache_read": None}},
         ]
-        assert _accumulate_tokens(msgs) == (50, 20)
-
-    def test_ignores_ai_messages_without_usage_metadata(self) -> None:
-        msgs = [AIMessage(content="no metadata here")]
-        assert _accumulate_tokens(msgs) == (0, 0)
-
-    def test_handles_dict_messages(self) -> None:
-        msgs = [{"role": "assistant", "content": "dict message"}]
-        assert _accumulate_tokens(msgs) == (0, 0)
+        assert sum_usage(usages) == TokenUsage(input=150, output=10, cache_read=60, cache_creation=10)
 
 
 def _verdict(name: str, breaking: bool = False):
@@ -90,7 +84,7 @@ class TestAssembleReport:
 
         payload = ScanWebhookPayload(repo_url="https://x/y", branch_name="dev")
         prepared = self._prepared(["flask"], skipped=["click"])
-        report = assemble_report(payload, prepared, [_verdict("flask", True)], duration=12.34, tokens=(100, 20))
+        report = assemble_report(payload, prepared, [_verdict("flask", True)], duration=12.34, tokens=TokenUsage(input=100, output=20))
 
         assert report.repo_url == "https://x/y" and report.branch_name == "dev"
         assert report.scan_result.manifests_found == ["pyproject.toml"]
@@ -104,7 +98,7 @@ class TestAssembleReport:
         prepared = self._prepared(["Flask", "requests"])
         reports = [_verdict("flask", True), _verdict("FLASK"), _verdict("made-up")]
         payload = ScanWebhookPayload(repo_url="https://x/y")
-        report = assemble_report(payload, prepared, reports, duration=0, tokens=(0, 0))
+        report = assemble_report(payload, prepared, reports, duration=0, tokens=TokenUsage())
 
         assert [r.dependency_name for r in report.reports] == ["Flask"]
         assert report.reports[0].is_breaking is True
@@ -130,7 +124,7 @@ class TestAssembleDuplicateNames:
         safe = _verdict("lodash").model_copy(update={"confidence": 1.0})
         report = assemble_report(
             ScanWebhookPayload(repo_url="https://x/y"), prepared, [safe, _verdict("lodash", True)],
-            duration=0, tokens=(0, 0),
+            duration=0, tokens=TokenUsage(),
         )
 
         assert [(r.dependency_name, r.is_breaking) for r in report.reports] == [("lodash", True)]

@@ -16,18 +16,27 @@
 
 from migratowl.models.schemas import ScanAnalysisReport
 
-# (input_cost_per_1M_tokens, output_cost_per_1M_tokens) in USD
-_PRICING: dict[str, tuple[float, float]] = {
-    "claude-fable-5": (10.0, 50.0),
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-opus-4-7": (5.0, 25.0),
-    "claude-sonnet-5": (3.0, 15.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
-    "gpt-4o": (2.50, 10.0),
-    "gpt-4o-mini": (0.15, 0.60),
+# USD per 1M tokens: (input, output, cache read or None). Anthropic prices from
+# the published model table as of 2026-09-25. None = cache reads at 0.1x input.
+_PRICING: dict[str, tuple[float, float, float | None]] = {
+    "claude-fable-5-1": (10.0, 50.0, 0.25),
+    "claude-fable-5": (10.0, 50.0, None),
+    "claude-opus-5-5": (4.0, 20.0, 0.20),
+    "claude-opus-5": (5.0, 25.0, None),
+    "claude-opus-4-8": (5.0, 25.0, None),
+    "claude-opus-4-7": (5.0, 25.0, None),
+    "claude-opus-4-6": (5.0, 25.0, None),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-sonnet-5": (2.0, 10.0, None),
+    "claude-sonnet-4-6": (3.0, 15.0, None),
+    "claude-haiku-4-5": (1.0, 5.0, None),
+    "claude-haiku-4-5-20251001": (1.0, 5.0, None),
+    "gpt-4o": (2.50, 10.0, None),
+    "gpt-4o-mini": (0.15, 0.60, None),
 }
+
+# Cache writes (5-minute TTL) cost 1.25x the input price.
+_CACHE_WRITE_MULTIPLIER = 1.25
 
 
 def _format_tokens(input_tokens: int, output_tokens: int) -> str:
@@ -46,12 +55,32 @@ def _format_tokens(input_tokens: int, output_tokens: int) -> str:
     return f"{_fmt(total)} tokens (↑{_fmt(input_tokens)} / ↓{_fmt(output_tokens)})"
 
 
-def _estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> str:
-    """Return '~$0.12' for known models, '' for unknown or zero-token runs."""
+def _estimate_cost(
+    model_name: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+) -> str:
+    """Return '~$0.12' for known models, '' for unknown or zero-token runs.
+
+    ``input_tokens`` includes cache reads and writes (as LangChain reports it);
+    those are priced at their own rates instead of the full input price.
+    """
     pricing = _PRICING.get(model_name)
     if not pricing or (input_tokens + output_tokens) == 0:
         return ""
-    cost = (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+    input_price, output_price, cache_read_price = pricing
+    if cache_read_price is None:
+        cache_read_price = input_price * 0.1
+    uncached = max(input_tokens - cache_read - cache_creation, 0)
+    cost = (
+        uncached * input_price
+        + cache_read * cache_read_price
+        + cache_creation * input_price * _CACHE_WRITE_MULTIPLIER
+        + output_tokens * output_price
+    ) / 1_000_000
     return f"~${cost:.2f}"
 
 
@@ -123,7 +152,13 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
     token_str = _format_tokens(report.total_input_tokens, report.total_output_tokens)
     if token_str:
         footer_parts.append(token_str)
-        cost_str = _estimate_cost(report.model_name, report.total_input_tokens, report.total_output_tokens)
+        cost_str = _estimate_cost(
+            report.model_name,
+            report.total_input_tokens,
+            report.total_output_tokens,
+            cache_read=report.total_cache_read_tokens,
+            cache_creation=report.total_cache_creation_tokens,
+        )
         if cost_str:
             footer_parts.append(cost_str)
 

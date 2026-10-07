@@ -531,3 +531,23 @@ class TestWebhookAgentVariant:
         failed_rule = prompt.index("Validation FAILED")
         threshold_rule = prompt.index("confidence ≥ 0.7")
         assert update_rule < passed_rule < failed_rule < threshold_rule
+
+
+
+class TestUsageCallback:
+    def test_usage_callback_is_attached_to_the_model(self) -> None:
+        # The subagent reuses this model instance, so its calls are counted too.
+        mock_manager = _make_mock_manager()
+        usage_cb = MagicMock()
+        langfuse = MagicMock()
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent") as mock_sub,
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", langfuse),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None), usage_callback=usage_cb)
+
+        assert mock_init.call_args[1]["callbacks"] == [langfuse, usage_cb]
+        assert mock_sub.call_args[1]["model"] is mock_init.return_value

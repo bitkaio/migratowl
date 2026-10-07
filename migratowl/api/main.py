@@ -34,9 +34,10 @@ from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
 from migratowl.api.helpers import (  # noqa: E402
     ReportExtractionError,
-    _accumulate_tokens,
+    TokenUsage,
     assemble_report,
     extract_verdicts,
+    sum_usage,
 )
 from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
@@ -285,8 +286,11 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             resolved, pending = presolve(prepared)
 
             verdicts: list = []
-            tokens = (0, 0)
+            tokens = TokenUsage()
             if pending:
+                from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+                usage = UsageMetadataCallbackHandler()
                 graph = create_migratowl_agent(
                     app.state.manager,
                     tools=tools,
@@ -296,13 +300,14 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     include_prerelease=job.payload.include_prerelease,
                     rate_limiter=getattr(app.state, "rate_limiter", None),
                     checkpointer=getattr(app.state, "checkpointer", None),
+                    usage_callback=usage,
                 )
                 result = await graph.ainvoke(
                     {"messages": [("user", build_analysis_brief(job.payload, prepared, pending))]},
                     config=config,
                 )
                 verdicts = extract_verdicts(result)
-                tokens = _accumulate_tokens(result.get("messages", []))
+                tokens = sum_usage(usage.usage_metadata.values())
 
             report = assemble_report(
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens

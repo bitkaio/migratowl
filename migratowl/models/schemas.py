@@ -175,8 +175,11 @@ class ScanAnalysisReport(BaseModel):
     reports: list[AnalysisReport]
     skipped: list[str] = []
     total_duration_seconds: float
+    # total_input_tokens includes cache reads and writes (also counted below)
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
     model_name: str = ""
 
 

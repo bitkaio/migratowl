@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import BaseTool
 from langchain_kubernetes import KubernetesSandboxManager
@@ -178,6 +179,7 @@ def create_migratowl_agent(
     checkpointer: Any = None,
     rate_limiter: InMemoryRateLimiter | None = None,
     on_sandbox_acquired: Callable[[str], None] | None = None,
+    usage_callback: BaseCallbackHandler | None = None,
 ) -> Any:
     """Build the Migratowl agent graph.
 
@@ -251,7 +253,9 @@ def create_migratowl_agent(
         f"{sdk_provider}:{effective_model_name}",
         rate_limiter=rate_limiter,
         max_retries=8,
-        callbacks=[_langfuse_handler] if _langfuse_handler else None,
+        # Attached to the model itself, so the package-analyzer subagent (same
+        # model instance) reports its usage to the same callback.
+        callbacks=[cb for cb in (_langfuse_handler, usage_callback) if cb] or None,
         **extra_kwargs,
     )
 
