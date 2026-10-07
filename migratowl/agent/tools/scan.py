@@ -43,6 +43,7 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
     "Cargo.toml": (parse_cargo_toml, Ecosystem.RUST),
     "pom.xml": (parse_pom_xml, Ecosystem.JAVA),
     "build.gradle": (parse_build_gradle, Ecosystem.JAVA),
+    "build.gradle.kts": (parse_build_gradle, Ecosystem.JAVA),
 }
 
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]

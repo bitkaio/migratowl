@@ -106,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was stored with version `1.0; python_version < "3.8"`, and `foo ; python_version >= "3.8"` had the
   marker's `>=` read as its version operator. Markers are now stripped before parsing, as
   `pyproject.toml` parsing already did.
+- **Dependencies outside the main sections were never scanned** — the manifest parsers now also read
+  `[project.optional-dependencies]` and PEP 735 `[dependency-groups]`, Poetry
+  `[tool.poetry.group.<name>.dependencies]`, Cargo `[build-dependencies]`, `[target.<cfg>.*]` tables
+  and `[workspace.dependencies]`, and Gradle Kotlin DSL `build.gradle.kts` files. Malformed tables
+  (a list or number where a table belongs) are skipped instead of raising.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

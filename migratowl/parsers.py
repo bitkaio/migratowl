@@ -72,48 +72,79 @@ def parse_requirements_txt(content: str, manifest_path: str) -> list[Dependency]
     return deps
 
 
+def _dict(value: object) -> dict:
+    """``value`` if it is a table, else ``{}`` — manifests are untrusted input."""
+    return value if isinstance(value, dict) else {}
+
+
+def _table_version(value: object) -> str:
+    """Version from a TOML dependency value: ``"1.0"`` or ``{ version = "1.0", ... }``."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        version = value.get("version", "")
+        return version if isinstance(version, str) else ""
+    return ""
+
+
 def parse_pyproject_toml(content: str, manifest_path: str) -> list[Dependency]:
-    """Parse a pyproject.toml file (PEP 621 or Poetry)."""
+    """Parse a pyproject.toml file (PEP 621 / PEP 735 or Poetry).
+
+    PEP 621 covers ``[project].dependencies`` and ``[project.optional-dependencies]``;
+    PEP 735 ``[dependency-groups]`` entries are read too (``{include-group = ...}``
+    entries are skipped). When ``[project].dependencies`` exists, Poetry tables are
+    ignored; otherwise ``[tool.poetry.dependencies]`` and every
+    ``[tool.poetry.group.<name>.dependencies]`` table are read.
+    """
     if not content.strip():
         return []
 
     data = tomllib.loads(content)
+    project = _dict(data.get("project"))
+
+    specs: list[str] = []
+    pep621_deps = project.get("dependencies")
+    if isinstance(pep621_deps, list):
+        specs += pep621_deps
+        for group in _dict(project.get("optional-dependencies")).values():
+            if isinstance(group, list):
+                specs += group
+    for group in _dict(data.get("dependency-groups")).values():
+        if isinstance(group, list):
+            specs += group
+
     deps: list[Dependency] = []
-
-    # PEP 621: [project].dependencies
-    pep621_deps = data.get("project", {}).get("dependencies")
-    if pep621_deps is not None:
-        for spec in pep621_deps:
-            name, version = _parse_pep508(spec)
-            deps.append(
-                Dependency(
-                    name=name,
-                    current_version=version,
-                    ecosystem=Ecosystem.PYTHON,
-                    manifest_path=manifest_path,
-                )
-            )
-        return deps
-
-    # Poetry: [tool.poetry.dependencies]
-    poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
-    for pkg_name, value in poetry_deps.items():
-        if pkg_name.lower() == "python":
+    for spec in specs:
+        if not isinstance(spec, str):
             continue
-        if isinstance(value, str):
-            version = value
-        elif isinstance(value, dict):
-            version = value.get("version", "")
-        else:
-            version = ""
+        name, version = _parse_pep508(spec)
         deps.append(
             Dependency(
-                name=pkg_name,
+                name=name,
                 current_version=version,
                 ecosystem=Ecosystem.PYTHON,
                 manifest_path=manifest_path,
             )
         )
+    if isinstance(pep621_deps, list):
+        return deps
+
+    poetry = _dict(_dict(data.get("tool")).get("poetry"))
+    tables = [_dict(poetry.get("dependencies"))] + [
+        _dict(_dict(group).get("dependencies")) for group in _dict(poetry.get("group")).values()
+    ]
+    for table in tables:
+        for pkg_name, value in table.items():
+            if pkg_name.lower() == "python":
+                continue
+            deps.append(
+                Dependency(
+                    name=pkg_name,
+                    current_version=_table_version(value),
+                    ecosystem=Ecosystem.PYTHON,
+                    manifest_path=manifest_path,
+                )
+            )
 
     return deps
 
@@ -203,32 +234,34 @@ def parse_go_mod(content: str, manifest_path: str) -> list[Dependency]:
     return deps
 
 
+_CARGO_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
+
+
 def parse_cargo_toml(content: str, manifest_path: str) -> list[Dependency]:
-    """Parse a Rust Cargo.toml file."""
+    """Parse a Rust Cargo.toml file.
+
+    Reads ``[dependencies]``, ``[dev-dependencies]``, ``[build-dependencies]``,
+    their ``[target.<cfg>.*]`` variants and ``[workspace.dependencies]``.
+    """
     if not content.strip():
         return []
 
     data = tomllib.loads(content)
-    deps: list[Dependency] = []
+    tables = [_dict(data.get(section)) for section in _CARGO_SECTIONS]
+    for target in _dict(data.get("target")).values():
+        tables += [_dict(_dict(target).get(section)) for section in _CARGO_SECTIONS]
+    tables.append(_dict(_dict(data.get("workspace")).get("dependencies")))
 
-    for section in ("dependencies", "dev-dependencies"):
-        for name, value in data.get(section, {}).items():
-            if isinstance(value, str):
-                version = value
-            elif isinstance(value, dict):
-                version = value.get("version", "")
-            else:
-                version = ""
-            deps.append(
-                Dependency(
-                    name=name,
-                    current_version=version,
-                    ecosystem=Ecosystem.RUST,
-                    manifest_path=manifest_path,
-                )
-            )
-
-    return deps
+    return [
+        Dependency(
+            name=name,
+            current_version=_table_version(value),
+            ecosystem=Ecosystem.RUST,
+            manifest_path=manifest_path,
+        )
+        for table in tables
+        for name, value in table.items()
+    ]
 
 
 def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:

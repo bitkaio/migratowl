@@ -186,3 +186,13 @@ class TestDetectJava:
         assert detections[0]["ecosystem"] == Ecosystem.JAVA
         assert detections[0]["marker_file"] == "build.gradle"
         assert "gradle" in detections[0]["default_test_command"]
+
+class TestDetectKotlinDsl:
+    def test_detects_gradle_kotlin_dsl_as_java(self) -> None:
+        backend = make_backend(output=f"{DEFAULT_WORKSPACE}/build.gradle.kts\n")
+        tool = create_detect_languages_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        detections = json.loads(tool.invoke({}))
+
+        assert [(d["ecosystem"], d["marker_file"]) for d in detections] == [("java", "build.gradle.kts")]
+        assert "-name 'build.gradle.kts'" in backend.execute.call_args_list[0][0][0]

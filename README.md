@@ -164,11 +164,11 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 
 | Language | Manifest files | Registry |
 |----------|----------------|----------|
-| Python | `pyproject.toml`, `requirements.txt` | PyPI |
+| Python | `pyproject.toml` (PEP 621 incl. optional deps, PEP 735 groups, Poetry incl. groups), `requirements.txt` | PyPI |
 | Node.js | `package.json` | npm |
 | Go | `go.mod` | proxy.golang.org |
 | Rust | `Cargo.toml` | crates.io |
-| Java | `pom.xml` (Maven), `build.gradle` (Gradle) | Maven Central |
+| Java | `pom.xml` (Maven), `build.gradle` / `build.gradle.kts` (Gradle) | Maven Central |
 
 ---
 

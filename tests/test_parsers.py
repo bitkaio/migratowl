@@ -553,3 +553,97 @@ class TestParseRequirementsTxtMarkers:
 
     def test_marker_and_inline_comment(self) -> None:
         assert self._one('qux==3.1 ; os_name == "nt"  # windows only') == ("qux", "3.1")
+
+
+class TestParsePyprojectExtraSections:
+    def _names(self, content: str) -> dict[str, str]:
+        return {d.name: d.current_version for d in parse_pyproject_toml(content, "pyproject.toml")}
+
+    def test_pep621_optional_dependencies(self) -> None:
+        content = """\
+[project]
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "pytest-cov==4.1.0"]
+docs = ["sphinx~=7.2"]
+"""
+        assert self._names(content) == {
+            "requests": ">=2.28", "pytest": ">=7.0", "pytest-cov": "==4.1.0", "sphinx": "~=7.2",
+        }
+
+    def test_pep735_dependency_groups_skip_includes(self) -> None:
+        content = """\
+[project]
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff==0.5.0", {include-group = "test"}]
+test = ["pytest>=8"]
+"""
+        assert self._names(content) == {"ruff": "==0.5.0", "pytest": ">=8"}
+
+    def test_dependency_groups_without_project_table(self) -> None:
+        content = """\
+[dependency-groups]
+dev = ["mypy>=1.10"]
+"""
+        assert self._names(content) == {"mypy": ">=1.10"}
+
+    def test_poetry_group_dependencies(self) -> None:
+        content = """\
+[tool.poetry.dependencies]
+python = "^3.11"
+flask = "^3.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = { version = "^8.0" }
+"""
+        assert self._names(content) == {"flask": "^3.0", "black": "^24.0", "pytest": "^8.0"}
+
+
+class TestParseCargoTomlExtraSections:
+    def _names(self, content: str) -> dict[str, str]:
+        return {d.name: d.current_version for d in parse_cargo_toml(content, "Cargo.toml")}
+
+    def test_build_dependencies(self) -> None:
+        assert self._names('[build-dependencies]\ncc = "1.0"\n') == {"cc": "1.0"}
+
+    def test_target_specific_dependencies(self) -> None:
+        content = """\
+[target.'cfg(unix)'.dependencies]
+nix = "0.27"
+
+[target.'cfg(windows)'.dev-dependencies]
+winapi = { version = "0.3" }
+"""
+        assert self._names(content) == {"nix": "0.27", "winapi": "0.3"}
+
+    def test_workspace_dependencies(self) -> None:
+        content = """\
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = "1.35"
+"""
+        assert self._names(content) == {"serde": "1.0", "tokio": "1.35"}
+
+
+class TestParseBuildGradleKts:
+    def test_kotlin_dsl_dependencies(self) -> None:
+        content = """\
+dependencies {
+    implementation("com.google.guava:guava:33.0.0-jre")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
+}
+"""
+        deps = parse_build_gradle(content, "build.gradle.kts")
+        assert {d.name: d.current_version for d in deps} == {
+            "com.google.guava:guava": "33.0.0-jre",
+            "org.junit.jupiter:junit-jupiter": "5.10.1",
+        }

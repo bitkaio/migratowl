@@ -1,3 +1,9 @@
 [project]
 name="x"
 dependencies=["requests>=2.0","flask"]
+[project.optional-dependencies]
+test=["pytest>=8"]
+[dependency-groups]
+dev=["ruff==0.5.0",{include-group="test"}]
+[tool.poetry.group.dev.dependencies]
+black="^24.0"

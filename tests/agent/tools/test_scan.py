@@ -216,3 +216,19 @@ class TestScanJava:
 
         assert len(result) == 1
         assert result[0]["ecosystem"] == "java"
+
+class TestScanKotlinDsl:
+    def test_scans_build_gradle_kts(self) -> None:
+        kts = 'dependencies {\n    implementation("com.example:lib:1.0.0")\n}\n'
+        backend = _make_backend_multi([
+            ExecResult(output=f"{DEFAULT_WORKSPACE}/build.gradle.kts\n", exit_code=0),
+            ExecResult(output=kts, exit_code=0),
+        ])
+        tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = json.loads(tool.invoke({}))
+
+        assert [(d["name"], d["ecosystem"], d["manifest_path"]) for d in result] == [
+            ("com.example:lib", "java", "build.gradle.kts")
+        ]
+        assert "-name 'build.gradle.kts'" in backend.execute.call_args_list[0][0][0]
