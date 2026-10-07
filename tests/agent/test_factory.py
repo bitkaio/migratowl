@@ -451,3 +451,53 @@ class TestOnSandboxAcquired:
     def test_no_callback_is_safe(self) -> None:
         get_sandbox, sandbox = self._build_with_callback(None)
         assert get_sandbox() is sandbox
+
+
+class TestBuildTools:
+    def test_returns_every_tool_by_name(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        tools = build_tools(_make_mock_manager(), settings=Settings(_env_file=None))
+
+        assert tools.clone_repo.name == "clone_repo"
+        assert tools.scan_dependencies.name == "scan_dependencies"
+        assert tools.check_outdated_deps.name == "check_outdated_deps"
+        assert tools.copy_source.name == "copy_source"
+        assert tools.update_dependencies.name == "update_dependencies"
+        assert tools.validate_project.name == "validate_project"
+        assert tools.fetch_changelog.name == "fetch_changelog_tool"
+        assert tools.read_manifest.name == "read_manifest"
+
+    def test_on_sandbox_acquired_fires_once(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        sandbox = MagicMock(id="sbx-1")
+        sandbox.execute.return_value = MagicMock(exit_code=0, output="file")
+        mgr = _make_mock_manager()
+        mgr._make_backend_factory.return_value = lambda _: sandbox
+        seen: list[str] = []
+
+        tools = build_tools(mgr, settings=Settings(_env_file=None), on_sandbox_acquired=seen.append)
+        tools.copy_source.invoke({"folder_name": "main"})
+        tools.copy_source.invoke({"folder_name": "other"})
+
+        assert seen == ["sbx-1"]
+
+    def test_create_agent_reuses_given_tools(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        mgr = _make_mock_manager()
+        settings = Settings(_env_file=None)
+        tools = build_tools(mgr, settings=settings)
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection"),
+            patch("migratowl.agent.factory.build_tools") as mock_build,
+        ):
+            create_migratowl_agent(mgr, settings=settings, tools=tools)
+
+        mock_build.assert_not_called()
+        passed = mgr.create_agent.call_args.kwargs["tools"]
+        assert tools.clone_repo in passed

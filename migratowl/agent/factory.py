@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_core.tools import BaseTool
 from langchain_kubernetes import KubernetesSandboxManager
 
 from migratowl.agent.session_graph import apply_session_injection
@@ -165,9 +167,78 @@ Never retry the same tool with identical arguments after it fails. On failure:
 """
 
 
+@dataclass(frozen=True)
+class MigratowlTools:
+    """Migratowl's sandbox-bound tools, built once per scan and shared by pipeline and agent."""
+
+    backend_factory: Callable[[Any], Any]
+    clone_repo: BaseTool
+    copy_source: BaseTool
+    detect_languages: BaseTool
+    scan_dependencies: BaseTool
+    check_outdated_deps: BaseTool
+    update_dependencies: BaseTool
+    validate_project: BaseTool
+    execute_project: BaseTool
+    fetch_changelog: BaseTool
+    read_manifest: BaseTool
+    patch_manifest: BaseTool
+
+
+def build_tools(
+    manager: KubernetesSandboxManager,
+    *,
+    settings: Settings,
+    mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
+    include_prerelease: bool = False,
+    on_sandbox_acquired: Callable[[str], None] | None = None,
+) -> MigratowlTools:
+    """Build Migratowl's sandbox-bound tools once, for both the pipeline and the agent.
+
+    ``on_sandbox_acquired`` fires once with the sandbox id when the sandbox is first
+    acquired (lazily, on the first tool call, possibly on a worker thread) — it must be
+    thread-safe.
+    """
+    backend_factory = manager._make_backend_factory()
+    _acquired = False
+
+    def get_sandbox():
+        nonlocal _acquired
+        sandbox = backend_factory(None)
+        if not _acquired and sandbox is not None and on_sandbox_acquired is not None:
+            _acquired = True
+            on_sandbox_acquired(sandbox.id)
+        return sandbox
+
+    workspace_path = settings.workspace_path
+    source_path = f"{workspace_path}/source"
+    return MigratowlTools(
+        backend_factory=backend_factory,
+        clone_repo=create_clone_repo_tool(get_sandbox, workspace_path=workspace_path),
+        copy_source=create_copy_source_tool(get_sandbox, workspace_path=workspace_path),
+        detect_languages=create_detect_languages_tool(get_sandbox, workspace_path=source_path),
+        scan_dependencies=create_scan_dependencies_tool(get_sandbox, workspace_path=source_path),
+        check_outdated_deps=create_check_outdated_tool(
+            concurrency=settings.scan_registry_concurrency,
+            options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
+        ),
+        update_dependencies=create_update_dependencies_tool(get_sandbox, workspace_path=workspace_path),
+        validate_project=create_validate_project_tool(
+            get_sandbox, workspace_path=workspace_path, max_output_chars=settings.max_output_chars
+        ),
+        execute_project=create_execute_project_tool(
+            get_sandbox, workspace_path=workspace_path, max_output_chars=settings.max_output_chars
+        ),
+        fetch_changelog=create_fetch_changelog_tool(),
+        read_manifest=create_read_manifest_tool(get_sandbox, workspace_path=workspace_path),
+        patch_manifest=create_patch_manifest_tool(get_sandbox),
+    )
+
+
 def create_migratowl_agent(
     manager: KubernetesSandboxManager,
     *,
+    tools: MigratowlTools | None = None,
     settings: Settings | None = None,
     mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
     include_prerelease: bool = False,
@@ -180,6 +251,8 @@ def create_migratowl_agent(
     Args:
         manager: KubernetesSandboxManager that handles per-thread sandbox
             acquisition via LangGraph's create_setup_node() mechanism.
+        tools: Prebuilt sandbox tools (see ``build_tools``). Built here when ``None``;
+            pass them to share one tool set with the deterministic pipeline.
         settings: Optional settings override; defaults to ``get_settings()``.
         mode: How to resolve the latest version — SAFE respects declared semver
             constraints, NORMAL compares against the global maximum version.
@@ -197,63 +270,27 @@ def create_migratowl_agent(
     if settings is None:
         settings = get_settings()
 
-    backend_factory = manager._make_backend_factory()
+    if tools is None:
+        tools = build_tools(
+            manager,
+            settings=settings,
+            mode=mode,
+            include_prerelease=include_prerelease,
+            on_sandbox_acquired=on_sandbox_acquired,
+        )
 
-    # Fire on_sandbox_acquired exactly once, when the sandbox is first acquired
-    # (lazily, on the first tool call — which runs on a worker thread). The
-    # callback must therefore be thread-safe; callers persisting sandbox_id from
-    # an event loop should bridge via run_coroutine_threadsafe.
-    _acquired = False
-
-    def get_sandbox():
-        nonlocal _acquired
-        sandbox = backend_factory(None)
-        if not _acquired and sandbox is not None and on_sandbox_acquired is not None:
-            _acquired = True
-            on_sandbox_acquired(sandbox.id)
-        return sandbox
-
-    workspace_path = settings.workspace_path
-    source_path = f"{workspace_path}/source"
-
-    # Tools
-    clone_repo = create_clone_repo_tool(get_sandbox, workspace_path=workspace_path)
-    copy_source = create_copy_source_tool(get_sandbox, workspace_path=workspace_path)
-    detect_languages = create_detect_languages_tool(get_sandbox, workspace_path=source_path)
-    scan_dependencies = create_scan_dependencies_tool(get_sandbox, workspace_path=source_path)
-    check_outdated_deps = create_check_outdated_tool(
-        concurrency=settings.scan_registry_concurrency,
-        options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
-    )
-    update_dependencies = create_update_dependencies_tool(
-        get_sandbox, workspace_path=workspace_path
-    )
-    execute_project = create_execute_project_tool(
-        get_sandbox,
-        workspace_path=workspace_path,
-        max_output_chars=settings.max_output_chars,
-    )
-    fetch_changelog = create_fetch_changelog_tool()
-    read_manifest = create_read_manifest_tool(get_sandbox, workspace_path=workspace_path)
-    patch_manifest = create_patch_manifest_tool(get_sandbox)
-    validate_project = create_validate_project_tool(
-        get_sandbox,
-        workspace_path=workspace_path,
-        max_output_chars=settings.max_output_chars,
-    )
-
-    tools = [
-        clone_repo,
-        copy_source,
-        detect_languages,
-        scan_dependencies,
-        check_outdated_deps,
-        update_dependencies,
-        validate_project,
-        execute_project,
-        fetch_changelog,
-        read_manifest,
-        patch_manifest,
+    agent_tools = [
+        tools.clone_repo,
+        tools.copy_source,
+        tools.detect_languages,
+        tools.scan_dependencies,
+        tools.check_outdated_deps,
+        tools.update_dependencies,
+        tools.validate_project,
+        tools.execute_project,
+        tools.fetch_changelog,
+        tools.read_manifest,
+        tools.patch_manifest,
     ]
 
     # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model.
@@ -296,10 +333,10 @@ def create_migratowl_agent(
     # Subagent
     package_analyzer = create_package_analyzer_subagent(
         model=model,
-        backend_factory=backend_factory,
+        backend_factory=tools.backend_factory,
         tools=[
-            copy_source, update_dependencies, validate_project,
-            execute_project, fetch_changelog, read_manifest, patch_manifest,
+            tools.copy_source, tools.update_dependencies, tools.validate_project,
+            tools.execute_project, tools.fetch_changelog, tools.read_manifest, tools.patch_manifest,
         ],
     )
 
@@ -309,7 +346,7 @@ def create_migratowl_agent(
         manager.create_agent(
             model=model,
             system_prompt=system_prompt,
-            tools=tools,
+            tools=agent_tools,
             subagents=[package_analyzer],
             response_format=ScanAnalysisReport,
             checkpointer=checkpointer,
