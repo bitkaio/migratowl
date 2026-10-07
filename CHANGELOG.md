@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MIGRATOWL_SANDBOX_KUBE_API_URL` and `MIGRATOWL_SANDBOX_KUBE_TOKEN` are now passed through; for
   local development run `kubectl proxy` and set the URL to `http://localhost:8001`.
 
+- **Scans with no report no longer pass as "nothing outdated"** — when the agent finished without
+  returning a structured report (seen with weaker models that wrote the report to a file instead), the
+  job ended `completed` with an empty report, indistinguishable from a clean dependency scan. It now
+  ends `failed` with the error `Agent finished without returning a structured report`, and the PR gets
+  the failure notice instead of a misleading success comment.
+
 ## [0.6.0] - 2026-07-16
 
 ### Changed

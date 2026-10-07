@@ -24,7 +24,6 @@ from langchain_core.messages import AIMessage, BaseMessage
 from migratowl.models.schemas import (
     OutdatedDependency,
     ScanAnalysisReport,
-    ScanResult,
     ScanWebhookPayload,
 )
 
@@ -73,6 +72,10 @@ def _message_text(msg: object) -> str:
     return ""
 
 
+class ReportExtractionError(Exception):
+    """The agent finished without returning a usable ScanAnalysisReport."""
+
+
 def extract_report(agent_result: dict, payload: ScanWebhookPayload) -> ScanAnalysisReport:
     """Extract a ScanAnalysisReport from the agent result.
 
@@ -80,7 +83,8 @@ def extract_report(agent_result: dict, payload: ScanWebhookPayload) -> ScanAnaly
       1. Read ``structured_response`` (set by deepagents when response_format is used).
       2. Fallback: scan messages for JSON-parseable content (covers providers where
          ToolStrategy fails to populate structured_response).
-      3. Return an empty report if nothing works.
+      3. Raise ``ReportExtractionError`` if nothing works — an empty report would be
+         indistinguishable from "nothing is outdated".
     """
     report: ScanAnalysisReport | None = None
 
@@ -108,18 +112,9 @@ def extract_report(agent_result: dict, payload: ScanWebhookPayload) -> ScanAnaly
             except (json.JSONDecodeError, Exception):
                 continue
 
-    # 3. Empty report sentinel
+    # 3. No report: fail loudly instead of reporting "nothing outdated"
     if report is None:
-        logger.warning("Could not extract ScanAnalysisReport from agent output; returning empty report")
-        report = ScanAnalysisReport(
-            repo_url=payload.repo_url,
-            branch_name=payload.branch_name,
-            scan_result=ScanResult(
-                all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0
-            ),
-            reports=[],
-            total_duration_seconds=0.0,
-        )
+        raise ReportExtractionError("Agent finished without returning a structured report")
 
     # Accumulate token usage from all messages
     messages = agent_result.get("messages", [])

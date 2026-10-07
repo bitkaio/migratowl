@@ -13,6 +13,20 @@ from migratowl.api.jobs import InMemoryJobStore
 from migratowl.config import Settings
 
 
+def _ok_result() -> dict:
+    """Minimal successful agent result: a valid structured report."""
+    from migratowl.models.schemas import ScanAnalysisReport, ScanResult
+
+    report = ScanAnalysisReport(
+        repo_url="https://github.com/x/y",
+        branch_name="main",
+        scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0.0),
+        reports=[],
+        total_duration_seconds=0.0,
+    )
+    return {"messages": [], "structured_response": report}
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(_env_file=None)
@@ -117,7 +131,7 @@ class TestWebhookNotifyIntegration:
         with patch("migratowl.api.main.notify_pr_start") as mock_start, \
              patch("migratowl.api.main.notify_pr_done"), \
              patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
-            mock_agent.return_value.ainvoke = AsyncMock(return_value={"messages": []})
+            mock_agent.return_value.ainvoke = AsyncMock(return_value=_ok_result())
             mock_start.return_value = None
 
             await client.post(
@@ -139,7 +153,7 @@ class TestWebhookNotifyIntegration:
         with patch("migratowl.api.main.notify_pr_start"), \
              patch("migratowl.api.main.notify_pr_done") as mock_done, \
              patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
-            mock_agent.return_value.ainvoke = AsyncMock(return_value={"messages": []})
+            mock_agent.return_value.ainvoke = AsyncMock(return_value=_ok_result())
 
             await client.post(
                 "/webhook",
@@ -506,7 +520,7 @@ class TestSandboxReleaseOnTerminalState:
         return resp.json()["job_id"]
 
     async def test_sandbox_deleted_after_success(self, client: AsyncClient, sandbox_manager: MagicMock) -> None:
-        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value={"messages": []}))
+        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value=_ok_result()))
 
         sandbox_manager._provider.adelete.assert_awaited_once_with(sandbox_id="sb-123")
         assert job_id not in sandbox_manager._sandbox_by_thread
@@ -519,7 +533,28 @@ class TestSandboxReleaseOnTerminalState:
 
     async def test_delete_error_keeps_job_completed(self, client: AsyncClient, sandbox_manager: MagicMock) -> None:
         sandbox_manager._provider.adelete.side_effect = RuntimeError("api down")
-        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value={"messages": []}))
+        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value=_ok_result()))
 
         job = (await client.get(f"/jobs/{job_id}")).json()
         assert job["state"] == "completed"
+
+
+class TestRunScanWithoutReport:
+    """A run that returns no structured report must fail, not complete with an empty report."""
+
+    async def test_job_failed_with_clear_error(self, client: AsyncClient) -> None:
+        with patch("migratowl.api.main.notify_pr_start"), \
+             patch("migratowl.api.main.notify_pr_done") as mock_done, \
+             patch("migratowl.api.main.notify_pr_failed") as mock_failed, \
+             patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
+            mock_agent.return_value.ainvoke = AsyncMock(
+                return_value={"messages": [{"role": "assistant", "content": "wrote report to /tmp/r.json"}]}
+            )
+            resp = await client.post("/webhook", json={"repo_url": "https://github.com/x/y"})
+            await asyncio.sleep(0.05)
+
+        job = (await client.get(f"/jobs/{resp.json()['job_id']}")).json()
+        assert job["state"] == "failed"
+        assert "structured report" in job["error"]
+        mock_failed.assert_awaited_once()
+        mock_done.assert_not_awaited()

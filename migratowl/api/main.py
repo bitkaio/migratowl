@@ -30,7 +30,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
-from migratowl.api.helpers import build_user_message, extract_report  # noqa: E402
+from migratowl.api.helpers import ReportExtractionError, build_user_message, extract_report  # noqa: E402
 from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
 from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
@@ -289,6 +289,11 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 await notify_pr_done(job.payload, report, app.state.settings)
                 store.mark_side_effects_done(job_id)
 
+        except ReportExtractionError as exc:
+            logger.error("Scan for job %s produced no report: %s", job_id, exc)
+            store.set_error(job_id, str(exc))
+            if not job.side_effects_done:
+                await notify_pr_failed(job.payload, app.state.settings)
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
             store.set_error(job_id, "Internal scan error")

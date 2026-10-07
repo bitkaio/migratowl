@@ -141,22 +141,29 @@ class TestExtractReport:
         report = extract_report(agent_result, payload)
         assert report.total_duration_seconds == 9.0
 
-    def test_returns_empty_report_when_no_parseable_content(self) -> None:
+    def test_raises_when_no_parseable_content(self) -> None:
+        """No report means the scan failed; an empty report would read as "nothing outdated"."""
+        import pytest
+
+        from migratowl.api.helpers import ReportExtractionError
+
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
         agent_result = {
             "messages": [
                 {"role": "assistant", "content": "I couldn't complete the analysis."},
             ]
         }
-        report = extract_report(agent_result, payload)
-        assert report.repo_url == "https://github.com/x/y"
-        assert report.reports == []
+        with pytest.raises(ReportExtractionError):
+            extract_report(agent_result, payload)
 
-    def test_returns_empty_report_on_no_messages(self) -> None:
+    def test_raises_on_no_messages(self) -> None:
+        import pytest
+
+        from migratowl.api.helpers import ReportExtractionError
+
         payload = ScanWebhookPayload(repo_url="https://github.com/x/y")
-        agent_result = {"messages": []}
-        report = extract_report(agent_result, payload)
-        assert report.repo_url == "https://github.com/x/y"
+        with pytest.raises(ReportExtractionError):
+            extract_report({"messages": []}, payload)
 
     def test_populates_token_counts_from_ai_messages(self) -> None:
         from migratowl.models.schemas import ScanAnalysisReport, ScanResult
