@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python:3.12-slim`, which has no `git`, so a default raw-mode scan failed at `clone_repo`. The default
   is now `ghcr.io/bitkaio/migratowl-runtime:latest`, the image the GitHub Action and GitLab component
   already use.
+- **npm/crates prereleases picked as "latest" and rewritten** — every registry's versions were compared
+  with Python's PEP 440 rules and returned in normalized form. npm's `rollup` `5.0.0-0` (a semver
+  prerelease) was read as a post-release, chosen as latest and returned as `5.0.0.post0`, so
+  `npm install` failed with `ETARGET` and the package was reported as breaking. npm, crates.io and Go
+  versions are now compared as semver (`-x` is a prerelease that sorts before its release), and every
+  registry's latest version keeps the spelling the registry published.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

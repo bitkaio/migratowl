@@ -125,31 +125,76 @@ def _constraint_to_specifier(raw: str) -> SpecifierSet | None:
     return None
 
 
-def _max_version(versions: list[str], include_prerelease: bool) -> str | None:
-    """Return the maximum version string from a list, optionally excluding pre-releases.
+# Semver as used by npm, crates.io and Go: MAJOR.MINOR.PATCH[-prerelease][+build]
+_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
-    Strips leading 'v' before parsing. Invalid version strings are silently skipped.
-    Returns the normalized PEP 440 string of the maximum version, or None if the
-    list is empty or all entries are invalid/excluded.
+# Release sorts after all its prereleases: (1,) > (0, ...)
+_RELEASE = (1,)
+
+
+def _semver_key(raw: str) -> tuple | None:
+    """Semver precedence key, or None when ``raw`` is not strict semver.
+
+    Prerelease identifiers compare per the semver spec: numeric ones
+    numerically and below alphanumeric ones (``beta.2 < beta.10 < beta.x``).
     """
-    parsed: list[Version] = []
-    for raw in versions:
-        try:
-            ver = Version(raw.lstrip("v"))
-        except InvalidVersion:
-            continue
-        if not include_prerelease and ver.is_prerelease:
-            continue
-        parsed.append(ver)
-    if not parsed:
+    m = _SEMVER_RE.match(raw.strip())
+    if not m:
         return None
-    return str(max(parsed))
+    pre = m[4]
+    pre_key = _RELEASE if pre is None else (
+        0, tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in pre.split("."))
+    )
+    return (int(m[1]), int(m[2]), int(m[3])), pre_key
+
+
+def _sort_key(raw: str, semver: bool) -> tuple[object, bool] | None:
+    """``(sort key, is_prerelease)`` for a version string, or None if unparseable.
+
+    ``semver=True`` reads ``-x`` suffixes as prereleases (``5.0.0-0`` is before
+    5.0.0); PEP 440 would read them as post-releases. Non-semver strings in a
+    semver ecosystem (e.g. ``2.1``) fall back to PEP 440 in the same key shape.
+    """
+    if semver:
+        key = _semver_key(raw)
+        if key is not None:
+            return key, key[1] != _RELEASE
+    try:
+        ver = Version(raw.strip().lstrip("v"))
+    except InvalidVersion:
+        return None
+    if not semver:
+        return ver, ver.is_prerelease
+    release = tuple(ver.release) + (0,) * max(0, 3 - len(ver.release))
+    return (release, (0, ()) if ver.is_prerelease else _RELEASE), ver.is_prerelease
+
+
+def _max_version(versions: list[str], include_prerelease: bool, *, semver: bool = False) -> str | None:
+    """Return the highest version from a list, optionally excluding pre-releases.
+
+    Returns the version as the registry spells it (only a leading 'v' is
+    stripped), so it can be passed back to npm/cargo/go/pip unchanged. Invalid
+    version strings are skipped; returns None if nothing is left.
+    """
+    best: tuple[object, str] | None = None
+    for raw in versions:
+        parsed = _sort_key(raw, semver)
+        if parsed is None:
+            continue
+        key, is_pre = parsed
+        if is_pre and not include_prerelease:
+            continue
+        if best is None or key > best[0]:  # type: ignore[operator]
+            best = (key, raw)
+    return best[1].strip().lstrip("v") if best else None
 
 
 def _resolve_latest(
     current_version: str,
     all_versions: list[str],
     options: CheckOptions,
+    *,
+    semver: bool = False,
 ) -> str | None:
     """Return the target version to compare against given the mode and options.
 
@@ -170,21 +215,20 @@ def _resolve_latest(
                         candidates.append(v)
                 except InvalidVersion:
                     continue
-            return _max_version(candidates, options.include_prerelease)
+            return _max_version(candidates, options.include_prerelease, semver=semver)
         # Bare/exact version: fall through to global max (nothing to constrain)
-        return _max_version(all_versions, options.include_prerelease)
+        return _max_version(all_versions, options.include_prerelease, semver=semver)
     # NORMAL: global max, ignore constraint
-    return _max_version(all_versions, options.include_prerelease)
+    return _max_version(all_versions, options.include_prerelease, semver=semver)
 
 
-def _is_outdated(current: str, latest: str) -> bool:
+def _is_outdated(current: str, latest: str, *, semver: bool = False) -> bool:
     """Return True if latest is strictly newer than current."""
-    try:
-        cur = Version(_clean_version(current))
-        lat = Version(_clean_version(latest))
-    except InvalidVersion:
+    cur = _sort_key(_clean_version(current), semver)
+    lat = _sort_key(_clean_version(latest), semver)
+    if cur is None or lat is None:
         return False
-    return lat > cur
+    return lat[0] > cur[0]  # type: ignore[operator]
 
 
 def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) -> str | None:
@@ -296,9 +340,9 @@ async def query_npm(
     data = resp.json()
 
     all_versions = list(data.get("versions", {}).keys())
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -324,9 +368,9 @@ async def query_crates(
     crate = data["crate"]
 
     all_versions = [v["num"] for v in data.get("versions", []) if not v.get("yanked", False)]
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -352,9 +396,9 @@ async def query_golang(
     resp.raise_for_status()
     all_versions = [v for v in resp.text.splitlines() if v.strip()]
 
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.current_version, target, semver=True):
         return None
 
     # Re-attach 'v' prefix that packaging normalizes away.

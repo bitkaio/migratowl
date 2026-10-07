@@ -1010,3 +1010,82 @@ class TestCheckOutdatedReturnsFailures:
         assert outdated[0].name == "flask"
         assert len(failures) == 1
         assert failures[0].name == "requests"
+
+
+# ===========================================================================
+# Semver ecosystems keep the registry's own version strings
+# ===========================================================================
+
+
+class TestSemverVersionStrings:
+    """npm, crates and Go versions are semver: ``-x`` is a prerelease, and the
+    version string must reach ``npm install`` / ``cargo update`` unchanged."""
+
+    @staticmethod
+    async def _npm(versions: list[str], current: str, *, include_prerelease: bool = False):
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/pkg": httpx.Response(200, json={"versions": {v: {} for v in versions}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_npm(
+                client,
+                _dep("pkg", current, Ecosystem.NODEJS, "package.json"),
+                CheckOptions(include_prerelease=include_prerelease),
+            )
+
+    async def test_npm_dash_zero_is_a_prerelease_not_the_latest(self) -> None:
+        # rollup published 5.0.0-0; PEP 440 reads it as 5.0.0.post0 (a release).
+        result = await self._npm(["3.30.0", "4.9.0", "5.0.0-0"], "3.30.0")
+        assert result is not None
+        assert result.latest_version == "4.9.0"
+
+    async def test_npm_prerelease_keeps_its_npm_spelling(self) -> None:
+        result = await self._npm(["1.0.0", "1.1.0-beta.1"], "1.0.0", include_prerelease=True)
+        assert result is not None
+        assert result.latest_version == "1.1.0-beta.1"
+
+    async def test_npm_prerelease_sorts_before_its_release(self) -> None:
+        result = await self._npm(["1.0.0", "2.0.0-rc.1", "2.0.0"], "1.0.0", include_prerelease=True)
+        assert result.latest_version == "2.0.0"
+
+    async def test_npm_numeric_prerelease_identifiers_compare_numerically(self) -> None:
+        result = await self._npm(["1.0.0", "2.0.0-beta.2", "2.0.0-beta.10"], "1.0.0", include_prerelease=True)
+        assert result.latest_version == "2.0.0-beta.10"
+
+    async def test_crates_dash_zero_is_a_prerelease(self) -> None:
+        from migratowl.registry import query_crates
+
+        transport = _mock_transport({
+            "/api/v1/crates/serde": httpx.Response(200, json={
+                "crate": {},
+                "versions": [{"num": v, "yanked": False} for v in ["1.0.0", "1.2.0", "2.0.0-0"]],
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_crates(client, _dep("serde", "1.0.0", Ecosystem.RUST, "Cargo.toml"))
+        assert result is not None
+        assert result.latest_version == "1.2.0"
+
+    async def test_go_rc_is_a_prerelease(self) -> None:
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({
+            "/github.com/a/b/@v/list": httpx.Response(200, text="v1.0.0\nv1.5.0\nv1.6.0-rc.1\n"),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_golang(client, _dep("github.com/a/b", "1.0.0", Ecosystem.GO, "go.mod"))
+        assert result is not None
+        assert result.latest_version == "v1.5.0"
+
+    async def test_pypi_keeps_the_published_spelling(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/pkg/json": httpx.Response(200, json={"info": {}, "releases": {"1.0": [], "2.0-1": []}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("pkg", "==1.0", Ecosystem.PYTHON))
+        assert result is not None
+        assert result.latest_version == "2.0-1"  # not normalized to "2.0.post1"
