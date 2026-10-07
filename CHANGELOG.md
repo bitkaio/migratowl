@@ -84,6 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python:3.12-slim`, which has no `git`, so a default raw-mode scan failed at `clone_repo`. The default
   is now `ghcr.io/bitkaio/migratowl-runtime:latest`, the image the GitHub Action and GitLab component
   already use.
+- **Registry checks did not retry, and `Retry-After` had no limit** — `check_outdated` built its own
+  HTTP client without the retry transport, so a 429 or 503 from PyPI, npm, crates.io, the Go proxy or
+  Maven Central marked the package as a registry failure on the first try. It now uses the shared client
+  (retries with backoff, `MIGRATOWL_HTTP_RETRY_*` settings). Each retry wait is capped at 60s, even when a
+  server's `Retry-After` asks for longer. Outbound requests send `migratowl/<version>` as their
+  User-Agent (registry calls said `migratowl/0.1.0`; everything else sent httpx's default).
+  `migratowl.__version__` now exists and a test keeps it equal to `pyproject.toml`'s version.
+
 - **Yanked PyPI releases could be reported as the latest version** — the PyPI check read every key in
   `releases` without looking at each file's `yanked` flag, so a withdrawn release could become the
   upgrade target. Releases whose files are all yanked are now skipped (crates.io already did this).

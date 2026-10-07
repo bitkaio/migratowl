@@ -21,6 +21,7 @@ import logging
 
 import httpx
 
+from migratowl import __version__
 from migratowl.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ logger = logging.getLogger(__name__)
 _client: httpx.AsyncClient | None = None
 
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+# Upper bound for one retry wait, whatever a server's Retry-After asks for.
+_MAX_RETRY_DELAY = 60.0
+
+USER_AGENT = f"migratowl/{__version__} (+https://github.com/bitkaio/migratowl)"
 
 
 class RetryTransport(httpx.AsyncBaseTransport):
@@ -80,11 +86,11 @@ class RetryTransport(httpx.AsyncBaseTransport):
             retry_after = response.headers.get("Retry-After")
             if retry_after is not None:
                 try:
-                    return float(retry_after)  # noqa: TRY300
+                    return min(max(float(retry_after), 0.0), _MAX_RETRY_DELAY)  # noqa: TRY300
                 except ValueError as exc:
                     logger.debug("Retry-After header is not a float: %s", exc)
         delay: float = self._backoff_base * (2**attempt)
-        return delay
+        return min(delay, _MAX_RETRY_DELAY)
 
     async def aclose(self) -> None:
         await self._wrapped.aclose()
@@ -104,6 +110,7 @@ def get_http_client() -> httpx.AsyncClient:
             transport=transport,
             follow_redirects=True,
             timeout=settings.http_timeout,
+            headers={"User-Agent": USER_AGENT},
         )
     return _client
 

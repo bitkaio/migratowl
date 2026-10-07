@@ -1118,3 +1118,29 @@ class TestPypiYanked:
             "2.32.0": [{"yanked": True}, {"yanked": False}],
         })
         assert latest == "2.32.0"
+
+
+class TestCheckOutdatedUsesSharedClient:
+    async def test_registry_queries_are_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Registries throttle with 429/503; the shared client's RetryTransport retries them.
+        from migratowl import registry
+        from migratowl.http import RetryTransport
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503)
+            return httpx.Response(200, json={"versions": {"1.0.0": {}, "2.0.0": {}}})
+
+        client = httpx.AsyncClient(transport=RetryTransport(httpx.MockTransport(handler), backoff_base=0.0))
+        monkeypatch.setattr(registry, "get_http_client", lambda: client)
+        try:
+            outdated, failures = await registry.check_outdated([_dep("pkg", "1.0.0", Ecosystem.NODEJS, "package.json")])
+        finally:
+            await client.aclose()
+
+        assert failures == []
+        assert [o.latest_version for o in outdated] == ["2.0.0"]
+        assert calls["n"] == 2

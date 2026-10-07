@@ -25,12 +25,11 @@ import httpx
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-from migratowl.config import get_settings
+from migratowl.http import get_http_client
 from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency, RegistryFailure
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "migratowl/0.1.0 (https://github.com/bitkaio/migratowl)"
 
 
 # ---------------------------------------------------------------------------
@@ -516,22 +515,11 @@ async def check_outdated(
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)
                 return None, RegistryFailure(name=dep.name, ecosystem=dep.ecosystem)
 
-    owns_client = client is None
-    if owns_client:
-        settings = get_settings()
-        client = httpx.AsyncClient(
-            timeout=settings.http_timeout,
-            headers={"User-Agent": _USER_AGENT},
-        )
-
-    assert client is not None  # always assigned: either passed in or created above
-    try:
-        pairs: list[tuple[OutdatedDependency | None, RegistryFailure | None]] = list(
-            await asyncio.gather(*[_query_one(client, dep) for dep in deps])
-        )
-    finally:
-        if owns_client:
-            await client.aclose()
+    # The shared client retries 429/5xx with backoff and sends Migratowl's User-Agent.
+    http = client if client is not None else get_http_client()
+    pairs: list[tuple[OutdatedDependency | None, RegistryFailure | None]] = list(
+        await asyncio.gather(*[_query_one(http, dep) for dep in deps])
+    )
 
     outdated = [o for o, _ in pairs if o is not None]
     failures = [f for _, f in pairs if f is not None]
