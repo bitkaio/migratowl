@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     sandbox_connection_mode: str = "tunnel"
     sandbox_image: str = "python:3.12-slim"
     sandbox_block_network: bool = True
+    # Kubernetes API for SandboxClaim list/delete (agent-sandbox mode). Unset means
+    # the in-cluster URL; off-cluster point it at `kubectl proxy` (http://localhost:8001)
+    # or pass a bearer token, otherwise TTL sweep and shutdown cleanup can't run.
+    sandbox_kube_api_url: str | None = None
+    sandbox_kube_token: str | None = None
 
     # Workspace
     workspace_path: str = "/home/user/workspace"

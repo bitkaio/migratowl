@@ -46,6 +46,8 @@ class TestCreateSandboxManagerAgentSandboxMode:
             template_name=settings.sandbox_template,
             namespace=settings.sandbox_namespace,
             connection_mode=settings.sandbox_connection_mode,
+            kube_api_url=settings.sandbox_kube_api_url,
+            kube_token=settings.sandbox_kube_token,
         )
 
 
@@ -84,3 +86,19 @@ class TestCreateSandboxManagerTTL:
         call_kwargs = mock_mgr.call_args[1]
         assert call_kwargs["ttl_seconds"] == settings.sandbox_ttl_seconds
         assert call_kwargs["ttl_idle_seconds"] == settings.sandbox_ttl_idle_seconds
+
+class TestKubeApiWiring:
+    """agent-sandbox mode lists/deletes SandboxClaims over raw HTTP; off-cluster
+    it needs an explicit API URL (e.g. `kubectl proxy`), else cleanup can't run."""
+
+    def test_passes_kube_api_url_and_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_KUBE_API_URL", "http://localhost:8001")
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_KUBE_TOKEN", "tok")
+        settings = Settings(_env_file=None)
+        with patch("migratowl.agent.sandbox.KubernetesProviderConfig") as mock_config_cls, \
+             patch("migratowl.agent.sandbox.KubernetesSandboxManager"):
+            create_sandbox_manager(settings)
+
+        kwargs = mock_config_cls.call_args.kwargs
+        assert kwargs["kube_api_url"] == "http://localhost:8001"
+        assert kwargs["kube_token"] == "tok"

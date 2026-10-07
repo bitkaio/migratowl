@@ -295,6 +295,25 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             if not job.side_effects_done:
                 await notify_pr_failed(job.payload, app.state.settings)
 
+        # Terminal outcome: free the sandbox now instead of leaving the pod running
+        # until shutdown or the TTL sweep. Not reached on cancellation (shutdown),
+        # so interrupted jobs keep their sandbox for resume.
+        await _release_sandbox(app.state.manager, job_id)
+
+
+async def _release_sandbox(manager: Any, job_id: str) -> None:
+    """Delete the sandbox bound to ``job_id`` (thread_id), if one was acquired.
+
+    Uses the same manager internals as ``resume.py``.
+    """
+    sandbox = manager._sandbox_by_thread.pop(job_id, None)
+    if sandbox is None:
+        return
+    try:
+        await manager._provider.adelete(sandbox_id=sandbox.id)
+    except Exception:
+        logger.warning("Failed to delete sandbox %s for job %s", sandbox.id, job_id, exc_info=True)
+
 
 async def _post_callback(callback_url: str, report: Any) -> None:
     """POST result to the caller's callback URL."""

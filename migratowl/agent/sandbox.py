@@ -51,6 +51,8 @@ def create_sandbox_manager(settings: Settings) -> KubernetesSandboxManager:
             template_name=settings.sandbox_template,
             namespace=settings.sandbox_namespace,
             connection_mode=settings.sandbox_connection_mode,
+            kube_api_url=settings.sandbox_kube_api_url,
+            kube_token=settings.sandbox_kube_token,
         )
         logger.info("KubernetesSandboxManager created (template=%s)", settings.sandbox_template)
 

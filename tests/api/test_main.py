@@ -26,6 +26,9 @@ def mock_manager() -> MagicMock:
     # Async methods the lifespan awaits.
     mgr.acleanup = AsyncMock(return_value=MagicMock(deleted=[]))
     mgr.ashutdown = AsyncMock()
+    # Instance attributes (not on the class spec) that _run_scan's sandbox release reads.
+    mgr._sandbox_by_thread = {}
+    mgr._provider = MagicMock(adelete=AsyncMock())
     return mgr
 
 
@@ -478,3 +481,45 @@ class TestGracefulShutdown:
             job_id = job.job_id
         # After lifespan exit (shutdown), the running job is INTERRUPTED.
         assert application.state.job_store.get(job_id).state == JobState.INTERRUPTED
+
+class TestSandboxReleaseOnTerminalState:
+    """A finished job's sandbox must be deleted, not left running until shutdown."""
+
+    @pytest.fixture
+    def sandbox_manager(self, mock_manager: MagicMock) -> MagicMock:
+        return mock_manager
+
+    async def _run_job(self, client: AsyncClient, sandbox_manager: MagicMock, ainvoke: AsyncMock) -> str:
+        async def fake_ainvoke(*args, **kwargs):
+            # The sandbox is acquired lazily during the run, keyed by thread_id.
+            thread_id = kwargs["config"]["configurable"]["thread_id"]
+            sandbox_manager._sandbox_by_thread[thread_id] = MagicMock(id="sb-123")
+            return await ainvoke(*args, **kwargs)
+
+        with patch("migratowl.api.main.notify_pr_start"), \
+             patch("migratowl.api.main.notify_pr_done"), \
+             patch("migratowl.api.main.notify_pr_failed"), \
+             patch("migratowl.agent.factory.create_migratowl_agent") as mock_agent:
+            mock_agent.return_value.ainvoke = fake_ainvoke
+            resp = await client.post("/webhook", json={"repo_url": "https://github.com/x/y"})
+            await asyncio.sleep(0.05)
+        return resp.json()["job_id"]
+
+    async def test_sandbox_deleted_after_success(self, client: AsyncClient, sandbox_manager: MagicMock) -> None:
+        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value={"messages": []}))
+
+        sandbox_manager._provider.adelete.assert_awaited_once_with(sandbox_id="sb-123")
+        assert job_id not in sandbox_manager._sandbox_by_thread
+
+    async def test_sandbox_deleted_after_failure(self, client: AsyncClient, sandbox_manager: MagicMock) -> None:
+        job_id = await self._run_job(client, sandbox_manager, AsyncMock(side_effect=RuntimeError("boom")))
+
+        sandbox_manager._provider.adelete.assert_awaited_once_with(sandbox_id="sb-123")
+        assert job_id not in sandbox_manager._sandbox_by_thread
+
+    async def test_delete_error_keeps_job_completed(self, client: AsyncClient, sandbox_manager: MagicMock) -> None:
+        sandbox_manager._provider.adelete.side_effect = RuntimeError("api down")
+        job_id = await self._run_job(client, sandbox_manager, AsyncMock(return_value={"messages": []}))
+
+        job = (await client.get(f"/jobs/{job_id}")).json()
+        assert job["state"] == "completed"
