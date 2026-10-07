@@ -206,7 +206,7 @@ def create_app(
                 status_code=422, content={"detail": f"Invalid state '{state}'"}
             )
         jobs = store.list_by_state(job_state)
-        return {"jobs": [j.model_dump(mode="json") for j in jobs]}
+        return {"jobs": [_public_view(j).model_dump(mode="json") for j in jobs]}
 
     @app.get("/jobs/{job_id}", response_model=None, dependencies=authenticated)
     async def get_job(job_id: str) -> JobStatus | JSONResponse:
@@ -214,7 +214,7 @@ def create_app(
         job = store.get(job_id)
         if job is None:
             return JSONResponse(status_code=404, content={"detail": "Job not found"})
-        return job
+        return _public_view(job)
 
     @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None, dependencies=authenticated)
     async def resume_job(job_id: str) -> WebhookAcceptedResponse | JSONResponse:
@@ -347,6 +347,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
             )
             report.model_name = settings.model_name
+            report.repo_url = redact_secrets(report.repo_url)
             store.set_result(job_id, report)
 
             # Terminal side effects fire at most once across the original run and
@@ -365,7 +366,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 store.mark_side_effects_done(job_id)
 
         except (PipelineError, ReportExtractionError) as exc:
-            logger.error("Scan for job %s produced no report: %s", job_id, exc)
+            logger.error("Scan for job %s produced no report: %s", job_id, redact_secrets(str(exc)))
             await _fail_job(app, job, str(exc))
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
@@ -391,6 +392,15 @@ def redact_secrets(text: str, known_secrets: tuple[str, ...] = ()) -> str:
     return text
 
 
+def _public_view(job: JobStatus) -> JobStatus:
+    """Copy of ``job`` safe to return over the API: no credentials in the repo URL.
+
+    The stored payload keeps the real URL, because resume needs it to clone.
+    """
+    payload = job.payload.model_copy(update={"repo_url": redact_secrets(job.payload.repo_url)})
+    return job.model_copy(update={"payload": payload})
+
+
 async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
     """Mark the job failed and fire the failure side effects (at most once).
 
@@ -408,7 +418,7 @@ async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
             "job_id": job.job_id,
             "state": JobState.FAILED.value,
             "error": error,
-            "repo_url": job.payload.repo_url,
+            "repo_url": redact_secrets(job.payload.repo_url),
             "branch_name": job.payload.branch_name,
         }
         await _post_callback(

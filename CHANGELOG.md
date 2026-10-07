@@ -147,7 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers, and a non-2xx reply is logged as a
   warning. A failing comment no longer prevents the commit status from being set, or vice versa. The error text
   that reaches the PR comment, the callback and `GET /jobs` has URL credentials, GitHub/GitLab tokens
-  and the configured `GITHUB_TOKEN`/`GITLAB_TOKEN` values redacted; the raw text stays in the server log.
+  and the configured `GITHUB_TOKEN`/`GITLAB_TOKEN` values redacted, and so does the server log. A
+  `repo_url` with embedded credentials is masked (`https://***@host/...`) in reports, callbacks, the log and
+  `GET /jobs` responses; the stored payload keeps the real URL so resume can still clone.
 - **Shutdown left queued jobs and scan tasks behind** — on shutdown only `running` jobs were marked
   `interrupted`; jobs still queued behind the scan semaphore stayed `pending` until the next boot, and
   in-flight scan tasks were not cancelled. Shutdown now cancels in-flight scans (their sandbox and
