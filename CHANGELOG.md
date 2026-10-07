@@ -111,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[tool.poetry.group.<name>.dependencies]`, Cargo `[build-dependencies]`, `[target.<cfg>.*]` tables
   and `[workspace.dependencies]`, and Gradle Kotlin DSL `build.gradle.kts` files. Malformed tables
   (a list or number where a table belongs) are skipped instead of raising.
+- **The package-analyzer subagent contradicted the main agent's tool rules** — its prompt told it to
+  use deepagents' `ls`/`read_file`/`grep`/`execute` (which the main prompt forbids and which don't work
+  against the K8s sandbox), ran `execute_project` instead of `validate_project` (so it skipped the
+  per-ecosystem build/test steps), described inputs it never receives, and allowed `null` in text
+  fields `AnalysisReport` types as strings. It now follows the same rules as the main agent.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on
