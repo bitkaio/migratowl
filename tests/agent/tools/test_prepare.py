@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for the prepare_scan agent tool (deep-agents-ui entrypoint to the pipeline)."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanResult
+from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+
+def _prepared() -> PreparedScan:
+    dep = OutdatedDependency(name="flask", current_version="2.0", latest_version="3.0", ecosystem=Ecosystem.PYTHON,
+                             manifest_path="pyproject.toml")
+    return PreparedScan(
+        scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0.0),
+        candidates=[dep], skipped=[],
+        validations=[EcosystemValidation(ecosystem="python", passed=False, failed_step="test", output_tail="boom")],
+    )
+
+
+async def test_returns_brief_and_passes_thread_config() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+
+    with patch("migratowl.agent.tools.prepare.prepare_scan", AsyncMock(return_value=_prepared())) as mock_prep:
+        tool = create_prepare_scan_tool(MagicMock(), tail_chars=100)
+        out = await tool.ainvoke(
+            {"repo_url": "https://x/y", "branch": "dev", "max_deps": 3},
+            config={"configurable": {"thread_id": "t-1"}},
+        )
+
+    payload, config = mock_prep.await_args.args[1], mock_prep.await_args.args[2]
+    assert payload.repo_url == "https://x/y" and payload.branch_name == "dev" and payload.max_deps == 3
+    assert config["configurable"]["thread_id"] == "t-1"
+    assert out.startswith("Repository: https://x/y")
+    assert "flask 2.0 -> 3.0" in out
+
+
+async def test_reports_when_nothing_needs_analysis() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+
+    empty = _prepared().model_copy(update={"candidates": [], "validations": []})
+    with patch("migratowl.agent.tools.prepare.prepare_scan", AsyncMock(return_value=empty)):
+        out = await create_prepare_scan_tool(MagicMock(), tail_chars=100).ainvoke({"repo_url": "https://x/y"})
+
+    assert "nothing to analyze" in out.lower()

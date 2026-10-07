@@ -60,8 +60,7 @@ class TestCreateMigratowlAgent:
             create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_manager.create_agent.call_args[1]
-        # 11 tools: clone, copy, detect, scan, check_outdated, update, validate, execute, changelog, read_manifest, patch_manifest
-        assert len(call_kwargs["tools"]) == 11  # noqa: PLR2004
+        assert [t.name for t in call_kwargs["tools"]] == ["prepare_scan", "fetch_changelog_tool", "read_manifest"]
 
     def test_uses_init_chat_model_with_provider_and_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_manager = _make_mock_manager()
@@ -162,7 +161,9 @@ class TestCreateMigratowlAgent:
             create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_manager.create_agent.call_args[1]
-        assert call_kwargs.get("response_format") is ScanAnalysisReport
+        from migratowl.models.schemas import PackageVerdicts
+
+        assert call_kwargs.get("response_format") is PackageVerdicts
 
     def test_system_prompt_directs_zero_confidence_packages_to_direct_report(self) -> None:
         """Packages with confidence=0 must be directly reported as non-breaking.
@@ -321,12 +322,6 @@ class TestSystemPromptMajorVersionChangelog:
         assert "major" in prompt.lower()
         assert "fetch_changelog" in prompt or "changelog" in prompt.lower()
         assert "0.9" in prompt
-
-    def test_no_major_bump_keeps_1_0_confidence(self) -> None:
-        from migratowl.agent.factory import SYSTEM_PROMPT
-
-        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
-        assert "1.0" in prompt
 
     def test_fetch_changelog_rule_includes_major_bump_exception(self) -> None:
         from migratowl.agent.factory import SYSTEM_PROMPT
@@ -500,4 +495,14 @@ class TestBuildTools:
 
         mock_build.assert_not_called()
         passed = mgr.create_agent.call_args.kwargs["tools"]
-        assert tools.clone_repo in passed
+        assert tools.fetch_changelog in passed
+
+
+class TestAnalysisPrompt:
+    def test_prompt_says_phases_are_done_and_names_prepare_scan(self) -> None:
+        from migratowl.agent.factory import SYSTEM_PROMPT
+
+        prompt = SYSTEM_PROMPT.format(confidence_threshold=0.7)
+        assert "prepare_scan" in prompt
+        assert "already" in prompt.lower()
+        assert "clone_repo" not in prompt and "validate_project" not in prompt

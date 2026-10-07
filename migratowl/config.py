@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     # Analysis
     confidence_threshold: float = 0.7
     max_output_chars: int = 30_000
+    # Characters of failing validation output (tail) given to the LLM in the analysis brief.
+    analysis_tail_chars: int = 4_000
 
     # Git providers
     github_token: str = Field(

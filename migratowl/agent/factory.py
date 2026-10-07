@@ -32,138 +32,61 @@ from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_sour
 from migratowl.agent.tools.detect import create_detect_languages_tool
 from migratowl.agent.tools.execute import create_execute_project_tool
 from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_read_manifest_tool
+from migratowl.agent.tools.prepare import create_prepare_scan_tool
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
-from migratowl.models.schemas import OutdatedCheckMode, ScanAnalysisReport
+from migratowl.models.schemas import OutdatedCheckMode, PackageVerdicts
 from migratowl.observability import _langfuse_handler
 from migratowl.registry import CheckOptions
 
 SYSTEM_PROMPT = """\
-You are Migratowl, an AI-powered dependency migration analyzer.
+You are Migratowl's analysis step. Code has already done the mechanical work: the
+repository is cloned to /home/user/workspace/source/, every outdated package was
+updated to its latest version in /home/user/workspace/main/, and main/ was built
+and tested. You receive the result as a brief that starts with "Repository:".
 
-You operate inside a Kubernetes sandbox with a workspace laid out as:
+If you were not given a brief, call prepare_scan(repo_url, branch, max_deps) once
+to produce one. Never call it twice.
 
-  /home/user/workspace/
-  ├── source/          # Immutable clone — NEVER executed
-  ├── main/            # All deps updated to latest, executed first
-  ├── <package-name>/  # Single-package isolation (created on demand)
-  └── ...
+Your job: for each package under "Packages to analyze", decide whether updating
+it breaks the project, and return one AnalysisReport per package.
 
-## Workflow
-
-### Phase 1: Setup
-1. Clone the repo with clone_repo — this populates source/.
-2. Run detect_languages on source/ to find ecosystems and default commands.
-3. Run scan_dependencies on source/ to find all declared dependencies.
-4. Run check_outdated_deps to identify which have newer versions.
-   Result format: {{"outdated": [...], "failures": [...], "warning": null or "..."}}.
-   If warning is present, only the largest version gaps are shown.
-
-### Phase 2: Main Analysis
-5. Run copy_source("main") to create the main/ working copy.
-6. Run update_dependencies("main", ecosystem, all_outdated_packages) \
-to update every outdated dependency at once.
-7. Run validate_project("main", ecosystem) to build and run tests.
-   - Go/Rust: always compiles first (catches API-breaking dep changes), \
-then runs tests if test files are detected.
-   - Python: installs deps (tries .[tests] and .[test] extras before bare install), \
-then runs pytest if detected.
-   - Node.js: npm install, tsc --noEmit if TypeScript, then npm test if defined.
-
-### Phase 3: Confidence Assessment
-After executing main/:
-- If ALL tests pass → check the major-version gap for each package:
-  - No major bump (current_major == latest_major): produce AnalysisReport with \
-is_breaking=false and confidence=1.0. No changelog fetch needed.
-  - Major-version bump (current_major < latest_major): call fetch_changelog_tool \
-for that package, inspect for breaking changes, then produce AnalysisReport with \
-is_breaking set accordingly, changelog_citation and suggested_human_fix from the \
-changelog, and confidence=0.9 (changelog-derived, not test-derived).
-- If tests FAIL → analyze the error output and assign a confidence score (0.0–1.0) \
-to each outdated package indicating how likely it caused the failure.
-
-Confidence scoring guidelines:
-- Error message directly references the package → high confidence (≥0.8)
-- Large major version jump (e.g. 2.x→3.x) → moderate confidence boost
-- Import/attribute errors for known package APIs → high confidence
-- Generic test failures with no clear link → low confidence (<0.5)
-
-For packages with confidence = 0 (no evidence linking them to any failure):
-- If validate_project PASSED (all tests pass): the combined run already proved \
-these packages don't break the build. Directly produce AnalysisReport with \
-is_breaking=false and confidence=1.0 — isolation testing is unnecessary.
-- If validate_project FAILED: a package absent from the error output is NOT \
-automatically safe. The build stopped at the first error; packages not yet \
-compiled were never reached. Apply version-gap heuristics (major bump → \
-confidence ≥ 0.3) rather than assuming confidence = 0.
-
-For packages with 0 < confidence < {confidence_threshold} (some signal but ambiguous):
-- Delegate to the "package-analyzer" subagent via task() for isolated testing.
-  Dispatch ONE package at a time, sequentially — never in parallel — to avoid \
-overloading the sandbox with concurrent backend calls.
-  Provide: package name, current_version, latest_version, ecosystem.
-
-For packages with confidence ≥ {confidence_threshold}:
-- Fetch the changelog with fetch_changelog_tool.
-- Produce an AnalysisReport with error_summary, changelog_citation, and suggested_human_fix.
-
-### Phase 4: Compile Results
-Collect all AnalysisReports (from your own analysis + subagent results) \
-into a final ScanAnalysisReport.
-
-The `skipped` field should ONLY contain the names of OUTDATED dependencies \
-(from check_outdated_deps) that were not analyzed due to the max_deps limit. \
-Never include dependencies that are already up-to-date (not in the outdated list) \
-— those are simply not candidates for analysis.
+## How to decide
+- Validation PASSED for the package's ecosystem: the package is listed because it is
+  a major-version bump (or its bump size is unknown). Call fetch_changelog_tool for it,
+  look for breaking changes, set is_breaking accordingly, confidence=0.9, and cite the
+  changelog.
+- Validation FAILED: read the output tail and give each package a confidence between
+  0.0 and 1.0 that it caused the failure:
+  - the error names the package, one of its modules or APIs → 0.8 or higher
+  - a large major jump with no direct mention → 0.3–0.6
+  - no plausible link → below 0.3. The build stopped at the first error, so a package
+    not reached by the failing run is not proven safe; a major bump keeps confidence ≥ 0.3.
+- confidence = 0 only when the package cannot plausibly be involved; report it directly
+  with is_breaking=false and do not delegate it.
+- confidence ≥ {confidence_threshold}: call fetch_changelog_tool, then report
+  is_breaking=true with error_summary, changelog_citation and suggested_human_fix.
+- 0 < confidence < {confidence_threshold}: delegate to the "package-analyzer" subagent
+  via task() for isolated testing. Dispatch ONE package at a time, sequentially — never
+  in parallel. Give it name, current_version, latest_version, ecosystem.
+- A package under "Update failures" could not be installed at its latest version:
+  report is_breaking=true, confidence=0.9, error_summary = the failure detail.
 
 ## Important Rules
-- NEVER execute code in source/ — it is the immutable reference.
-- Only call fetch_changelog_tool when a package causes errors or warnings, OR when \
-all tests pass but the package has a major-version bump (current_major < latest_major).
-- Per-package folders share the same sandbox — isolation is by path, not by instance.
+- Only call fetch_changelog_tool for packages that are a major bump or that the
+  failure points to.
+- To look at a manifest use read_manifest(path=<absolute path>). Do not use write_todos,
+  ls, read_file, write_file, edit_file, glob, grep or execute — they are not part of this job.
+- Never call the same tool twice with the same arguments.
+- Never invent a changelog citation; leave changelog_citation and suggested_human_fix
+  as "" when you have nothing concrete.
 
-## Sandbox Tool Restrictions
-
-The deepagents built-in `read_file`, `edit_file`, and `execute` tools are
-NOT functional in this K8s sandbox — they will return path errors or
-serialization failures. Do NOT call them.
-
-Use these Migratowl tools instead:
-- Read a file: read_manifest(path=<absolute sandbox path>)
-- Edit a file: patch_manifest(path=..., old_string=..., new_string=...)
-- Run a command: update_dependencies or validate_project handle their own
-  execution. Do not use a raw execute tool.
-- Use validate_project(folder_name, ecosystem) for post-update validation.
-  Only fall back to execute_project for custom commands not covered by the
-  standard validation workflow.
-
-## Multi-manifest repos
-
-When scan_dependencies returns dependencies, each has a manifest_path field
-(relative to workspace/source/). Always include manifest_path and
-current_version in packages_json when calling update_dependencies:
-
-  {{"name": "clap", "current_version": "2.33.0",
-   "latest_version": "4.6.0", "manifest_path": "dotenv/Cargo.toml"}}
-
-This allows the tool to edit the correct sub-manifest for multi-manifest
-repos (Rust workspaces, monorepos, etc.).
-
-## Tool Failure Handling
-
-Never retry the same tool with identical arguments after it fails. On failure:
-- Rust "ambiguous" error: manifest_path and current_version are missing —
-  call read_manifest to inspect Cargo.toml, then retry with current_version.
-- Rust version constraint error: use patch_manifest to fix the constraint
-  in Cargo.toml, then call validate_project again.
-- Python pip failure: skip the package and record as unresolvable.
-- Python validate_project skips tests (no pytest.ini / conftest.py / tests/): \
-  use execute_project with install_command="pip install -e '.[tests]'" and \
-  test_command="python3 -m pytest -x --tb=short" to force the correct extras.
-- patch_manifest failure: log in error_summary and continue with other packages.
+## Output
+Return exactly one AnalysisReport per listed package, with dependency_name written
+exactly as in the brief. Do not report packages that are not listed.
 """
 
 
@@ -279,19 +202,8 @@ def create_migratowl_agent(
             on_sandbox_acquired=on_sandbox_acquired,
         )
 
-    agent_tools = [
-        tools.clone_repo,
-        tools.copy_source,
-        tools.detect_languages,
-        tools.scan_dependencies,
-        tools.check_outdated_deps,
-        tools.update_dependencies,
-        tools.validate_project,
-        tools.execute_project,
-        tools.fetch_changelog,
-        tools.read_manifest,
-        tools.patch_manifest,
-    ]
+    prepare_scan_tool = create_prepare_scan_tool(tools, tail_chars=settings.analysis_tail_chars)
+    agent_tools = [prepare_scan_tool, tools.fetch_changelog, tools.read_manifest]
 
     # Model with rate limiter — supports anthropic, openai, and litellm via init_chat_model.
     # Prefer an injected shared limiter (bounds total API RPS across concurrent scans);
@@ -348,7 +260,7 @@ def create_migratowl_agent(
             system_prompt=system_prompt,
             tools=agent_tools,
             subagents=[package_analyzer],
-            response_format=ScanAnalysisReport,
+            response_format=PackageVerdicts,
             checkpointer=checkpointer,
         )
     )
