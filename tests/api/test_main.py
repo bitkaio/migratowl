@@ -504,6 +504,35 @@ class TestGracefulShutdown:
         # After lifespan exit (shutdown), the running job is INTERRUPTED.
         assert application.state.job_store.get(job_id).state == JobState.INTERRUPTED
 
+    @pytest.mark.asyncio
+    async def test_queued_jobs_marked_interrupted_on_shutdown(self, mock_manager: MagicMock) -> None:
+        # PENDING jobs are waiting on the scan semaphore; they are just as orphaned.
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        async with application.router.lifespan_context(application):
+            job = application.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        assert application.state.job_store.get(job.job_id).state == JobState.INTERRUPTED
+
+    @pytest.mark.asyncio
+    async def test_in_flight_scan_tasks_are_cancelled_on_shutdown(self, mock_manager: MagicMock) -> None:
+        import asyncio
+
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        started = asyncio.Event()
+
+        async def never_finishes() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async with application.router.lifespan_context(application):
+            task = asyncio.create_task(never_finishes())
+            application.state.tasks.add(task)
+            await started.wait()
+        assert task.cancelled()
+
 class TestSandboxReleaseOnTerminalState:
     """A finished job's sandbox must be deleted, not left running until shutdown."""
 

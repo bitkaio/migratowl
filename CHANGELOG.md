@@ -141,6 +141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning. A failing comment no longer prevents the commit status from being set, or vice versa. The error text
   that reaches the PR comment, the callback and `GET /jobs` has URL credentials and GitHub/GitLab tokens
   redacted; the raw text stays in the server log.
+- **Shutdown left queued jobs and scan tasks behind** — on shutdown only `running` jobs were marked
+  `interrupted`; jobs still queued behind the scan semaphore stayed `pending` until the next boot, and
+  in-flight scan tasks were not cancelled. Shutdown now cancels in-flight scans (their sandbox and
+  checkpoint are kept for resume) and marks both running and queued jobs `interrupted`.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on

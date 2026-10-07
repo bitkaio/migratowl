@@ -139,11 +139,17 @@ def create_app(
 
             yield
 
-            # Shutdown: proactively mark in-flight scans INTERRUPTED so a rolling
-            # deploy leaves them resumable rather than relying on next-boot
-            # reconcile (stack closes the checkpointer connection on exit).
-            for job in app.state.job_store.list_by_state(JobState.RUNNING):
-                app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+            # Shutdown: cancel in-flight scan tasks (a cancelled scan keeps its
+            # sandbox and checkpoint), then mark every running or queued job
+            # INTERRUPTED so a rolling deploy leaves them resumable rather than
+            # relying on next-boot reconcile (stack closes the checkpointer on exit).
+            tasks = list(app.state.tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for state in (JobState.RUNNING, JobState.PENDING):
+                for job in app.state.job_store.list_by_state(state):
+                    app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
             await close_http_client()
             if hasattr(app.state, "manager"):
                 await app.state.manager.ashutdown()
