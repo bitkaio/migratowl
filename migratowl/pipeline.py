@@ -31,6 +31,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from migratowl.models.schemas import (
+    AnalysisReport,
     Dependency,
     OutdatedDependency,
     RegistryFailure,
@@ -218,3 +219,62 @@ async def prepare_scan(
         len(candidates), len(skipped), {v.ecosystem: v.passed for v in prepared.validations},
     )
     return prepared
+
+
+def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[OutdatedDependency]]:
+    """Settle candidates that provably need no LLM; return ``(resolved, pending)``.
+
+    Safe = its ecosystem validated green, its own update succeeded, and the bump is
+    provably not major. Unknown versions are never assumed safe.
+    """
+    passed = {v.ecosystem: v.passed for v in prepared.validations}
+    resolved: list[AnalysisReport] = []
+    pending: list[OutdatedDependency] = []
+    for dep in prepared.candidates:
+        safe = (
+            passed.get(dep.ecosystem.value, False)
+            and dep.name not in prepared.update_failures
+            and is_major_bump(dep.current_version, dep.latest_version) is False
+        )
+        if safe:
+            resolved.append(AnalysisReport(
+                dependency_name=dep.name, is_breaking=False, error_summary="",
+                changelog_citation="", suggested_human_fix="", confidence=1.0,
+            ))
+        else:
+            pending.append(dep)
+    return resolved, pending
+
+
+def build_analysis_brief(
+    payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
+) -> str:
+    """Compact text the LLM analyses instead of driving Phases 1–2 itself."""
+    lines = [
+        f"Repository: {payload.repo_url} (branch {payload.branch_name}).",
+        "Already done in code: the repo is cloned to source/, every package below was updated to its "
+        "latest version in main/, and main/ was built and tested.",
+        "",
+        f"Packages to analyze ({len(pending)}):",
+    ]
+    for dep in pending:
+        bump = is_major_bump(dep.current_version, dep.latest_version)
+        kind = "MAJOR bump" if bump else ("minor/patch bump" if bump is False else "unknown bump size")
+        lines.append(
+            f"- {dep.name} {dep.current_version} -> {dep.latest_version} "
+            f"({dep.ecosystem.value}, {dep.manifest_path}, {kind})"
+        )
+    pending_names = {dep.name for dep in pending}
+    failures = {name: detail for name, detail in prepared.update_failures.items() if name in pending_names}
+    if failures:
+        lines += ["", "Update failures (could not install the latest version):"]
+        lines += [f"- {name}: {detail}" for name, detail in failures.items()]
+    lines += ["", "Validation results:"]
+    for v in prepared.validations:
+        if v.passed:
+            lines.append(f"- {v.ecosystem}: PASSED")
+        else:
+            lines.append(f'- {v.ecosystem}: FAILED at step "{v.failed_step}". Output tail:')
+            lines.append(f"```\n{v.output_tail}\n```")
+    lines += ["", "Return exactly one AnalysisReport per package listed above."]
+    return "\n".join(lines)

@@ -219,3 +219,75 @@ class TestPrepareScan:
         prepared = await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
 
         assert prepared.update_failures == {"flask": "no dist"}
+
+
+def _prepared(candidates, validations, update_failures=None):
+    from migratowl.models.schemas import ScanResult
+    from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+    return PreparedScan(
+        scan_result=ScanResult(all_deps=[], outdated=candidates, manifests_found=[], scan_duration_seconds=0.0),
+        candidates=candidates,
+        skipped=[],
+        update_failures=update_failures or {},
+        validations=[EcosystemValidation(**v) for v in validations],
+    )
+
+
+class TestPresolve:
+    def test_green_minor_bump_resolved_without_llm(self) -> None:
+        from migratowl.pipeline import presolve
+
+        prepared = _prepared([_dep("requests", "2.31.0", "2.32.5")], [{"ecosystem": "python", "passed": True}])
+        resolved, pending = presolve(prepared)
+
+        assert pending == []
+        assert resolved[0].dependency_name == "requests"
+        assert resolved[0].is_breaking is False and resolved[0].confidence == 1.0
+
+    def test_major_bump_unknown_version_and_update_failure_go_to_llm(self) -> None:
+        from migratowl.pipeline import presolve
+
+        prepared = _prepared(
+            [_dep("flask", "2.0", "3.0"), _dep("odd", "*", "1.0"), _dep("pillow", "9.0", "9.5")],
+            [{"ecosystem": "python", "passed": True}],
+            update_failures={"pillow": "no matching distribution"},
+        )
+        resolved, pending = presolve(prepared)
+
+        assert resolved == []
+        assert [d.name for d in pending] == ["flask", "odd", "pillow"]
+
+    def test_failure_is_per_ecosystem(self) -> None:
+        from migratowl.models.schemas import Ecosystem
+        from migratowl.pipeline import presolve
+
+        prepared = _prepared(
+            [_dep("requests", "2.31", "2.32"), _dep("react", "18.2", "18.3", Ecosystem.NODEJS)],
+            [{"ecosystem": "python", "passed": True},
+             {"ecosystem": "nodejs", "passed": False, "failed_step": "test", "output_tail": "boom"}],
+        )
+        resolved, pending = presolve(prepared)
+
+        assert [r.dependency_name for r in resolved] == ["requests"]
+        assert [d.name for d in pending] == ["react"]
+
+
+class TestAnalysisBrief:
+    def test_brief_lists_pending_failures_and_output_tail(self) -> None:
+        from migratowl.pipeline import build_analysis_brief
+
+        pending = [_dep("flask", "2.0.0", "3.1.0")]
+        prepared = _prepared(
+            pending,
+            [{"ecosystem": "python", "passed": False, "failed_step": "test",
+              "output_tail": "ImportError: cannot import name 'escape' from 'flask'"}],
+            update_failures={"flask": "warning only"},
+        )
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="https://x/y"), prepared, pending)
+
+        assert brief.startswith("Repository: https://x/y")
+        assert "flask 2.0.0 -> 3.1.0 (python, pyproject.toml, MAJOR bump)" in brief
+        assert "python: FAILED at step \"test\"" in brief
+        assert "cannot import name 'escape' from 'flask'" in brief
+        assert "flask: warning only" in brief
