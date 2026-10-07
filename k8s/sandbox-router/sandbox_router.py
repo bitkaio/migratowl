@@ -13,6 +13,8 @@
 # limitations under the License.
 
 
+import os
+
 import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -23,7 +25,11 @@ app = FastAPI()
 # Configuration
 DEFAULT_SANDBOX_PORT = 8888
 DEFAULT_NAMESPACE = "default"
-client = httpx.AsyncClient(timeout=180.0)
+# Per-request proxy timeout. Long installs/test runs need more than the old
+# hard-coded 180s; k8s/sandbox-router.yaml sets this to 1800s.
+PROXY_TIMEOUT_SECONDS = float(os.environ.get("PROXY_TIMEOUT_SECONDS", "180"))
+client = httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS)
+print(f"Sandbox router configured with proxy timeout: {PROXY_TIMEOUT_SECONDS}s")
 
 
 @app.get("/healthz")
@@ -84,7 +90,11 @@ async def proxy_request(request: Request, full_path: str):
             f"ERROR: Connection to sandbox at {target_url} failed. Error: {e}")
         raise HTTPException(
             status_code=502, detail=f"Could not connect to the backend sandbox: {sandbox_id}")
+    except httpx.TimeoutException as e:
+        print(f"ERROR: Request to sandbox at {target_url} timed out after {PROXY_TIMEOUT_SECONDS}s: {e!r}")
+        raise HTTPException(
+            status_code=504, detail=f"Sandbox request timed out after {PROXY_TIMEOUT_SECONDS}s.")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"An unexpected error occurred: {e!r}")
         raise HTTPException(
             status_code=500, detail="An internal error occurred in the proxy.")

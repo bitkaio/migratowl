@@ -43,6 +43,12 @@ spec:
         # IMPORTANT: Replace this with the full path to the router image you pushed.
         image: sandbox-router:latest
         imagePullPolicy: Never
+        env:
+        # Default is 180s, which cuts off long installs/test runs. Match
+        # langchain-kubernetes' default_exec_timeout (1800s). Read by
+        # k8s/sandbox-router/sandbox_router.py; rebuild the image after upgrading.
+        - name: PROXY_TIMEOUT_SECONDS
+          value: "1800"
         ports:
         - containerPort: 8080
         readinessProbe:
