@@ -56,6 +56,14 @@ async def _is_live(sandbox: Any) -> bool:
         return False
 
 
+async def _delete_abandoned(manager: Any, sandbox_id: str) -> None:
+    """Best-effort delete of a sandbox the restart will not reuse."""
+    try:
+        await manager._provider.adelete(sandbox_id=sandbox_id)
+    except Exception:
+        logger.warning("Resume: could not delete abandoned sandbox %s", sandbox_id, exc_info=True)
+
+
 async def reconnect_or_restart(
     manager: Any,
     job: JobStatus,
@@ -79,6 +87,9 @@ async def reconnect_or_restart(
                 job.sandbox_id,
                 job.job_id,
             )
+            # The restart provisions a fresh sandbox; delete this one instead of
+            # leaving it running until the idle-TTL sweep.
+            await _delete_abandoned(manager, job.sandbox_id)
         except SandboxNotFoundError:
             logger.info(
                 "Resume: sandbox %s gone — restarting job %s from scratch",

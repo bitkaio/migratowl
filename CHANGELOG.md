@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Resume leaked the old sandbox when it restarted a job** — when the surviving sandbox failed the
+  liveness probe, `POST /jobs/{id}/resume` provisioned a new one and left the old SandboxClaim running
+  until the idle-TTL sweep. The abandoned sandbox is now deleted (best effort).
+
 - **Raw-mode sandboxes had no network on clusters that enforce NetworkPolicy** — with
   `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true` (the default, and what the GitHub Action and GitLab
   component use with Calico), each sandbox pod gets a deny-all policy that also blocks DNS, so

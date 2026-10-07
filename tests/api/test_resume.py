@@ -104,3 +104,59 @@ class TestReconnectOrRestart:
         assert outcome == "restarted"
         manager._provider.areconnect.assert_not_awaited()
         checkpointer.adelete_thread.assert_awaited_once_with(job.job_id)
+
+
+class TestRestartReleasesAbandonedSandbox:
+    """When resume restarts, the old sandbox is not reused — it must be deleted, not leaked."""
+
+    @pytest.mark.asyncio
+    async def test_not_live_sandbox_is_deleted_on_restart(self, store, payload) -> None:
+        job = store.create(payload)
+        store.set_sandbox_id(job.job_id, "sbx-old")
+        job = store.get(job.job_id)
+
+        sandbox = MagicMock()
+        sandbox.aexecute = AsyncMock(side_effect=RuntimeError("tunnel not running"))
+        manager = _mock_manager()
+        manager._provider.areconnect = AsyncMock(return_value=sandbox)
+        manager._provider.adelete = AsyncMock()
+        checkpointer = MagicMock()
+        checkpointer.adelete_thread = AsyncMock()
+
+        assert await reconnect_or_restart(manager, job, store, checkpointer) == "restarted"
+        manager._provider.adelete.assert_awaited_once_with(sandbox_id="sbx-old")
+        assert job.job_id not in manager._sandbox_by_thread
+
+    @pytest.mark.asyncio
+    async def test_delete_failure_does_not_block_restart(self, store, payload) -> None:
+        job = store.create(payload)
+        store.set_sandbox_id(job.job_id, "sbx-old")
+        job = store.get(job.job_id)
+
+        sandbox = MagicMock()
+        sandbox.aexecute = AsyncMock(side_effect=RuntimeError("no pod"))
+        manager = _mock_manager()
+        manager._provider.areconnect = AsyncMock(return_value=sandbox)
+        manager._provider.adelete = AsyncMock(side_effect=RuntimeError("api down"))
+        checkpointer = MagicMock()
+        checkpointer.adelete_thread = AsyncMock()
+
+        assert await reconnect_or_restart(manager, job, store, checkpointer) == "restarted"
+        checkpointer.adelete_thread.assert_awaited_once_with(job.job_id)
+
+    @pytest.mark.asyncio
+    async def test_gone_sandbox_is_not_deleted_again(self, store, payload) -> None:
+        from langchain_kubernetes import SandboxNotFoundError
+
+        job = store.create(payload)
+        store.set_sandbox_id(job.job_id, "sbx-gone")
+        job = store.get(job.job_id)
+
+        manager = _mock_manager()
+        manager._provider.areconnect = AsyncMock(side_effect=SandboxNotFoundError("gone"))
+        manager._provider.adelete = AsyncMock()
+        checkpointer = MagicMock()
+        checkpointer.adelete_thread = AsyncMock()
+
+        await reconnect_or_restart(manager, job, store, checkpointer)
+        manager._provider.adelete.assert_not_awaited()
