@@ -483,7 +483,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SANDBOX_KUBE_API_URL` | in-cluster URL | Kubernetes API used to list and delete SandboxClaims (agent-sandbox mode only). Off-cluster, run `kubectl proxy` and set `http://localhost:8001`; otherwise TTL sweep and shutdown cleanup can't run |
 | `MIGRATOWL_SANDBOX_KUBE_TOKEN` | — | Bearer token for `MIGRATOWL_SANDBOX_KUBE_API_URL` (not needed with `kubectl proxy` or in-cluster) |
 | `MIGRATOWL_SANDBOX_IMAGE` | `python:3.12-slim` | Container image for sandbox pods (raw mode only). Must include the runtime for the target ecosystem — e.g. `python:3.13-slim`, `node:22-slim`, `golang:1.24-bookworm`, `rust:1.86-slim`, `maven:3.9-eclipse-temurin-21-alpine`. For mixed-ecosystem repos use a fat image that bundles all runtimes (see `k8s/runtime/`). |
-| `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it) |
+| `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it). Apply `k8s/sandbox-egress-raw.yaml` so scans can still reach DNS, git hosts and registries |
 | `MIGRATOWL_WORKSPACE_PATH` | `/home/user/workspace` | Workspace root inside the sandbox |
 
 ### Analysis
@@ -563,18 +563,21 @@ MIGRATOWL_SANDBOX_IMAGE=python:3.12-slim
 MIGRATOWL_SANDBOX_BLOCK_NETWORK=true  # requires Calico/Cilium; set false for kind (kindnet ignores NetworkPolicy)
 ```
 
-Apply the raw-mode RBAC instead of the default one:
+Apply the raw-mode RBAC instead of the default one, plus the sandbox egress policy:
 
 ```bash
 kubectl apply -f k8s/rbac-raw.yaml
+kubectl apply -f k8s/sandbox-egress-raw.yaml
 ```
+
+With `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true`, every sandbox pod gets a deny-all `NetworkPolicy`. On a CNI that enforces it, that also blocks DNS, `git clone` and package installs, so the scan can't fetch anything. `k8s/sandbox-egress-raw.yaml` re-opens DNS and HTTP/HTTPS to public addresses only. Apply it in every namespace that runs sandboxes.
 
 **Security defaults applied to every pod:**
 
 - `runAsNonRoot: true`, `runAsUser: 1000`
 - `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
 - `automountServiceAccountToken: false`
-- Deny-all `NetworkPolicy` (ingress + egress)
+- Ingress denied; egress limited to DNS and ports 80/443 on public addresses (no pod/service CIDRs, node networks or cloud metadata) when `k8s/sandbox-egress-raw.yaml` is applied
 
 ---
 
@@ -658,7 +661,7 @@ flowchart TB
     end
 
     subgraph Sandbox["Kubernetes Sandbox<br/>(langchain-kubernetes)"]
-        Pod["Ephemeral Pod<br/>• Non-root, no caps<br/>• Deny-all NetworkPolicy<br/>• gVisor / Kata isolation"]
+        Pod["Ephemeral Pod<br/>• Non-root, no caps<br/>• No ingress; egress to public HTTP(S) only<br/>• gVisor / Kata isolation"]
     end
 
     Client["HTTP Client"] --> W
@@ -708,6 +711,7 @@ migratowl/
 k8s/
 ├── rbac.yaml            # RBAC for agent-sandbox mode (manages Sandbox CRs)
 ├── rbac-raw.yaml        # RBAC for raw mode (manages Pods + NetworkPolicies directly)
+├── sandbox-egress-raw.yaml # Raw mode: allow DNS + public HTTP(S) egress from sandbox pods
 ├── sandbox-template.yaml# AgentSandboxTemplate CRD for the runner pod
 ├── warm-pool.yaml       # Optional warm pool for faster pod startup
 ├── sandbox-router.yaml  # Optional sandbox router service

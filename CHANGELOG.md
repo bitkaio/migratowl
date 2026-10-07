@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Raw-mode sandboxes had no network on clusters that enforce NetworkPolicy** — with
+  `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true` (the default, and what the GitHub Action and GitLab
+  component use with Calico), each sandbox pod gets a deny-all policy that also blocks DNS, so
+  `git clone` and package installs failed. New `k8s/sandbox-egress-raw.yaml` re-opens DNS to kube-dns
+  and HTTP/HTTPS to public addresses only; ingress, pod/service CIDRs, node networks and cloud metadata
+  stay blocked. Apply it next to `k8s/rbac-raw.yaml`.
+
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on
   non-dict dependency sections / non-string version values; it returns `[]` or coerces safely.
