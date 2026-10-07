@@ -161,9 +161,32 @@ class TestCreateMigratowlAgent:
             create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_manager.create_agent.call_args[1]
+        from langchain.agents.structured_output import ProviderStrategy
+
         from migratowl.models.schemas import PackageVerdicts
 
-        assert call_kwargs.get("response_format") is PackageVerdicts
+        # Anthropic: native structured output. The auto-selected ToolStrategy forces
+        # tool_choice="any", which Claude Sonnet 5.5 / Opus 5.5 / Fable 5.1 reject with a 400.
+        response_format = call_kwargs.get("response_format")
+        assert isinstance(response_format, ProviderStrategy)
+        assert response_format.schema is PackageVerdicts
+
+    @pytest.mark.parametrize("provider", ["openai", "litellm"])
+    def test_openai_compatible_providers_keep_automatic_strategy(
+        self, provider: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from migratowl.models.schemas import PackageVerdicts
+
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", provider)
+        mock_manager = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None))
+
+        assert mock_manager.create_agent.call_args[1].get("response_format") is PackageVerdicts
 
     def test_system_prompt_directs_zero_confidence_packages_to_direct_report(self) -> None:
         """Packages with confidence=0 must be directly reported as non-breaking.

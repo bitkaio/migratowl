@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Default model is now `claude-sonnet-5-5`** (was `claude-sonnet-5`; same price, $2/$10 per 1M tokens).
+  With the Anthropic provider the agent now requests native structured output (`output_config.format`)
+  instead of letting LangChain fall back to a forced tool call: Claude Sonnet 5.5, Opus 5.5 and Fable 5.1
+  reject `tool_choice: any` with a 400, and the installed LangChain does not recognise them as
+  structured-output models. OpenAI-compatible providers (`openai`, `litellm`) keep the automatic
+  choice. Pin `MIGRATOWL_MODEL_NAME=claude-sonnet-5` to keep the previous model.
+
 - **Scans run their mechanical phases in code** — cloning, dependency scanning, the outdated
   check, updating `main/` and validation now run as a fixed pipeline (`migratowl/pipeline.py`)
   instead of being driven by the LLM. `max_deps`, `exclude_deps`, `check_deps` and `ecosystems`

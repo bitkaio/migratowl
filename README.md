@@ -443,7 +443,7 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | `ANTHROPIC_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=anthropic` (default) |
 | `OPENAI_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=openai` or `litellm` |
 | `MIGRATOWL_MODEL_PROVIDER` | `anthropic` | LLM provider: `anthropic`, `openai`, or `litellm` |
-| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5` | Model name (must match provider) |
+| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5-5` | Model name (must match provider) |
 | `MIGRATOWL_MODEL_ALIAS` | — | Override model name sent to provider (for proxies with different naming) |
 | `MIGRATOWL_MODEL_RATE_LIMIT_RPS` | `0.1` | Max LLM requests/second (0.1 = 6 req/min) |
 | `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API |

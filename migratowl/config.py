@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # LLM — API keys read directly from env: ANTHROPIC_API_KEY or OPENAI_API_KEY
     model_provider: Literal["anthropic", "openai", "litellm"] = "anthropic"
-    model_name: str = "claude-sonnet-5"
+    model_name: str = "claude-sonnet-5-5"
     anthropic_base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("MIGRATOWL_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"),

@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from langchain.agents.structured_output import ProviderStrategy
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -273,13 +274,22 @@ def create_migratowl_agent(
     if not include_prepare_scan:
         system_prompt = system_prompt.replace(PREPARE_SCAN_HINT, "")
 
+    # Anthropic: request native structured output (output_config.format). Left to
+    # auto-detection, LangChain falls back to ToolStrategy for models it does not
+    # know, which forces tool_choice="any" — Claude Sonnet 5.5, Opus 5.5 and
+    # Fable 5.1 reject that with a 400. OpenAI-compatible endpoints keep the
+    # automatic choice.
+    response_format: Any = (
+        ProviderStrategy(PackageVerdicts) if sdk_provider == "anthropic" else PackageVerdicts
+    )
+
     return apply_session_injection(
         manager.create_agent(
             model=model,
             system_prompt=system_prompt,
             tools=agent_tools,
             subagents=[package_analyzer],
-            response_format=PackageVerdicts,
+            response_format=response_format,
             checkpointer=checkpointer,
         )
     )

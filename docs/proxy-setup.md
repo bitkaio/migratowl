@@ -95,14 +95,14 @@ Proxies often use different model identifiers than the direct APIs:
 
 | Direct API | Proxy (example) |
 |------------|-----------------|
-| `claude-sonnet-5` | `anthropic--claude-sonnet-latest` |
+| `claude-sonnet-5-5` | `anthropic--claude-sonnet-latest` |
 | `gpt-4o` | `openai--gpt-4o` |
 
 Use `MIGRATOWL_MODEL_ALIAS` to override the model name sent to the proxy while keeping your `.env` consistent across environments:
 
 ```bash
 # Default model for direct API
-MIGRATOWL_MODEL_NAME=claude-sonnet-5
+MIGRATOWL_MODEL_NAME=claude-sonnet-5-5
 
 # Override for proxy (only when using a proxy)
 MIGRATOWL_MODEL_ALIAS=anthropic--claude-sonnet-latest
@@ -115,7 +115,7 @@ If `MIGRATOWL_MODEL_ALIAS` is set, it takes precedence over `MIGRATOWL_MODEL_NAM
 | Variable | Description |
 |----------|-------------|
 | `MIGRATOWL_MODEL_PROVIDER` | `anthropic` (default), `openai`, or `litellm` |
-| `MIGRATOWL_MODEL_NAME` | Model identifier (e.g., `claude-sonnet-5`) |
+| `MIGRATOWL_MODEL_NAME` | Model identifier (e.g., `claude-sonnet-5-5`) |
 | `MIGRATOWL_MODEL_ALIAS` | Override model name for proxy (optional) |
 | `ANTHROPIC_BASE_URL` | Anthropic-compatible proxy URL |
 | `OPENAI_BASE_URL` | OpenAI-compatible proxy URL |
