@@ -350,3 +350,28 @@ class TestValidateProjectOutput:
         backend = MagicMock()
         result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "ruby"}))
         assert "error" in result
+
+class TestStepTruncation:
+    """pytest/npm print the failure summary last, so truncation must keep the tail."""
+
+    def test_truncated_output_keeps_tail(self) -> None:
+        from types import SimpleNamespace
+
+        from migratowl.agent.tools.validate import _step
+
+        output = "x" * 100 + "FAILED tests/test_a.py::test_b - ImportError"
+        step = _step("test", "pytest", SimpleNamespace(output=output, exit_code=1), max_chars=50)
+
+        assert step["truncated"] is True
+        assert step["output"].endswith("FAILED tests/test_a.py::test_b - ImportError")
+        assert len(step["output"]) == 50
+
+    def test_short_output_unchanged(self) -> None:
+        from types import SimpleNamespace
+
+        from migratowl.agent.tools.validate import _step
+
+        step = _step("test", "pytest", SimpleNamespace(output="ok\n", exit_code=0), max_chars=50)
+
+        assert step["truncated"] is False
+        assert step["output"] == "ok"

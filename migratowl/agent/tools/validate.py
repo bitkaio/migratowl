@@ -91,7 +91,8 @@ def _step(name: str, command: str, result: Any, max_chars: int) -> dict[str, Any
         "name": name,
         "command": command,
         "exit_code": result.exit_code,
-        "output": output[:max_chars] if truncated else output,
+        # Keep the tail: test runners print the failure summary last.
+        "output": output[-max_chars:] if truncated else output,
         "truncated": truncated,
     }
 
