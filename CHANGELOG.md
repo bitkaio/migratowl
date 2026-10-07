@@ -60,6 +60,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependencies are never candidates for analysis and correctly don't appear anywhere except
   `scan_result.all_deps`.
 
+- **One slow sandbox command no longer fails the whole scan** — a command that ran past its timeout
+  (raw mode `TimeoutError`, or the sandbox-router giving up in agent-sandbox mode) escaped the agent and
+  ended the job as `"Internal scan error"`. It now comes back to the agent as a failed command
+  (exit code `124`) so it can retry with a narrower command or a larger timeout.
+
+- **Sandbox-router cut off commands after 180s** — the vendored router (`k8s/sandbox-router/`)
+  hard-coded a 180s proxy timeout, so long installs and test runs failed with a 500. It now reads
+  `PROXY_TIMEOUT_SECONDS`, which `k8s/sandbox-router.yaml` sets to `1800`, and returns `504` on timeout.
+  Rebuild the router image and re-apply the manifest to pick it up.
+
+- **Sandbox pods and SandboxClaims leaked** — a finished job's sandbox stayed up until shutdown or the
+  TTL sweep; it is now deleted as soon as the job completes or fails (interrupted jobs keep theirs for
+  resume). Separately, `MIGRATOWL_SANDBOX_KUBE_API_URL` was never read, so in agent-sandbox mode the
+  startup TTL sweep and shutdown cleanup always failed off-cluster. New settings
+  `MIGRATOWL_SANDBOX_KUBE_API_URL` and `MIGRATOWL_SANDBOX_KUBE_TOKEN` are now passed through; for
+  local development run `kubectl proxy` and set the URL to `http://localhost:8001`.
+
 ## [0.6.0] - 2026-07-16
 
 ### Changed
