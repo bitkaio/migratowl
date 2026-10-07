@@ -1089,3 +1089,32 @@ class TestSemverVersionStrings:
             result = await query_pypi(client, _dep("pkg", "==1.0", Ecosystem.PYTHON))
         assert result is not None
         assert result.latest_version == "2.0-1"  # not normalized to "2.0.post1"
+
+
+class TestPypiYanked:
+    @staticmethod
+    async def _latest(releases: dict) -> str | None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={"info": {}, "releases": releases}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("requests", "==2.31.0", Ecosystem.PYTHON))
+        return result.latest_version if result else None
+
+    async def test_fully_yanked_release_is_never_latest(self) -> None:
+        latest = await self._latest({
+            "2.31.0": [{"yanked": False}],
+            "2.32.0": [{"yanked": True}, {"yanked": True}],
+            "2.32.1": [{"yanked": False}],
+            "2.33.0": [{"yanked": True}],
+        })
+        assert latest == "2.32.1"
+
+    async def test_release_with_one_unyanked_file_still_counts(self) -> None:
+        latest = await self._latest({
+            "2.31.0": [{"yanked": False}],
+            "2.32.0": [{"yanked": True}, {"yanked": False}],
+        })
+        assert latest == "2.32.0"

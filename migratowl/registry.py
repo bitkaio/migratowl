@@ -310,7 +310,12 @@ async def query_pypi(
     data = resp.json()
     info = data["info"]
 
-    all_versions = list(data.get("releases", {}).keys())
+    # PEP 592: a release whose files are all yanked was withdrawn — never suggest it.
+    all_versions = [
+        version
+        for version, files in data.get("releases", {}).items()
+        if not files or not all(f.get("yanked", False) for f in files)
+    ]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
     if target is None or not _is_outdated(dep.current_version, target):

@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python:3.12-slim`, which has no `git`, so a default raw-mode scan failed at `clone_repo`. The default
   is now `ghcr.io/bitkaio/migratowl-runtime:latest`, the image the GitHub Action and GitLab component
   already use.
+- **Yanked PyPI releases could be reported as the latest version** — the PyPI check read every key in
+  `releases` without looking at each file's `yanked` flag, so a withdrawn release could become the
+  upgrade target. Releases whose files are all yanked are now skipped (crates.io already did this).
+
 - **npm/crates prereleases picked as "latest" and rewritten** — every registry's versions were compared
   with Python's PEP 440 rules and returned in normalized form. npm's `rollup` `5.0.0-0` (a semver
   prerelease) was read as a post-release, chosen as latest and returned as `5.0.0.post0`, so
