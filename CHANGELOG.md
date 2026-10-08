@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-08
+
 ### Security
 
 - **Release jobs used the shared uv cache** — every workflow passed `enable-caching` to `astral-sh/setup-uv`, which
@@ -144,10 +146,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `MIGRATOWL_MODEL_ALIAS` — override model name when proxy expects different naming conventions
     (e.g. `anthropic--claude-sonnet-latest` instead of `claude-sonnet-5`)
   See [`docs/proxy-setup.md`](docs/proxy-setup.md) for configuration examples.
-
-- **Local E2E test skill** — Claude Code users can now run `test it locally` to execute a full
-  production-like scan using a Kind cluster and HAI/LiteLLM proxy. Automatically sets up the cluster,
-  starts the server, triggers a scan, and reports results. See `.claude/skills/local-e2e-test.md`.
 
 ### Fixed
 
@@ -607,7 +605,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bitkaio/migratowl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bitkaio/migratowl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bitkaio/migratowl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bitkaio/migratowl/compare/v0.3.0...v0.4.0
