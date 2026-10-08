@@ -90,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python test runs missed test dependencies kept in PEP 735 groups** — validation only installed the
+  `tests`/`test` extras, so projects that declare their test stack in `[dependency-groups]` (e.g. datasette)
+  failed at collection and nothing was actually tested. Validation now also installs the `test`, `tests` and
+  `dev` dependency groups when present (best effort, pip ≥ 25.1), before re-applying the bumped versions.
+
 - **Releases the sandbox's Python cannot install were reported as breaking** — the runtime image ran Debian's
   Python 3.11, and the PyPI check ignored `requires_python`, so e.g. Sphinx 9.1 (Python ≥3.12) failed to
   install and was flagged as a breaking upgrade. The runtime image is now based on the official

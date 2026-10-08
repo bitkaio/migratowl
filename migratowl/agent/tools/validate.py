@@ -156,6 +156,21 @@ def _validate_rust(backend: Any, folder_path: str, max_chars: int) -> dict[str, 
     return {"steps": steps, "passed": _is_passing(steps)}
 
 
+# PEP 735 [dependency-groups] that commonly hold test dependencies.
+_TEST_DEPENDENCY_GROUPS = ("test", "tests", "dev")
+
+
+def _install_dependency_groups() -> str:
+    """Best-effort ``pip install --group`` for each test-related group (pip >= 25.1).
+
+    A project without the group, or an older pip without ``--group``, is not a
+    failure; the extras/requirements install above already covered the basics.
+    """
+    return " && ".join(
+        f"(pip install --group {group} >/dev/null 2>&1 || true)" for group in _TEST_DEPENDENCY_GROUPS
+    )
+
+
 def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
 
@@ -167,7 +182,7 @@ def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) 
         f"pip install -e '.[test]' 2>/dev/null || "
         f"pip install -e . 2>/dev/null || "
         f"pip install -r requirements.txt"
-        f") && {reapply_pins(venv)}"
+        f") && {_install_dependency_groups()} && {reapply_pins(venv)}"
     )
     install_r = backend.execute(_sh(install_cmd))
     steps.append(_step(

@@ -437,3 +437,28 @@ class TestValidatePythonTestRunner:
         test_step = next(s for s in out["steps"] if s["name"] == "test")
         assert test_step["skipped"] is True
         assert "pytest" in test_step["reason"]
+
+
+class TestValidatePythonDependencyGroups:
+    """PEP 735 groups hold many projects' test deps; extras alone miss them."""
+
+    def _install_cmd(self) -> str:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # install
+            ExecResult(output="", exit_code=1),  # detect → no tests
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"})
+        return backend.execute.call_args_list[0][0][0]
+
+    def test_installs_test_and_dev_groups_best_effort(self) -> None:
+        cmd = self._install_cmd()
+        for group in ("test", "tests", "dev"):
+            assert f"pip install --group {group}" in cmd
+        assert cmd.count("|| true") >= 3  # a missing group or an older pip is not a failure
+
+    def test_groups_install_after_project_and_before_pins(self) -> None:
+        cmd = self._install_cmd()
+        pins = f"{DEFAULT_WORKSPACE}/.venvs/main/pins"
+        assert cmd.index("pip install -r requirements.txt") < cmd.index("pip install --group test")
+        assert cmd.index("pip install --group dev") < cmd.index(f"cat {pins}")
