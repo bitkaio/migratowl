@@ -85,12 +85,15 @@ planned.
 - [API Reference](#api-reference)
   - [POST /webhook](#post-webhook)
   - [GET /jobs/{job\_id}](#get-jobsjob_id)
+  - [GET /jobs?state={state}](#get-jobsstatestate)
+  - [POST /jobs/{job\_id}/resume](#post-jobsjob_idresume)
   - [GET /healthz](#get-healthz)
 - [Response Schema](#response-schema)
 - [Configuration](#configuration)
   - [LLM](#llm)
   - [Kubernetes Sandbox](#kubernetes-sandbox)
   - [Analysis](#analysis)
+  - [Jobs and Crash Recovery](#jobs-and-crash-recovery)
   - [HTTP Client](#http-client)
   - [API Server](#api-server)
   - [Git Providers](#git-providers)
@@ -355,6 +358,9 @@ Poll the status of a scan job.
 | `payload` | `ScanWebhookPayload` | Original request payload |
 | `result` | `ScanAnalysisReport \| null` | Set when `state = "completed"` |
 | `error` | `string \| null` | Set when `state = "failed"` |
+| `retry_count` | `integer` | How many times the job was resumed |
+
+Credentials embedded in `payload.repo_url` are masked in every response.
 
 **Job lifecycle:**
 
@@ -364,18 +370,38 @@ stateDiagram-v2
     pending --> running
     running --> completed
     running --> failed
+    pending --> interrupted: restart
+    running --> interrupted: restart
+    interrupted --> running: POST /resume
     completed --> [*]
     failed --> [*]
 ```
 
 | State | Meaning |
 |-------|---------|
-| `pending` | Queued, not yet started (v1 runs one scan at a time) |
+| `pending` | Queued, not yet started (at most `MIGRATOWL_MAX_CONCURRENT_SCANS` scans run at once) |
 | `running` | Agent is actively analyzing the repository |
 | `completed` | Analysis finished; `result` is populated |
 | `failed` | Unrecoverable error; `error` describes what went wrong |
+| `interrupted` | The server stopped or crashed while the job was pending or running. Resume it with `POST /jobs/{job_id}/resume` |
 
 **404** when `job_id` is not found.
+
+---
+
+### GET /jobs?state={state}
+
+List jobs in one state, for example `?state=interrupted` to find work a restart left behind. Returns `{"jobs": [JobStatus, ...]}`.
+
+**400** when `state` is missing; **422** when it is not a valid state.
+
+---
+
+### POST /jobs/{job_id}/resume
+
+Resume an `interrupted` job. Returns `202` with the same body as `POST /webhook`. With the default `sqlite` persistence the scan reconnects to its surviving sandbox and continues from the last LangGraph checkpoint; if the sandbox is gone, it starts over from the clone. PR comments and callbacks are not sent twice.
+
+**404** when `job_id` is not found; **409** when the job is not `interrupted` (or another resume already claimed it) or has been resumed more than `MIGRATOWL_MAX_SCAN_RETRIES` times.
 
 ---
 
@@ -396,28 +422,42 @@ ScanAnalysisReport
 ├── scan_result               ScanResult
 │   ├── all_deps              Dependency[]   — every declared dependency found
 │   │   ├── name              string
-│   │   ├── current_version   string
+│   │   ├── current_version   string         — as declared (may be a range)
+│   │   ├── installed_version string | null  — from a lockfile, when one exists
 │   │   ├── ecosystem         string
-│   │   └── manifest_path     string
+│   │   ├── manifest_path     string
+│   │   └── version_key       string | null  — pom property / Gradle catalog key holding the version
 │   ├── outdated              OutdatedDependency[]  — deps with newer versions
 │   │   ├── name              string
 │   │   ├── current_version   string
+│   │   ├── installed_version string | null
 │   │   ├── latest_version    string
 │   │   ├── ecosystem         string
 │   │   ├── manifest_path     string
+│   │   ├── module_path       string | null  — Go: new module path of a new major (…/v2)
+│   │   ├── version_key       string | null
 │   │   ├── homepage_url      string | null
 │   │   ├── repository_url    string | null
 │   │   └── changelog_url     string | null
 │   ├── manifests_found       string[]  — manifest file paths discovered
-│   └── scan_duration_seconds float
+│   ├── scan_duration_seconds float
+│   └── registry_failures     RegistryFailure[]  — deps whose registry lookup failed
+│       ├── name              string
+│       └── ecosystem         string
 ├── reports                   AnalysisReport[]  — one per analyzed package
 │   ├── dependency_name       string
 │   ├── is_breaking           bool
 │   ├── error_summary         string    — what failed (empty if not breaking)
 │   ├── changelog_citation    string    — verbatim excerpt from changelog
-│   └── suggested_human_fix   string    — plain-English remediation step
+│   ├── suggested_human_fix   string    — plain-English remediation step
+│   └── confidence            float     — 0.0–1.0, how sure the verdict is
 ├── skipped                   string[]  — package names not analyzed
-└── total_duration_seconds    float
+├── total_duration_seconds    float
+├── total_input_tokens        int       — includes cache reads and writes
+├── total_output_tokens       int
+├── total_cache_read_tokens   int
+├── total_cache_creation_tokens int
+└── model_name                string    — model that produced the analysis
 ```
 
 **Example report entry:**
@@ -428,7 +468,8 @@ ScanAnalysisReport
   "is_breaking": true,
   "error_summary": "ImportError: cannot import name 'PreparedRequest'",
   "changelog_citation": "## 3.0.0 — Removed PreparedRequest from the public API.",
-  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`."
+  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`.",
+  "confidence": 0.9
 }
 ```
 
@@ -448,9 +489,9 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5-5` | Model name (must match provider) |
 | `MIGRATOWL_MODEL_ALIAS` | — | Override model name sent to provider (for proxies with different naming) |
 | `MIGRATOWL_MODEL_RATE_LIMIT_RPS` | `0.1` | Max LLM requests/second (0.1 = 6 req/min) |
-| `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API |
-| `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API |
-| `LITELLM_BASE_URL` | — | LiteLLM unified proxy endpoint (use with `MIGRATOWL_MODEL_PROVIDER=litellm`) |
+| `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API (`MIGRATOWL_ANTHROPIC_BASE_URL` also works) |
+| `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API (`MIGRATOWL_OPENAI_BASE_URL` also works) |
+| `LITELLM_BASE_URL` | — | LiteLLM unified proxy endpoint (use with `MIGRATOWL_MODEL_PROVIDER=litellm`; `MIGRATOWL_LITELLM_BASE_URL` also works) |
 
 #### Using an LLM Proxy
 
@@ -500,6 +541,20 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
+
+### Jobs and Crash Recovery
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIGRATOWL_PERSISTENCE_BACKEND` | `sqlite` | `sqlite` keeps jobs and agent checkpoints on disk so scans survive a restart and can be resumed; `memory` keeps nothing (CI, one-shot runs) |
+| `MIGRATOWL_JOBS_DB_PATH` | `./migratowl_jobs.db` | SQLite job store (`sqlite` backend only) |
+| `MIGRATOWL_CHECKPOINT_DB_PATH` | `./migratowl_checkpoints.db` | SQLite LangGraph checkpoints (`sqlite` backend only) |
+| `MIGRATOWL_MAX_SCAN_RETRIES` | `3` | How often a job may be resumed; past it, an interrupted job is marked `failed` |
+| `MIGRATOWL_MAX_CONCURRENT_SCANS` | `1` | Scans that run at once; the rest wait as `pending`. Each scan has its own sandbox pod, so this bounds cluster and LLM load |
+| `MIGRATOWL_SANDBOX_TTL_IDLE_SECONDS` | `1800` | Sandboxes idle for longer are deleted by the startup sweep (leaked by a crash) |
+| `MIGRATOWL_SANDBOX_TTL_SECONDS` | — | Absolute sandbox lifetime. Unset by default so long builds are not killed mid-scan |
+
+Run a single server process per database: on startup it marks every `pending` or `running` job it finds as `interrupted`.
 
 ### HTTP Client
 
@@ -688,34 +743,45 @@ flowchart TB
 ```text
 migratowl/
 ├── api/
-│   ├── main.py          # FastAPI app, /webhook + /jobs endpoints, lifespan
-│   ├── jobs.py          # In-memory JobStore (PENDING→RUNNING→COMPLETED|FAILED)
+│   ├── main.py          # FastAPI app: /webhook, /jobs, /healthz, lifespan, auth, scan runner
+│   ├── jobs.py          # JobStore interface + in-memory store
+│   ├── sqlite_jobs.py   # Durable SQLite JobStore (crash recovery)
+│   ├── checkpoint.py    # LangGraph checkpointer (SQLite or memory)
+│   ├── reconcile.py     # On startup: orphaned pending/running jobs → interrupted
+│   ├── resume.py        # Resume: reconnect to the surviving sandbox or start over
 │   └── helpers.py       # extract_verdicts, assemble_report
 ├── agent/
 │   ├── graph.py         # graph singleton + sandbox lifecycle (langgraph.json entrypoint)
 │   ├── factory.py       # build_tools(), create_migratowl_agent() — builds the LangGraph
-│   ├── sandbox.py       # KubernetesProvider init/teardown helpers
+│   ├── sandbox.py       # KubernetesSandboxManager construction
 │   ├── subagents.py     # package-analyzer subagent definition
 │   ├── session_graph.py # Patches ainvoke/astream to inject LangFuse session IDs
 │   └── tools/
 │       ├── clone.py     # clone_repo, copy_source
 │       ├── detect.py    # detect_languages
-│       ├── scan.py      # scan_dependencies
+│       ├── scan.py      # scan_dependencies (manifests + lockfiles)
 │       ├── registry.py  # check_outdated_deps
 │       ├── update.py    # update_dependencies
+│       ├── validate.py  # validate_project (install, build, test per ecosystem)
 │       ├── execute.py   # execute_project (runs install + test in sandbox)
 │       ├── changelog.py # fetch_changelog (PyPI / npm / GitHub / raw HTTP)
 │       ├── manifest.py  # read_manifest, patch_manifest (sandbox file I/O)
 │       └── prepare.py   # prepare_scan (pipeline as an agent tool, for deep-agents-ui)
+├── git/
+│   ├── formatter.py     # ScanAnalysisReport → PR/MR comment (escaped Markdown)
+│   ├── github.py        # GitHub PR comments and commit statuses
+│   ├── gitlab.py        # GitLab MR comments and commit statuses
+│   └── notify.py        # Picks the provider and posts after a scan
 ├── models/
 │   └── schemas.py       # All Pydantic models (ScanWebhookPayload, ScanAnalysisReport, …)
 ├── pipeline.py          # Deterministic Phases 1–2, presolve, LLM brief
 ├── config.py            # pydantic-settings Settings class (MIGRATOWL_ prefix)
+├── logging_setup.py     # MIGRATOWL_LOG_LEVEL and the fallback log handler
 ├── observability.py     # LangFuse CallbackHandler setup + session ID injection
-├── registry.py          # Registry query logic (PyPI, npm, crates.io, Go proxy)
-├── parsers.py           # Manifest parsers per ecosystem
+├── registry.py          # Registry queries (PyPI, npm, crates.io, Go proxy, Maven Central)
+├── parsers.py           # Manifest and lockfile parsers per ecosystem
 ├── changelog.py         # Changelog fetch strategies (multi-strategy fallback)
-├── patches.py           # Dependency version patching helpers
+├── patches.py           # Monkey-patches for third-party library bugs
 └── http.py              # Shared HTTPX async client with retry logic
 
 k8s/
@@ -725,6 +791,7 @@ k8s/
 ├── sandbox-template.yaml# AgentSandboxTemplate CRD for the runner pod
 ├── warm-pool.yaml       # Optional warm pool for faster pod startup
 ├── sandbox-router.yaml  # Optional sandbox router service
+├── sandbox-router/      # Sandbox router image source
 └── runtime/             # Dockerfile + entrypoint for the sandbox runner image
 
 tests/                   # Mirrors migratowl/ package structure
@@ -741,7 +808,7 @@ tests/                   # Mirrors migratowl/ package structure
 | Test | `uv run pytest tests/ -v` |
 | Lint | `uv run ruff check migratowl/` |
 
-**TDD is mandatory** for all production code in `migratowl/`. The Red-Green-Refactor cycle is enforced: write a failing test first, confirm RED, write minimal code to pass, confirm GREEN, then refactor. No production code without a corresponding test in `tests/`. See `CLAUDE.md` for details.
+**TDD is mandatory** for all production code in `migratowl/`. The Red-Green-Refactor cycle is enforced: write a failing test first, confirm RED, write minimal code to pass, confirm GREEN, then refactor. No production code without a corresponding test in `tests/`.
 
 ---
 

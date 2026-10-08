@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **README brought up to date** — documents `GET /jobs?state=`, `POST /jobs/{id}/resume` and the `interrupted`
+  state, the crash-recovery and concurrency settings (`MIGRATOWL_PERSISTENCE_BACKEND`, `*_DB_PATH`,
+  `MAX_SCAN_RETRIES`, `MAX_CONCURRENT_SCANS`, `SANDBOX_TTL_*`), every field of the report, and the current module
+  layout. `.env.example` lists the same settings, and a test now fails when a setting is missing from either.
+
 - **`langchain-kubernetes` now comes from the maintained fork** — the dependency is installed from
   `github.com/barnakun/langchain-kubernetes` at tag `py-0.4.1` (MIT, forked from `bitkaio/langchain-kubernetes`
   0.4.0) instead of PyPI. 0.4.1 deletes a raw-mode sandbox's NetworkPolicy together with its Pod (previously one
