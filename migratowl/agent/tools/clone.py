@@ -14,17 +14,60 @@
 
 """Clone repository and copy source tools for the Migratowl agent."""
 
-from collections.abc import Callable
+import base64
+from collections.abc import Callable, Mapping
 from typing import Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from langchain.tools import tool
 
 from migratowl.agent.tools.update import q
+from migratowl.config import Settings
+
+# host -> (username, token); the username is what GitHub / GitLab expect for a token over HTTPS.
+CloneTokens = Mapping[str, tuple[str, str]]
+
+
+def clone_tokens(settings: Settings) -> dict[str, tuple[str, str]]:
+    """Clone credentials per git host, from the GitHub / GitLab tokens already configured."""
+    tokens: dict[str, tuple[str, str]] = {}
+    if settings.github_token:
+        host = (urlsplit(settings.github_api_url).hostname or "github.com").removeprefix("api.")
+        tokens[host] = ("x-access-token", settings.github_token)
+    if settings.gitlab_token:
+        tokens[urlsplit(settings.gitlab_api_url).hostname or "gitlab.com"] = ("oauth2", settings.gitlab_token)
+    return tokens
+
+
+def _clone_auth(repo_url: str, tokens: CloneTokens) -> tuple[str, list[str], tuple[str, ...]]:
+    """Split ``repo_url`` into (clean URL, ``git -c`` args, secrets to scrub from output).
+
+    The credential travels as a per-host ``http.<url>.extraHeader`` on this one command. It is never
+    in the URL or in ``.git/config``, where code the sandbox later runs could read it, and git's
+    error messages never echo it.
+    """
+    parts = urlsplit(repo_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return repo_url, [], ()
+    credentials: tuple[str, str] | None = None
+    if parts.username or parts.password:
+        credentials = (unquote(parts.username or ""), unquote(parts.password or ""))
+    elif parts.hostname in tokens:
+        credentials = tokens[parts.hostname]
+    host = parts.hostname + (f":{parts.port}" if parts.port else "")
+    clean = urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    if credentials is None:
+        return clean, [], ()
+    user, secret = credentials
+    header = base64.b64encode(f"{user}:{secret}".encode()).decode()
+    arg = f"http.{parts.scheme}://{host}/.extraHeader=Authorization: Basic {header}"
+    return clean, ["-c", arg], tuple(x for x in (user, secret, header) if x)
 
 
 def create_clone_repo_tool(
     get_backend: Callable[[], Any],
     workspace_path: str,
+    tokens: CloneTokens | None = None,
 ) -> Any:
     """Create a clone_repo tool bound to a sandbox backend.
 
@@ -32,12 +75,13 @@ def create_clone_repo_tool(
         get_backend: Callable that returns a sandbox backend with an
             ``execute()`` method (e.g. a K8s sandbox).
         workspace_path: Root workspace path inside the sandbox.
+        tokens: Clone credentials per git host (see ``clone_tokens``), for private repositories.
     """
     source_path = f"{workspace_path}/source"
 
     @tool
     def clone_repo(repo_url: str, branch: str = "main") -> str:
-        """Clone a public Git repository into the sandbox workspace.
+        """Clone a Git repository into the sandbox workspace.
 
         Clones into {workspace}/source/. If source/ already has files, skips
         the clone and returns immediately.
@@ -53,15 +97,23 @@ def create_clone_repo_tool(
         if check.exit_code == 0 and check.output.strip():
             return f"source already present at {source_path} — skipping clone"
 
+        repo_url, git_auth, secrets = _clone_auth(repo_url, tokens or {})
+        auth = "".join(f" {q(a)}" for a in git_auth)
+
+        def scrub(text: str) -> str:
+            for secret in secrets:
+                text = text.replace(secret, "***")
+            return text
+
         # Clone into source/
-        cmd = f"git clone --branch {q(branch)} --depth 1 -- {q(repo_url)} {q(source_path)}"
+        cmd = f"git{auth} clone --branch {q(branch)} --depth 1 -- {q(repo_url)} {q(source_path)}"
         result = backend.execute(cmd)
 
         if result.exit_code != 0:
             if branch == "main":
                 # Fallback: retry with repo's default branch
                 backend.execute(f"rm -rf {q(source_path)}")
-                cmd_default = f"git clone --depth 1 -- {q(repo_url)} {q(source_path)}"
+                cmd_default = f"git{auth} clone --depth 1 -- {q(repo_url)} {q(source_path)}"
                 result_default = backend.execute(cmd_default)
                 if result_default.exit_code == 0:
                     result = result_default
@@ -69,10 +121,10 @@ def create_clone_repo_tool(
                 else:
                     return (
                         f"Failed to clone {repo_url}: branch 'main' failed (exit {result.exit_code}), "
-                        f"default branch also failed (exit {result_default.exit_code}): {result_default.output}"
+                        f"default branch also failed (exit {result_default.exit_code}): {scrub(result_default.output)}"
                     )
             else:
-                return f"Failed to clone {repo_url} (exit code {result.exit_code}): {result.output}"
+                return f"Failed to clone {repo_url} (exit code {result.exit_code}): {scrub(result.output)}"
 
         verify = backend.execute(f"ls {q(source_path)}")
         if not verify.output.strip():
@@ -81,7 +133,7 @@ def create_clone_repo_tool(
                 f"(no files found in {source_path})"
             )
 
-        return f"Successfully cloned {repo_url} (branch: {branch}) to {source_path}\n{result.output}"
+        return f"Successfully cloned {repo_url} (branch: {branch}) to {source_path}\n{scrub(result.output)}"
 
     return clone_repo
 

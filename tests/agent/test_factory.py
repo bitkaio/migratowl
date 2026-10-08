@@ -472,6 +472,17 @@ class TestOnSandboxAcquired:
 
 
 class TestBuildTools:
+    def test_clone_tool_gets_the_configured_tokens(self) -> None:
+        from unittest.mock import patch
+
+        from migratowl.agent.factory import build_tools
+
+        settings = Settings(_env_file=None, github_token="ghp_" + "b" * 36)
+        with patch("migratowl.agent.factory.create_clone_repo_tool") as create:
+            build_tools(_make_mock_manager(), settings=settings)
+
+        assert create.call_args.kwargs["tokens"] == {"github.com": ("x-access-token", settings.github_token)}
+
     def test_returns_every_tool_by_name(self) -> None:
         from migratowl.agent.factory import build_tools
 

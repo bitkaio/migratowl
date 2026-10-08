@@ -30,7 +30,7 @@ from langchain_kubernetes import KubernetesSandboxManager
 from migratowl.agent.session_graph import apply_session_injection
 from migratowl.agent.subagents import create_package_analyzer_subagent
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
-from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
+from migratowl.agent.tools.clone import clone_tokens, create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
 from migratowl.agent.tools.execute import create_execute_project_tool
 from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_read_manifest_tool
@@ -148,7 +148,9 @@ def build_tools(
     source_path = f"{workspace_path}/source"
     return MigratowlTools(
         backend_factory=backend_factory,
-        clone_repo=create_clone_repo_tool(get_sandbox, workspace_path=workspace_path),
+        clone_repo=create_clone_repo_tool(
+            get_sandbox, workspace_path=workspace_path, tokens=clone_tokens(settings)
+        ),
         copy_source=create_copy_source_tool(get_sandbox, workspace_path=workspace_path),
         detect_languages=create_detect_languages_tool(get_sandbox, workspace_path=source_path),
         scan_dependencies=create_scan_dependencies_tool(get_sandbox, workspace_path=source_path),

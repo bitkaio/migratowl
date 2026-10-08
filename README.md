@@ -578,10 +578,12 @@ Run a single server process per database: on startup it marks every `pending` or
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_TOKEN` | — | GitHub personal access token; needs `repo:status` and `public_repo` (or `repo` for private repos) scopes to post PR comments and commit statuses |
+| `GITHUB_TOKEN` | — | GitHub personal access token; needs `repo:status` and `public_repo` (or `repo` for private repos) scopes to post PR comments and commit statuses. Also used to clone private repositories on `github.com` (or the host of `GITHUB_API_URL`) |
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server (e.g. `https://github.corp.com/api/v3`) |
-| `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses |
+| `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses. Also used to clone private repositories on the host of `GITLAB_API_URL` |
 | `GITLAB_API_URL` | `https://gitlab.com/api/v4` | Override for self-hosted GitLab |
+
+Private repositories: with the token for the repository's host set, `repo_url` needs no credentials. The token goes to `git clone` as a request header for that host only. It is not written to the clone's `.git/config`, which code in the sandbox could read, and it is not echoed in errors. Credentials embedded in `repo_url` (`https://user:token@host/…`) are handled the same way.
 
 ### Observability
 

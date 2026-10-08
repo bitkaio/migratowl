@@ -76,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Private repositories** — `GITHUB_TOKEN` / `GITLAB_TOKEN` are now also used to clone private repositories on their
+  host, so `repo_url` stays free of credentials. The token is sent to `git clone` as a request header scoped to that
+  host, not in the URL: it is not written to the clone's `.git/config` (readable by the repository's own test code
+  in the sandbox), not sent to other hosts, and not echoed in clone errors. Credentials embedded in `repo_url`
+  get the same treatment; before, they were stored in `.git/config` and repeated in the clone failure message.
+
 - **Lockfile-aware version checks** — `package-lock.json`, `yarn.lock` (classic and Berry), `pnpm-lock.yaml`,
   `uv.lock`, `poetry.lock` and `Cargo.lock` are read next to (or above) each manifest, and the installed version —
   not the declared range — decides whether a dependency is outdated, how large the upgrade is, and what the LLM
