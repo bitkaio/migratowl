@@ -189,7 +189,18 @@ def _validate_python(backend: Any, folder_path: str, venv: str, max_chars: int) 
         steps.append(_skipped("test", "no pytest configuration or tests/ directory found"))
         return {"steps": steps, "passed": True}
 
-    # Step 3: Run pytest
+    # Step 3: Make sure the venv has pytest. Projects often declare it only in a
+    # dev group or tool config, which the install step does not cover; a missing
+    # runner must not look like a test failure caused by the bump.
+    runner_r = backend.execute(_sh(
+        f"{activate_venv(venv)} && (python3 -m pytest --version >/dev/null 2>&1 || pip install pytest)"
+    ))
+    if runner_r.exit_code != 0:
+        steps.append(_skipped("test", f"pytest is not available and could not be installed: "
+                                      f"{runner_r.output.strip()[-300:]}"))
+        return {"steps": steps, "passed": _is_passing(steps)}
+
+    # Step 4: Run pytest
     test_r = backend.execute(_sh(f"{activate_venv(venv)} && cd {q(folder_path)} && python3 -m pytest -x --tb=short"))
     steps.append(_step("test", "python3 -m pytest -x --tb=short", test_r, max_chars))
     return {"steps": steps, "passed": _is_passing(steps)}

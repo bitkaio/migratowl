@@ -85,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A missing pytest made a dependency bump look breaking** — when a project declares pytest only in a dev
+  group or tool config, the install step left it out of the venv and validation failed with
+  `No module named pytest`. Validation now installs pytest when it is missing; if that fails, the test step is
+  reported as skipped instead of failed.
+
 - **`deepagents` had no upper bound** — `deepagents>=0.6` allowed 0.7, which removes the callable-backend
   API the agent factory and the package-analyzer subagent use, so a fresh `pip install` could pull a version
   Migratowl cannot run on. The range is now `>=0.6,<0.7` until the migration to the new backend API.
