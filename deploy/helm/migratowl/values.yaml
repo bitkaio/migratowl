@@ -1,0 +1,68 @@
+# Migratowl server. Prerequisites for the sandbox mode you pick are in the README ("Kubernetes Setup").
+
+image:
+  repository: ghcr.io/bitkaio/migratowl-server
+  tag: ""              # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Secret holding the environment of the server, one key per variable. Create it yourself so no
+# credential passes through Helm values or release history, for example:
+#   kubectl create secret generic migratowl-env \
+#     --from-literal=ANTHROPIC_API_KEY=... \
+#     --from-literal=MIGRATOWL_API_TOKEN="$(openssl rand -hex 32)" \
+#     --from-literal=GITHUB_TOKEN=...
+# MIGRATOWL_API_TOKEN protects /webhook and /jobs; set it unless the server is only reachable from
+# inside the cluster by trusted clients.
+existingSecret: ""
+
+# Plain (non-secret) MIGRATOWL_* settings, e.g. { MIGRATOWL_MODEL_NAME: claude-sonnet-5-5 }.
+env: {}
+
+sandbox:
+  # agent-sandbox: needs the agent-sandbox controller, CRDs, the SandboxTemplate and the sandbox-router
+  #   (k8s/sandbox-template.yaml, k8s/sandbox-router.yaml).
+  # raw: plain Pods, no CRDs. Needs a CNI that enforces NetworkPolicy (Calico, Cilium) for the network block.
+  mode: agent-sandbox
+  # Namespace the sandboxes run in. Empty means the release namespace. Do not point it at a
+  # namespace that holds workloads you care about: the server may create and delete pods there.
+  namespace: ""
+  template: migratowl-sandbox-template   # agent-sandbox mode
+  # Sandbox-router URL (agent-sandbox mode). Empty means http://sandbox-router-svc.<sandbox namespace>.svc.cluster.local:8080
+  routerUrl: ""
+  image: ghcr.io/bitkaio/migratowl-runtime:latest   # raw mode
+  # raw mode: allow DNS and public HTTP(S) egress from sandbox pods (k8s/sandbox-egress-raw.yaml).
+  # Without it, a deny-all policy leaves sandboxes unable to clone or install anything.
+  egressPolicy: true
+
+persistence:
+  # Job history and agent checkpoints (SQLite), which make restarts resumable. Disabled: the server
+  # uses the memory backend and loses all jobs when the pod restarts.
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  existingClaim: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

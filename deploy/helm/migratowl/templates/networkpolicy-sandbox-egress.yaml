@@ -1,0 +1,46 @@
+{{- if and (eq .Values.sandbox.mode "raw") .Values.sandbox.egressPolicy }}
+# Mirrors k8s/sandbox-egress-raw.yaml: NetworkPolicies are additive, so this re-opens only DNS and
+# public HTTP(S) on top of the deny-all policy the server attaches to each raw-mode sandbox pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "migratowl.fullname" . }}-sandbox-egress
+  namespace: {{ include "migratowl.sandboxNamespace" . }}
+  labels:
+    {{- include "migratowl.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: deepagents
+      app.kubernetes.io/component: sandbox
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+{{- end }}

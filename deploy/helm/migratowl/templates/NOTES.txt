@@ -1,0 +1,15 @@
+Migratowl is deployed in {{ .Release.Namespace }}; sandboxes run in {{ include "migratowl.sandboxNamespace" . }} ({{ .Values.sandbox.mode }} mode).
+
+Reach it from your machine:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "migratowl.fullname" . }} 8000:{{ .Values.service.port }}
+  curl localhost:8000/healthz
+{{- if not .Values.existingSecret }}
+
+WARNING: existingSecret is not set, so the server has no LLM API key and no MIGRATOWL_API_TOKEN.
+  kubectl -n {{ .Release.Namespace }} create secret generic migratowl-env --from-literal=ANTHROPIC_API_KEY=... --from-literal=MIGRATOWL_API_TOKEN="$(openssl rand -hex 32)"
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values --set existingSecret=migratowl-env
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+NOTE: persistence is disabled - jobs are lost when the pod restarts and cannot be resumed.
+{{- end }}

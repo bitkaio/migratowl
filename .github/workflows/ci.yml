@@ -106,6 +106,15 @@ jobs:
           dockerfile: k8s/sandbox-router/Dockerfile
           failure-threshold: error
 
+      - name: Lint server Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5  # v3
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+      - name: Lint Helm chart
+        run: helm lint deploy/helm/migratowl
+
   # ── Workflow static analysis (zizmor) ────────────────────────────────────
   workflow-security:
     name: Workflow Security (zizmor)

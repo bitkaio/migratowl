@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Server container image and Helm chart** — `Dockerfile` builds `ghcr.io/bitkaio/migratowl-server` (non-root,
+  works with a read-only root filesystem and no capabilities, job history in the `/data` volume, one uvicorn
+  process), and `deploy/helm/migratowl` deploys it: a single-replica Deployment, a ServiceAccount with a Role
+  scoped to the sandbox namespace (SandboxClaims in agent-sandbox mode; pods, exec and the NetworkPolicy in raw
+  mode), a PVC that survives `helm uninstall`, and credentials read from an existing Secret. The release workflow
+  pushes the image (amd64 and arm64) and the chart (`oci://ghcr.io/bitkaio/charts`); CI lints the Dockerfile and
+  the chart. Signing and an SBOM for the new image are not part of this change.
+
 - **Private repositories** — `GITHUB_TOKEN` / `GITLAB_TOKEN` are now also used to clone private repositories on their
   host, so `repo_url` stays free of credentials. The token is sent to `git clone` as a request header scoped to that
   host, not in the URL: it is not written to the clone's `.git/config` (readable by the repository's own test code
@@ -128,6 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts the server, triggers a scan, and reports results. See `.claude/skills/local-e2e-test.md`.
 
 ### Fixed
+
+- **A production install could not start the server** — `uvicorn` was not a dependency; it only arrived through
+  the dev group (`langgraph-cli`), so `uv sync --no-dev` produced an environment with no way to run
+  `uvicorn migratowl.api.main:app`. It is now a runtime dependency.
 
 - **`MIGRATOWL_SANDBOX_CONNECTION_MODE=direct` could not work** — the sandbox-router URL it needs was never passed
   to the library, so the mode failed at the first scan. New `MIGRATOWL_SANDBOX_API_URL` carries it (for a server

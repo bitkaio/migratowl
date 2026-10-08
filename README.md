@@ -98,6 +98,7 @@ planned.
   - [API Server](#api-server)
   - [Git Providers](#git-providers)
   - [Observability](#observability)
+- [Running the Server in a Cluster](#running-the-server-in-a-cluster)
 - [Kubernetes Setup](#kubernetes-setup)
 - [Observability](#observability-1)
 - [GitHub Actions](#github-actions)
@@ -596,6 +597,28 @@ Private repositories: with the token for the repository's host set, `repo_url` n
 
 ---
 
+## Running the Server in a Cluster
+
+The server image is `ghcr.io/bitkaio/migratowl-server` (non-root, read-only root filesystem, one process; job history in `/data`). The Helm chart in [`deploy/helm/migratowl`](deploy/helm/migratowl) runs it in the cluster it scans from, with a ServiceAccount whose Role is limited to the sandbox namespace and a volume for the SQLite job history.
+
+Set up the sandbox prerequisites first ([Kubernetes Setup](#kubernetes-setup): the agent-sandbox controller, `k8s/sandbox-template.yaml` and `k8s/sandbox-router.yaml`, or use `sandbox.mode=raw`), then:
+
+```bash
+kubectl create secret generic migratowl-env \
+  --from-literal=ANTHROPIC_API_KEY=... \
+  --from-literal=MIGRATOWL_API_TOKEN="$(openssl rand -hex 32)" \
+  --from-literal=GITHUB_TOKEN=...
+
+helm install migratowl oci://ghcr.io/bitkaio/charts/migratowl --set existingSecret=migratowl-env
+kubectl port-forward svc/migratowl 8000:8000
+```
+
+In the cluster there is no `kubectl` to tunnel with, so agent-sandbox mode connects to the sandbox-router Service directly (`MIGRATOWL_SANDBOX_CONNECTION_MODE=direct`, `MIGRATOWL_SANDBOX_API_URL`); the chart sets both. Options (`sandbox.mode`, `sandbox.namespace`, `persistence.*`, `env`, `resources`) are in [`values.yaml`](deploy/helm/migratowl/values.yaml). Keep the Deployment at one replica: jobs live in a SQLite file and startup reconciliation assumes a single process.
+
+To build the image yourself: `docker build -t migratowl-server .`
+
+---
+
 ## Kubernetes Setup
 
 Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.1` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
@@ -786,6 +809,9 @@ migratowl/
 ├── changelog.py         # Changelog fetch strategies (multi-strategy fallback)
 ├── patches.py           # Monkey-patches for third-party library bugs
 └── http.py              # Shared HTTPX async client with retry logic
+
+Dockerfile               # Server image (ghcr.io/bitkaio/migratowl-server)
+deploy/helm/migratowl/   # Helm chart for the server
 
 k8s/
 ├── rbac.yaml            # RBAC for agent-sandbox mode (manages Sandbox CRs)
