@@ -96,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Migratowl's own log lines never appeared** — uvicorn configures only its own loggers, so `migratowl.*` INFO
+  messages (pipeline candidates, validation results, sandbox lifecycle) were dropped and only warnings showed.
+  New setting `MIGRATOWL_LOG_LEVEL` (default `INFO`); each line is printed once whether or not the root logger
+  is configured. The pipeline summary now also counts update failures.
+
 - **Python test runs missed test dependencies kept in PEP 735 groups** — validation only installed the
   `tests`/`test` extras, so projects that declare their test stack in `[dependency-groups]` (e.g. datasette)
   failed at collection and nothing was actually tested. Validation now also installs the `test`, `tests` and

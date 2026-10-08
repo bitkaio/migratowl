@@ -47,6 +47,7 @@ from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
 from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
 from migratowl.http import close_http_client  # noqa: E402
+from migratowl.logging_setup import configure_logging  # noqa: E402
 from migratowl.models.schemas import (  # noqa: E402
     JobState,
     JobStatus,
@@ -70,6 +71,7 @@ def create_app(
     """
     if settings is None:
         settings = get_settings()
+    configure_logging(settings.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

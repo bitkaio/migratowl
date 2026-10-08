@@ -221,8 +221,9 @@ async def prepare_scan(
         prepared.validations.append(summarize_validation(ecosystem, raw, tail_chars))
 
     logger.info(
-        "Pipeline prepared %d candidate(s), %d skipped, validations=%s",
-        len(candidates), len(skipped), {v.ecosystem: v.passed for v in prepared.validations},
+        "Pipeline prepared %d candidate(s), %d skipped, %d update failure(s), validations=%s",
+        len(candidates), len(skipped), len(prepared.update_failures),
+        {v.ecosystem: v.passed for v in prepared.validations},
     )
     return prepared
 

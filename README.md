@@ -513,6 +513,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MIGRATOWL_LOG_LEVEL` | `INFO` | Log level for Migratowl's own messages (`DEBUG`, `INFO`, `WARNING`, `ERROR`); at `INFO` each scan logs its candidates, update failures and validation result per ecosystem |
 | `MIGRATOWL_API_TOKEN` | — | When set, `POST /webhook` and all `/jobs` endpoints require `Authorization: Bearer <token>` (`/healthz` stays open). Set it whenever the server is reachable from anything but localhost; the server logs a warning at startup when it is unset |
 | `MIGRATOWL_CALLBACK_ALLOW_PRIVATE` | `false` | Allow `callback_url` to target private, loopback or link-local addresses. By default such URLs are rejected with `422`, hostnames are resolved again before the callback is sent, and redirects are not followed |
 | `MIGRATOWL_API_HOST` | `0.0.0.0` | Bind address |

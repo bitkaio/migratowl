@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     api_token: str | None = None
     callback_allow_private: bool = False
 
+    # Logging for migratowl.* (DEBUG, INFO, WARNING, ERROR)
+    log_level: str = "INFO"
+
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
