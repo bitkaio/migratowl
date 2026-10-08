@@ -1305,3 +1305,110 @@ class TestGoMajorVersionModules:
     async def test_gopkg_in_is_not_probed(self) -> None:
         result = await self._go("gopkg.in/yaml.v2", "2.4.0", {"gopkg.in/yaml.v2": "v2.4.0\nv2.4.1\n"})
         assert (result.latest_version, result.module_path) == ("v2.4.1", None)
+
+
+# ===========================================================================
+# Mirrors and private registries
+# ===========================================================================
+
+
+class TestRegistryMirrors:
+    """Version checks follow the configured mirror and send credentials to it only."""
+
+    @staticmethod
+    def _recording_client(handler) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+        seen: list[httpx.Request] = []
+
+        def wrapped(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return handler(request)
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(wrapped)), seen
+
+    @staticmethod
+    def _options(**kwargs):
+        from migratowl.registries import Registries
+
+        return CheckOptions(mode=OutdatedCheckMode.NORMAL, registries=Registries(**kwargs))
+
+    async def test_npm_uses_the_mirror_and_bearer_token(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}, "2.0.0": {}}}))
+        options = self._options(npm="https://npm.corp/api/npm", token="tok")
+        async with client:
+            result = await query_npm(client, _dep("left-pad", "1.0.0", Ecosystem.NODEJS, "package.json"), options)
+
+        assert result is not None and result.latest_version == "2.0.0"
+        assert str(seen[0].url) == "https://npm.corp/api/npm/left-pad"
+        assert seen[0].headers["Authorization"] == "Bearer tok"
+
+    async def test_pypi_uses_the_mirror_with_basic_auth(self) -> None:
+        from migratowl.registry import query_pypi
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={
+            "info": {"version": "2.0"}, "releases": {"1.0": [{}], "2.0": [{}]}}))
+        options = self._options(pypi="https://pypi.corp", username="svc", password="pw")
+        async with client:
+            await query_pypi(client, _dep("requests", "1.0", Ecosystem.PYTHON), options)
+
+        assert str(seen[0].url) == "https://pypi.corp/pypi/requests/json"
+        assert seen[0].headers["Authorization"].startswith("Basic ")
+
+    async def test_public_registry_never_gets_the_credential(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}}}))
+        options = self._options(npm="https://npm.corp", pypi="https://pypi.corp", token="tok")
+        # npm is a mirror, but a crates request (public host) must not carry the token
+        from migratowl.registry import query_crates
+
+        async with client:
+            await query_npm(client, _dep("a", "1.0.0", Ecosystem.NODEJS, "package.json"), options)
+            try:
+                await query_crates(client, _dep("serde", "1.0.0", Ecosystem.RUST, "Cargo.toml"), options)
+            except Exception:
+                pass
+
+        assert "Authorization" in seen[0].headers
+        assert seen[1].url.host == "crates.io"
+        assert "Authorization" not in seen[1].headers
+
+    async def test_go_proxy_mirror(self) -> None:
+        from migratowl.registry import query_golang
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, text="v1.0.0\nv1.1.0\n"))
+        options = self._options(go_proxy="https://go.corp/proxy")
+        async with client:
+            result = await query_golang(client, _dep("example.com/m", "v1.0.0", Ecosystem.GO, "go.mod"), options)
+
+        assert result is not None and result.latest_version == "v1.1.0"
+        assert all(r.url.host == "go.corp" for r in seen)
+        assert str(seen[0].url).startswith("https://go.corp/proxy/example.com/m/@v/list")
+
+    async def test_maven_mirror_reads_maven_metadata(self) -> None:
+        from migratowl.registry import query_maven_central
+
+        metadata = (
+            "<metadata><groupId>org.x</groupId><artifactId>lib</artifactId><versioning>"
+            "<versions><version>1.0</version><version>2.0</version><version>2.1-SNAPSHOT</version></versions>"
+            "</versioning></metadata>"
+        )
+        client, seen = self._recording_client(lambda r: httpx.Response(200, text=metadata))
+        options = self._options(maven="https://mvn.corp/repo", username="u", password="p")
+        async with client:
+            result = await query_maven_central(client, _dep("org.x:lib", "1.0", Ecosystem.JAVA, "pom.xml"), options)
+
+        assert str(seen[0].url) == "https://mvn.corp/repo/org/x/lib/maven-metadata.xml"
+        assert result is not None and result.latest_version == "2.0"  # the SNAPSHOT is a pre-release
+        assert seen[0].headers["Authorization"].startswith("Basic ")
+
+    async def test_defaults_are_unchanged(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}}}))
+        async with client:
+            await query_npm(client, _dep("a", "1.0.0", Ecosystem.NODEJS, "package.json"))
+
+        assert str(seen[0].url) == "https://registry.npmjs.org/a"
+        assert "Authorization" not in seen[0].headers

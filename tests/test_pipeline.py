@@ -115,6 +115,15 @@ class _FakeTool:
         return self.output(args) if callable(self.output) else self.output
 
 
+class _RecordingTool:
+    def __init__(self, result: str, order: list[str], label: str) -> None:
+        self.result, self.order, self.label = result, order, label
+
+    async def ainvoke(self, args: dict, config: dict | None = None) -> str:
+        self.order.append(self.label)
+        return self.result
+
+
 def _fake_tools(*, clone="Successfully cloned", deps=None, outdated=None, update="Updated 1 package(s) in main/",
                 validate=None):
     from types import SimpleNamespace
@@ -129,6 +138,7 @@ def _fake_tools(*, clone="Successfully cloned", deps=None, outdated=None, update
     validate = validate or json.dumps({"steps": [{"name": "test", "exit_code": 0, "output": ""}], "passed": True})
     return SimpleNamespace(
         clone_repo=_FakeTool(clone),
+        configure_registries=_FakeTool("Package registries: public defaults."),
         scan_dependencies=_FakeTool(json.dumps(deps)),
         check_outdated_deps=_FakeTool(json.dumps({"outdated": outdated, "failures": [], "warning": None})),
         copy_source=_FakeTool("Successfully copied source to /w/main"),
@@ -141,6 +151,29 @@ CONFIG = {"configurable": {"thread_id": "job-1"}}
 
 
 class TestPrepareScan:
+    async def test_registries_are_configured_before_anything_is_installed(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        order: list[str] = []
+        tools = _fake_tools()
+        tools.configure_registries = _RecordingTool("Package registries: public defaults.", order, "configure")
+        tools.update_dependencies = _RecordingTool("Updated 1 package(s) in main/\n  flask: OK", order, "update")
+
+        await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+        assert order == ["configure", "update"]
+
+    async def test_a_registry_config_failure_stops_the_scan(self) -> None:
+        import pytest
+
+        from migratowl.pipeline import PipelineError, prepare_scan
+
+        tools = _fake_tools()
+        tools.configure_registries = _FakeTool("Failed to configure package registries: .npmrc: permission_denied")
+
+        with pytest.raises(PipelineError, match="registries"):
+            await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
     async def test_runs_phases_in_order_with_thread_config(self) -> None:
         from migratowl.pipeline import prepare_scan
 
@@ -451,6 +484,7 @@ async def test_update_receives_go_module_path() -> None:
     update = AsyncMock(return_value="Updated 1 package(s) in main/\n  github.com/x/y: OK")
     tools = SimpleNamespace(
         clone_repo=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully cloned")),
+        configure_registries=SimpleNamespace(ainvoke=AsyncMock(return_value="Package registries: public defaults.")),
         scan_dependencies=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(deps))),
         check_outdated_deps=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(outdated))),
         copy_source=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully copied")),

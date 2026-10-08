@@ -166,6 +166,11 @@ async def prepare_scan(
     if clone_out.startswith("Failed"):
         raise PipelineError(clone_out)
 
+    # Before anything installs: pip, npm, Go, Cargo and Maven read their mirrors from config files.
+    registries_out = await tools.configure_registries.ainvoke({}, config=config)
+    if registries_out.startswith("Failed"):
+        raise PipelineError(registries_out)
+
     deps_raw = await tools.scan_dependencies.ainvoke({}, config=config)
     try:
         deps = [Dependency(**item) for item in json.loads(deps_raw)]

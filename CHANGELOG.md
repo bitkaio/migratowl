@@ -76,6 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Package mirrors and private registries** — `MIGRATOWL_PYPI_URL`, `MIGRATOWL_NPM_REGISTRY_URL`,
+  `MIGRATOWL_GO_PROXY_URL`, `MIGRATOWL_CRATES_API_URL`, `MIGRATOWL_CARGO_REGISTRY_URL` and `MIGRATOWL_MAVEN_URL`
+  point Migratowl at an Artifactory, Nexus, devpi, Verdaccio or Go-proxy mirror. The same setting drives the
+  version checks and the sandbox: a new `configure_registries` step writes `pip.conf`, `.npmrc`, Go's env file,
+  Cargo's `config.toml` and Maven's `settings.xml` before anything installs. Maven checks against a mirror read
+  `maven-metadata.xml`. `MIGRATOWL_REGISTRY_USERNAME`/`_PASSWORD` (and `_TOKEN`) are sent only to the mirror hosts
+  and reach the sandbox as uploaded file content, not command arguments; URLs may not embed credentials and
+  credentials require `https`. The sandbox runs the scanned code and can read them, so use a read-only account.
+  Gradle and Cargo credentials are not covered.
+
 - **Server container image and Helm chart** — `Dockerfile` builds `ghcr.io/bitkaio/migratowl-server` (non-root,
   works with a read-only root filesystem and no capabilities, job history in the `/data` volume, one uvicorn
   process), and `deploy/helm/migratowl` deploys it: a single-replica Deployment, a ServiceAccount with a Role

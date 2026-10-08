@@ -94,6 +94,7 @@ planned.
   - [Kubernetes Sandbox](#kubernetes-sandbox)
   - [Analysis](#analysis)
   - [Jobs and Crash Recovery](#jobs-and-crash-recovery)
+  - [Package Registries and Mirrors](#package-registries-and-mirrors)
   - [HTTP Client](#http-client)
   - [API Server](#api-server)
   - [Git Providers](#git-providers)
@@ -557,6 +558,25 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SANDBOX_TTL_SECONDS` | — | Absolute sandbox lifetime. Unset by default so long builds are not killed mid-scan |
 
 Run a single server process per database: on startup it marks every `pending` or `running` job it finds as `interrupted`.
+
+### Package Registries and Mirrors
+
+By default Migratowl reads PyPI, npm, crates.io, the Go proxy and Maven Central. Behind a proxy or with private packages, point it at your own mirror (Artifactory, Nexus, devpi, Verdaccio, a Go proxy). The same setting drives the version checks and the sandbox's `pip`, `npm`, `go`, `cargo` and `mvn`, which Migratowl configures before anything installs. Each variable is optional; unset means the public registry.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIGRATOWL_PYPI_URL` | `https://pypi.org` | Base of the PyPI JSON API; checks read `<url>/pypi/<name>/json`, pip uses `<url>/simple` |
+| `MIGRATOWL_NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry (checks and installs) |
+| `MIGRATOWL_GO_PROXY_URL` | `https://proxy.golang.org` | `GOPROXY` for checks and installs. Set only the mirror: there is no `direct` fallback |
+| `MIGRATOWL_CRATES_API_URL` | `https://crates.io` | crates.io web API (version checks) |
+| `MIGRATOWL_CARGO_REGISTRY_URL` | — | Cargo index for installs, e.g. `sparse+https://crates.corp/index/`. Replaces crates.io for `cargo`; Cargo credentials are not supported |
+| `MIGRATOWL_MAVEN_URL` | — | Maven repository. Checks read `maven-metadata.xml` instead of Central's search API, and `mvn` mirrors everything (`*`) to it. Gradle ignores this |
+| `MIGRATOWL_REGISTRY_USERNAME`, `MIGRATOWL_REGISTRY_PASSWORD` | — | Basic credentials (the password may be an access token) for pip, Go, Maven and npm |
+| `MIGRATOWL_REGISTRY_TOKEN` | — | Bearer token for the version checks and npm's `_authToken` (pip, Go and Maven need the username and password) |
+
+Credentials are sent only to the mirror hosts, never to the public registries or to changelog sources, and reach the sandbox as uploaded config files rather than command arguments. Registry URLs must not embed credentials, and credentials require `https`.
+
+> **The sandbox can read them.** pip, npm and the others need the credential in a file inside the pod, and the scanned repository's own code runs there. Use a read-only account that can see only what a scan needs.
 
 ### HTTP Client
 

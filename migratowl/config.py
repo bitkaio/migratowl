@@ -15,6 +15,7 @@
 """Centralized configuration for Migratowl."""
 
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -148,10 +149,50 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Package registries. Unset = the public registries. A mirror (Artifactory, Nexus, devpi, Verdaccio, a
+    # Go proxy) is used for the version checks and written into the sandbox's tool config for installs.
+    pypi_url: str | None = None  # base of the PyPI JSON API; pip uses <base>/simple
+    npm_registry_url: str | None = None
+    go_proxy_url: str | None = None
+    crates_api_url: str | None = None  # crates.io web API (version checks)
+    cargo_registry_url: str | None = None  # Cargo index, e.g. sparse+https://... (installs)
+    maven_url: str | None = None  # Maven repository; checks read maven-metadata.xml instead of Central's search
+    # One credential for every mirror above. Basic (username + password; the password may be an access
+    # token) is used for pip, Go, Maven and npm; the token is a Bearer for the checks and npm's _authToken.
+    # The sandbox runs the scanned repository's code, so it can read these: use a read-only account.
+    registry_username: str | None = None
+    registry_password: str | None = None
+    registry_token: str | None = None
+
     # HTTP client
     http_timeout: float = 30.0
     http_retry_count: int = 3
     http_retry_backoff_base: float = 0.5
+
+    @model_validator(mode="after")
+    def _registry_settings(self) -> "Settings":
+        urls = {
+            "MIGRATOWL_PYPI_URL": self.pypi_url,
+            "MIGRATOWL_NPM_REGISTRY_URL": self.npm_registry_url,
+            "MIGRATOWL_GO_PROXY_URL": self.go_proxy_url,
+            "MIGRATOWL_CRATES_API_URL": self.crates_api_url,
+            "MIGRATOWL_MAVEN_URL": self.maven_url,
+        }
+        for name, value in urls.items():
+            if value is None:
+                continue
+            parts = urlsplit(value)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                raise ValueError(f"{name} must be an http(s) URL")
+            if parts.username or parts.password:
+                raise ValueError(f"{name} must not contain credentials: use MIGRATOWL_REGISTRY_USERNAME/_PASSWORD")
+        if bool(self.registry_username) != bool(self.registry_password):
+            raise ValueError("MIGRATOWL_REGISTRY_USERNAME and MIGRATOWL_REGISTRY_PASSWORD go together")
+        if self.registry_username or self.registry_token:
+            plain = [n for n, v in urls.items() if v and urlsplit(v).scheme == "http"]
+            if plain:
+                raise ValueError(f"registry credentials need https, but {plain[0]} is plain http")
+        return self
 
     @model_validator(mode="after")
     def _direct_mode_needs_router_url(self) -> "Settings":

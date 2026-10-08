@@ -21,12 +21,14 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+import defusedxml.ElementTree as ET
 import httpx
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from migratowl.http import get_http_client
 from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency, RegistryFailure
+from migratowl.registries import Registries
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,8 @@ class CheckOptions:
     # Python version the sandbox installs with; PyPI releases whose
     # requires_python excludes it are skipped. None = no filtering.
     python_version: str | None = None
+    # Where the registries are: the public ones unless a mirror is configured.
+    registries: Registries = field(default_factory=Registries)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +331,7 @@ def _go_module_to_repo_url(module_path: str) -> str | None:
 
 
 _DEFAULT_OPTIONS = CheckOptions()
+_DEFAULT_REGISTRIES = Registries()
 
 
 async def query_pypi(
@@ -336,7 +341,8 @@ async def query_pypi(
 ) -> OutdatedDependency | None:
     """Query PyPI for latest version of a Python package."""
     name = dep.name.split("[")[0]  # strip extras
-    resp = await client.get(f"https://pypi.org/pypi/{name}/json")
+    url = options.registries.pypi_json_url(name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
     info = data["info"]
@@ -381,7 +387,8 @@ async def query_npm(
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
     """Query npm registry for latest version of a Node.js package."""
-    resp = await client.get(f"https://registry.npmjs.org/{dep.name}")
+    url = options.registries.npm_url(dep.name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
 
@@ -409,7 +416,8 @@ async def query_crates(
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
     """Query crates.io for latest version of a Rust crate."""
-    resp = await client.get(f"https://crates.io/api/v1/crates/{dep.name}")
+    url = options.registries.crates_url(dep.name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
     crate = data["crate"]
@@ -437,14 +445,17 @@ _GO_MAJOR_SUFFIX = re.compile(r"^(?P<base>.+?)/v(?P<major>\d+)$")
 _GO_MAX_MAJOR_PROBES = 5
 
 
-async def _go_version_list(client: httpx.AsyncClient, module: str) -> list[str]:
-    resp = await client.get(f"https://proxy.golang.org/{_go_proxy_encode(module)}/@v/list")
+async def _go_version_list(
+    client: httpx.AsyncClient, module: str, registries: Registries = _DEFAULT_REGISTRIES
+) -> list[str]:
+    url = registries.go_list_url(_go_proxy_encode(module))
+    resp = await client.get(url, **registries.request_kwargs(url))
     resp.raise_for_status()
     return [v for v in resp.text.splitlines() if v.strip()]
 
 
 async def _newest_go_major(
-    client: httpx.AsyncClient, module: str, include_prerelease: bool
+    client: httpx.AsyncClient, module: str, include_prerelease: bool, registries: Registries = _DEFAULT_REGISTRIES
 ) -> tuple[str, list[str]] | None:
     """``(module_path, versions)`` of the highest released major above ``module``, if any.
 
@@ -459,7 +470,7 @@ async def _newest_go_major(
     for candidate in range(major + 1, major + 1 + _GO_MAX_MAJOR_PROBES):
         path = f"{base}/v{candidate}"
         try:
-            versions = await _go_version_list(client, path)
+            versions = await _go_version_list(client, path, registries)
         except httpx.HTTPStatusError:
             break  # 404/410: no such major
         if _max_version(versions, include_prerelease, semver=True) is None:
@@ -478,10 +489,10 @@ async def query_golang(
     Majors >= 2 live at a different module path (``<module>/v2``); in NORMAL mode
     the next major paths are probed too, and ``module_path`` names the new path.
     """
-    all_versions = await _go_version_list(client, dep.name)
+    all_versions = await _go_version_list(client, dep.name, options.registries)
     module_path: str | None = None
     if options.mode == OutdatedCheckMode.NORMAL:
-        newer = await _newest_go_major(client, dep.name, options.include_prerelease)
+        newer = await _newest_go_major(client, dep.name, options.include_prerelease, options.registries)
         if newer is not None:
             module_path, all_versions = newer
 
@@ -523,17 +534,29 @@ async def query_maven_central(
     if ":" not in dep.name:
         return None
     group_id, artifact_id = dep.name.split(":", 1)
-    url = (
-        f"https://search.maven.org/solrsearch/select"
-        f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
-    )
-    resp = await client.get(url)
-    resp.raise_for_status()
-    docs = resp.json()["response"]["docs"]
-    if not docs:
-        return None
-
-    all_versions = [d["v"] for d in docs if "v" in d]
+    registries = options.registries
+    metadata_url = registries.maven_metadata_url(group_id, artifact_id)
+    if metadata_url is not None:
+        # A configured repository: any Maven repository serves maven-metadata.xml, few offer Central's search.
+        resp = await client.get(metadata_url, **registries.request_kwargs(metadata_url))
+        resp.raise_for_status()
+        all_versions = [
+            (v.text or "").strip() for v in ET.fromstring(resp.text).iter("version")
+            if (v.text or "").strip() and "SNAPSHOT" not in (v.text or "")
+        ]
+        if not all_versions:
+            return None
+    else:
+        url = (
+            f"https://search.maven.org/solrsearch/select"
+            f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
+        )
+        resp = await client.get(url)
+        resp.raise_for_status()
+        docs = resp.json()["response"]["docs"]
+        if not docs:
+            return None
+        all_versions = [d["v"] for d in docs if "v" in d]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
     if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
