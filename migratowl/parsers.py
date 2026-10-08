@@ -312,3 +312,97 @@ def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
             )
         )
     return deps
+
+# ---------------------------------------------------------------------------
+# Lockfiles: name → installed version
+# ---------------------------------------------------------------------------
+
+
+def normalize_python_name(name: str) -> str:
+    """PEP 503 normalized project name (``Foo_Bar.baz`` → ``foo-bar-baz``)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def parse_package_lock_json(content: str) -> dict[str, str]:
+    """Top-level installed versions from npm's ``package-lock.json`` (v1, v2 and v3)."""
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    locked: dict[str, str] = {}
+    packages = data.get("packages")
+    if isinstance(packages, dict):
+        for path, info in packages.items():
+            # Only direct children of the root node_modules, not nested copies.
+            if not isinstance(path, str) or not path.startswith("node_modules/") or not isinstance(info, dict):
+                continue
+            name = path.removeprefix("node_modules/")
+            if "/node_modules/" in name:
+                continue
+            if isinstance(info.get("version"), str):
+                locked[name] = info["version"]
+        return locked
+    dependencies = data.get("dependencies")
+    if isinstance(dependencies, dict):
+        for name, info in dependencies.items():
+            if isinstance(info, dict) and isinstance(info.get("version"), str):
+                locked[name] = info["version"]
+    return locked
+
+
+def _toml_packages(content: str) -> list[tuple[str, str]]:
+    """``(name, version)`` pairs from a TOML lockfile's ``[[package]]`` array."""
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError:
+        return []
+    packages = data.get("package")
+    if not isinstance(packages, list):
+        return []
+    return [
+        (p["name"], p["version"])
+        for p in packages
+        if isinstance(p, dict) and isinstance(p.get("name"), str) and isinstance(p.get("version"), str)
+    ]
+
+
+def parse_python_lock(content: str) -> dict[str, str]:
+    """Installed versions from ``poetry.lock`` or ``uv.lock`` (keys PEP 503 normalized)."""
+    return {normalize_python_name(name): version for name, version in _toml_packages(content)}
+
+
+def parse_cargo_lock(content: str) -> dict[str, list[str]]:
+    """Every locked version per crate from ``Cargo.lock`` (a crate can be locked at several majors)."""
+    locked: dict[str, list[str]] = {}
+    for name, version in _toml_packages(content):
+        locked.setdefault(name, []).append(version)
+    return locked
+
+
+def _cargo_compat_key(version: str) -> tuple[int, ...] | None:
+    """Cargo caret compatibility class: major, or (0, minor) for 0.x versions."""
+    m = re.match(r"\s*[\^~=]?\s*(\d+)(?:\.(\d+))?", version)
+    if not m:
+        return None
+    major = int(m.group(1))
+    if major == 0 and m.group(2) is not None:
+        return (0, int(m.group(2)))
+    return (major,)
+
+
+def pick_cargo_locked(declared: str, candidates: list[str]) -> str | None:
+    """The locked version that satisfies ``declared`` under Cargo's caret rules, if any."""
+    if not candidates:
+        return None
+    if not declared.strip():
+        return candidates[-1]
+    want = _cargo_compat_key(declared)
+    if want is None:
+        return None
+    for version in candidates:
+        got = _cargo_compat_key(version)
+        if got is not None and got[: len(want)] == want:
+            return version
+    return None

@@ -647,3 +647,71 @@ dependencies {
             "com.google.guava:guava": "33.0.0-jre",
             "org.junit.jupiter:junit-jupiter": "5.10.1",
         }
+
+
+class TestLockfileParsers:
+    """Lockfiles give the version actually installed, not the declared range."""
+
+    def test_package_lock_v2_v3(self) -> None:
+        from migratowl.parsers import parse_package_lock_json
+
+        content = """{"lockfileVersion": 3, "packages": {
+            "": {"dependencies": {"express": "^4.18.0"}},
+            "node_modules/express": {"version": "4.21.2"},
+            "node_modules/@scope/pkg": {"version": "1.0.0"},
+            "node_modules/express/node_modules/debug": {"version": "2.6.9"}}}"""
+        assert parse_package_lock_json(content) == {"express": "4.21.2", "@scope/pkg": "1.0.0"}
+
+    def test_package_lock_v1(self) -> None:
+        from migratowl.parsers import parse_package_lock_json
+
+        content = '{"lockfileVersion": 1, "dependencies": {"lodash": {"version": "4.17.21"}}}'
+        assert parse_package_lock_json(content) == {"lodash": "4.17.21"}
+
+    def test_poetry_and_uv_lock(self) -> None:
+        from migratowl.parsers import parse_python_lock
+
+        content = """
+[[package]]
+name = "Requests"
+version = "2.31.0"
+
+[[package]]
+name = "flask"
+version = "3.0.3"
+"""
+        assert parse_python_lock(content) == {"requests": "2.31.0", "flask": "3.0.3"}
+
+    def test_cargo_lock_keeps_every_locked_version(self) -> None:
+        from migratowl.parsers import parse_cargo_lock
+
+        content = """
+version = 3
+
+[[package]]
+name = "syn"
+version = "1.0.109"
+
+[[package]]
+name = "syn"
+version = "2.0.48"
+"""
+        assert parse_cargo_lock(content) == {"syn": ["1.0.109", "2.0.48"]}
+
+    def test_cargo_pick_matches_the_declared_requirement(self) -> None:
+        # syn 1 is the direct dependency; syn 2 is only there for another crate.
+        from migratowl.parsers import pick_cargo_locked
+
+        assert pick_cargo_locked("1.0", ["1.0.109", "2.0.48"]) == "1.0.109"
+        assert pick_cargo_locked("^2", ["1.0.109", "2.0.48"]) == "2.0.48"
+        assert pick_cargo_locked("0.27", ["0.26.4", "0.27.1"]) == "0.27.1"  # 0.x: minor is breaking
+        assert pick_cargo_locked("", ["1.0.0"]) == "1.0.0"
+        assert pick_cargo_locked("3", ["1.0.0"]) is None
+
+    def test_malformed_lockfiles_return_empty(self) -> None:
+        from migratowl.parsers import parse_cargo_lock, parse_package_lock_json, parse_python_lock
+
+        assert parse_package_lock_json("[]") == {}
+        assert parse_package_lock_json('{"packages": 5}') == {}
+        assert parse_python_lock("package = 3") == {}
+        assert parse_cargo_lock('[[package]]\nname = 1\nversion = "x"') == {}

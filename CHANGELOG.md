@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Lockfile-aware version checks** — `package-lock.json`, `uv.lock`, `poetry.lock` and `Cargo.lock` are read
+  next to (or above) each manifest, and the installed version — not the declared range — decides whether a
+  dependency is outdated, how large the upgrade is, and what the LLM brief shows. `Dependency` and
+  `OutdatedDependency` gain an `installed_version` field. The new parsers are fuzzed.
+
 - **Coverage-guided fuzzing for untrusted-input parsers** ([#12](https://github.com/bitkaio/migratowl/issues/12)) —
   Atheris harnesses (`fuzz/fuzz_parsers.py`, `fuzz/fuzz_changelog.py`) fuzz the manifest and changelog
   parsers, which ingest content from arbitrary upstream repos. A new **Fuzz Smoke** CI job runs each

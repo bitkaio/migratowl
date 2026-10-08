@@ -162,13 +162,15 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 
 ## Supported Ecosystems
 
-| Language | Manifest files | Registry |
-|----------|----------------|----------|
-| Python | `pyproject.toml` (PEP 621 incl. optional deps, PEP 735 groups, Poetry incl. groups), `requirements.txt` | PyPI |
-| Node.js | `package.json` | npm |
-| Go | `go.mod` | proxy.golang.org |
-| Rust | `Cargo.toml` | crates.io |
-| Java | `pom.xml` (Maven), `build.gradle` / `build.gradle.kts` (Gradle) | Maven Central |
+| Language | Manifest files | Lockfiles (installed versions) | Registry |
+|----------|----------------|--------------------------------|----------|
+| Python | `pyproject.toml` (PEP 621 incl. optional deps, PEP 735 groups, Poetry incl. groups), `requirements.txt` | `uv.lock`, `poetry.lock` | PyPI |
+| Node.js | `package.json` | `package-lock.json` | npm |
+| Go | `go.mod` | — (`go.mod` pins exact versions) | proxy.golang.org |
+| Rust | `Cargo.toml` | `Cargo.lock` | crates.io |
+| Java | `pom.xml` (Maven), `build.gradle` / `build.gradle.kts` (Gradle) | — | Maven Central |
+
+When a lockfile sits next to a manifest (or in a parent directory, as in Cargo and uv workspaces), the installed version is compared with the latest release instead of the declared range: `>=2.0` with `2.31.0` installed is only outdated if something newer than `2.31.0` exists. Reports show it as `installed_version`.
 
 ---
 

@@ -86,8 +86,13 @@ def is_major_bump(current: str, latest: str) -> bool | None:
     return new > cur
 
 
+def dependency_is_major_bump(dep: OutdatedDependency) -> bool | None:
+    """Major bump measured from the installed version (lockfile) when known, else the declared one."""
+    return is_major_bump(dep.installed_version or dep.current_version, dep.latest_version)
+
+
 def _major_gap(dep: OutdatedDependency) -> int:
-    cur, new = parse_major(dep.current_version), parse_major(dep.latest_version)
+    cur, new = parse_major(dep.installed_version or dep.current_version), parse_major(dep.latest_version)
     return new - cur if cur is not None and new is not None else 0
 
 
@@ -234,7 +239,7 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
         return (
             passed.get(dep.ecosystem.value, False)
             and dep.name not in prepared.update_failures
-            and is_major_bump(dep.current_version, dep.latest_version) is False
+            and dependency_is_major_bump(dep) is False
         )
 
     # One name can appear in several manifests; the report has one verdict per name, so
@@ -268,10 +273,13 @@ def build_analysis_brief(
         f"Packages to analyze ({len(pending)}):",
     ]
     for dep in pending:
-        bump = is_major_bump(dep.current_version, dep.latest_version)
+        bump = dependency_is_major_bump(dep)
+        version = dep.current_version
+        if dep.installed_version:
+            version = f"{dep.installed_version} (declared {dep.current_version})"
         kind = "MAJOR bump" if bump else ("minor/patch bump" if bump is False else "unknown bump size")
         lines.append(
-            f"- {dep.name} {dep.current_version} -> {dep.latest_version} "
+            f"- {dep.name} {version} -> {dep.latest_version} "
             f"({dep.ecosystem.value}, {dep.manifest_path}, {kind})"
         )
     pending_names = {dep.name for dep in pending}

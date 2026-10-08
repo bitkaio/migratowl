@@ -53,12 +53,24 @@ _PARSERS = [
     (parsers.parse_build_gradle, (ValueError,)),
 ]
 
+# Lockfile parsers swallow malformed input themselves: they must never raise.
+_LOCK_PARSERS = [
+    parsers.parse_package_lock_json,
+    parsers.parse_python_lock,
+    parsers.parse_cargo_lock,
+]
+
 
 def test_one_input(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
     # Route the fuzzer across parsers by consuming one selector byte.
-    idx = fdp.ConsumeIntInRange(0, len(_PARSERS) - 1)
+    idx = fdp.ConsumeIntInRange(0, len(_PARSERS) + len(_LOCK_PARSERS) - 1)
     content = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
+    if idx >= len(_PARSERS):
+        lock_parser = _LOCK_PARSERS[idx - len(_PARSERS)]
+        locked = lock_parser(content)
+        assert isinstance(locked, dict), f"{lock_parser.__name__} returned {type(locked)}"
+        return
     parser, allowed = _PARSERS[idx]
     try:
         result = parser(content, "fuzz/manifest")

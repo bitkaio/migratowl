@@ -338,7 +338,7 @@ async def query_pypi(
     ]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
         return None
 
     project_urls = info.get("project_urls")
@@ -348,6 +348,7 @@ async def query_pypi(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=info.get("home_page") or None,
         repository_url=_extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub"]),
         changelog_url=_extract_url_by_key(project_urls, ["Changelog", "Changes", "Release Notes", "History"]),
@@ -367,7 +368,7 @@ async def query_npm(
     all_versions = list(data.get("versions", {}).keys())
     target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target, semver=True):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -376,6 +377,7 @@ async def query_npm(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=data.get("homepage") or None,
         repository_url=_extract_npm_repo_url(data.get("repository")),
     )
@@ -395,7 +397,7 @@ async def query_crates(
     all_versions = [v["num"] for v in data.get("versions", []) if not v.get("yanked", False)]
     target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target, semver=True):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -404,6 +406,7 @@ async def query_crates(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=crate.get("homepage") or None,
         repository_url=crate.get("repository") or None,
         changelog_url=crate.get("documentation") or None,
@@ -423,7 +426,7 @@ async def query_golang(
 
     target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target, semver=True):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     # Re-attach 'v' prefix that packaging normalizes away.
@@ -440,6 +443,7 @@ async def query_golang(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         repository_url=_go_module_to_repo_url(dep.name),
     )
 
@@ -470,7 +474,7 @@ async def query_maven_central(
     all_versions = [d["v"] for d in docs if "v" in d]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
         return None
 
     return OutdatedDependency(
@@ -479,6 +483,7 @@ async def query_maven_central(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
     )
 
 

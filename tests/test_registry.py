@@ -1182,3 +1182,30 @@ class TestPypiRequiresPython:
 
     async def test_missing_requires_python_is_not_excluded(self) -> None:
         assert await self._latest({"7.4.7": [{}], "8.0.0": [{"requires_python": None}]}, "3.13") == "8.0.0"
+
+
+class TestInstalledVersionFromLockfile:
+    async def test_range_already_at_latest_is_not_outdated(self) -> None:
+        # Declared ^4.18.0 but the lockfile installs 4.21.2, which is the latest.
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.18.0": {}, "4.21.2": {}}}),
+        })
+        dep = Dependency(name="express", current_version="^4.18.0", ecosystem=Ecosystem.NODEJS,
+                         manifest_path="package.json", installed_version="4.21.2")
+        async with httpx.AsyncClient(transport=transport) as client:
+            assert await query_npm(client, dep) is None
+
+    async def test_outdated_result_carries_installed_version(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={"info": {}, "releases": {"2.31.0": [], "2.32.3": []}}),
+        })
+        dep = Dependency(name="requests", current_version=">=2.0", ecosystem=Ecosystem.PYTHON,
+                         manifest_path="pyproject.toml", installed_version="2.31.0")
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, dep)
+        assert result is not None
+        assert (result.current_version, result.installed_version, result.latest_version) == (">=2.0", "2.31.0", "2.32.3")

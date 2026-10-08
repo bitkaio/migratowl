@@ -232,3 +232,49 @@ class TestScanKotlinDsl:
             ("com.example:lib", "java", "build.gradle.kts")
         ]
         assert "-name 'build.gradle.kts'" in backend.execute.call_args_list[0][0][0]
+
+
+class TestScanInstalledVersions:
+    """Lockfiles next to (or above) a manifest give each dependency's installed version."""
+
+    def _scan(self, files: dict[str, str]) -> dict[str, dict]:
+        results = [ExecResult(output="\n".join(f"{DEFAULT_WORKSPACE}/{p}" for p in files) + "\n", exit_code=0)]
+        results += [ExecResult(output=c, exit_code=0) for c in files.values()]
+        backend = _make_backend_multi(results)
+        tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+        out = json.loads(tool.invoke({}))
+        assert "-name 'package-lock.json'" in backend.execute.call_args_list[0][0][0]
+        return {d["name"]: d for d in out}
+
+    def test_npm_lock_in_same_dir(self) -> None:
+        deps = self._scan({
+            "package.json": '{"dependencies": {"express": "^4.18.0", "left-pad": "1.0.0"}}',
+            "package-lock.json": '{"packages": {"node_modules/express": {"version": "4.21.2"}}}',
+        })
+        assert deps["express"]["current_version"] == "4.18.0"
+        assert deps["express"]["installed_version"] == "4.21.2"
+        assert deps["left-pad"]["installed_version"] is None
+
+    def test_python_lock_with_normalized_names_and_extras(self) -> None:
+        deps = self._scan({
+            "pyproject.toml": '[project]\ndependencies = ["Requests[socks]>=2.0", "python_dateutil>=2"]\n',
+            "uv.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n\n'
+                       '[[package]]\nname = "python-dateutil"\nversion = "2.9.0"\n',
+        })
+        assert deps["Requests[socks]"]["installed_version"] == "2.31.0"
+        assert deps["python_dateutil"]["installed_version"] == "2.9.0"
+
+    def test_cargo_workspace_lock_in_parent_dir(self) -> None:
+        deps = self._scan({
+            "Cargo.lock": '[[package]]\nname = "syn"\nversion = "1.0.109"\n\n'
+                          '[[package]]\nname = "syn"\nversion = "2.0.48"\n',
+            "crates/core/Cargo.toml": '[dependencies]\nsyn = "1.0"\n',
+        })
+        assert deps["syn"]["installed_version"] == "1.0.109"
+
+    def test_lock_of_another_ecosystem_is_ignored(self) -> None:
+        deps = self._scan({
+            "package.json": '{"dependencies": {"requests": "1.0.0"}}',
+            "uv.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n',
+        })
+        assert deps["requests"]["installed_version"] is None

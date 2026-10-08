@@ -313,3 +313,39 @@ class TestReviewFixes:
 
         assert resolved == []
         assert [d.current_version for d in pending] == ["^4.17.0", "^3.10.0"]
+
+
+class TestInstalledVersionInPipeline:
+    def _dep(self, current: str, installed: str | None, latest: str):
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+
+        return OutdatedDependency(name="pkg", current_version=current, installed_version=installed,
+                                  latest_version=latest, ecosystem=Ecosystem.PYTHON, manifest_path="pyproject.toml")
+
+    def test_major_bump_uses_installed_version(self) -> None:
+        from migratowl.pipeline import dependency_is_major_bump
+
+        # ">=1.0" looks like 1.x, but 2.5.0 is installed: 2.5 → 2.6 is not a major bump.
+        assert dependency_is_major_bump(self._dep(">=1.0", "2.5.0", "2.6.0")) is False
+        assert dependency_is_major_bump(self._dep(">=1.0", None, "2.6.0")) is True
+
+    def test_ranking_uses_installed_version(self) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import select_candidates
+
+        near = self._dep(">=1.0", "4.0.0", "4.1.0").model_copy(update={"name": "near"})
+        far = self._dep(">=3.0", "3.0.0", "5.0.0").model_copy(update={"name": "far"})
+        chosen, _ = select_candidates([near, far], ScanWebhookPayload(repo_url="r", max_deps=1))
+        assert [d.name for d in chosen] == ["far"]
+
+    def test_brief_shows_installed_version(self) -> None:
+        from migratowl.models.schemas import ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan, build_analysis_brief
+
+        dep = self._dep(">=2.0", "2.31.0", "3.0.0")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[],
+        )
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, [dep])
+        assert "pkg 2.31.0 (declared >=2.0) -> 3.0.0" in brief

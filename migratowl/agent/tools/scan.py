@@ -25,13 +25,18 @@ from langchain.tools import tool
 from migratowl.agent.tools.update import q
 from migratowl.models.schemas import Dependency, Ecosystem
 from migratowl.parsers import (
+    normalize_python_name,
     parse_build_gradle,
+    parse_cargo_lock,
     parse_cargo_toml,
     parse_go_mod,
     parse_package_json,
+    parse_package_lock_json,
     parse_pom_xml,
     parse_pyproject_toml,
+    parse_python_lock,
     parse_requirements_txt,
+    pick_cargo_locked,
 )
 
 # Map manifest filenames to (parser_function, ecosystem).
@@ -46,7 +51,51 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
     "build.gradle.kts": (parse_build_gradle, Ecosystem.JAVA),
 }
 
+# Lockfiles give the installed version behind a declared range.
+_LOCKFILES: dict[str, Ecosystem] = {
+    "package-lock.json": Ecosystem.NODEJS,
+    "poetry.lock": Ecosystem.PYTHON,
+    "uv.lock": Ecosystem.PYTHON,
+    "Cargo.lock": Ecosystem.RUST,
+}
+
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]
+
+
+def _parse_lock(filename: str, content: str) -> dict[str, str | list[str]]:
+    try:
+        if filename == "package-lock.json":
+            return dict(parse_package_lock_json(content))
+        if filename == "Cargo.lock":
+            return dict(parse_cargo_lock(content))
+        return dict(parse_python_lock(content))
+    except Exception:
+        return {}
+
+
+def _lock_key(dep: Dependency) -> str:
+    if dep.ecosystem == Ecosystem.PYTHON:
+        return normalize_python_name(dep.name.split("[")[0])
+    return dep.name
+
+
+def _apply_locks(
+    deps: list[Dependency], locks: dict[tuple[Ecosystem, str], dict[str, str | list[str]]]
+) -> None:
+    """Set ``installed_version`` from the nearest lockfile of the same ecosystem (same or parent dir)."""
+    for dep in deps:
+        directory = os.path.dirname(dep.manifest_path)
+        while True:
+            lock = locks.get((dep.ecosystem, directory))
+            if lock is not None:
+                found = lock.get(_lock_key(dep))
+                if isinstance(found, list):
+                    found = pick_cargo_locked(dep.current_version, found)
+                dep.installed_version = found
+                break
+            if not directory:
+                break
+            directory = os.path.dirname(directory)
 
 
 def _extract_go_module_name(content: str) -> str | None:
@@ -61,7 +110,7 @@ def create_scan_dependencies_tool(
 ) -> Any:
     """Create a scan_dependencies tool bound to a sandbox backend."""
 
-    manifest_names = list(_MANIFEST_PARSERS.keys())
+    manifest_names = list(_MANIFEST_PARSERS.keys()) + list(_LOCKFILES.keys())
     name_clauses = " -o ".join(f"-name '{n}'" for n in manifest_names)
     exclude_clauses = " ".join(f"-not -path '*/{d}/*'" for d in _NOISE_DIRS)
 
@@ -91,9 +140,16 @@ def create_scan_dependencies_tool(
 
         all_deps: list[Dependency] = []
         go_module_names: set[str] = set()
+        locks: dict[tuple[Ecosystem, str], dict[str, str | list[str]]] = {}
 
         for filepath in lines:
             filename = os.path.basename(filepath)
+            if filename in _LOCKFILES:
+                lock_result = backend.execute(f"cat {q(filepath)}")
+                if lock_result.exit_code == 0:
+                    lock_dir = os.path.dirname(os.path.relpath(filepath, workspace_path).replace("\\", "/"))
+                    locks[(_LOCKFILES[filename], lock_dir)] = _parse_lock(filename, lock_result.output)
+                continue
             parser_entry = _MANIFEST_PARSERS.get(filename)
             if parser_entry is None:
                 continue
@@ -112,6 +168,8 @@ def create_scan_dependencies_tool(
             rel_path = os.path.relpath(filepath, workspace_path).replace("\\", "/")
             deps = parser_fn(cat_result.output, rel_path)
             all_deps.extend(deps)
+
+        _apply_locks(all_deps, locks)
 
         if go_module_names:
             all_deps = [

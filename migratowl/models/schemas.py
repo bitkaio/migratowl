@@ -77,9 +77,10 @@ class Dependency(BaseModel):
     """Single dependency from manifest scanning."""
 
     name: str
-    current_version: str
+    current_version: str  # as declared in the manifest (may be a range)
     ecosystem: Ecosystem
     manifest_path: str
+    installed_version: str | None = None  # from a lockfile, when one exists
 
 
 class OutdatedDependency(BaseModel):
@@ -90,6 +91,7 @@ class OutdatedDependency(BaseModel):
     latest_version: str
     ecosystem: Ecosystem
     manifest_path: str
+    installed_version: str | None = None
     homepage_url: str | None = None
     repository_url: str | None = None
     changelog_url: str | None = None
