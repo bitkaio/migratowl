@@ -2,6 +2,8 @@
 
 """Tests for clone_repo and copy_source tools."""
 
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock
 
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
@@ -369,11 +371,7 @@ class TestPrivateRepoClone:
         assert "-- https://gitlab.com/g/p.git " in cmd
 
     def test_failure_message_hides_the_credentials(self) -> None:
-        backend = MagicMock()
-        backend.execute.side_effect = [
-            ExecResult(output="", exit_code=0),
-            ExecResult(output=f"fatal: could not read {self.SECRET}", exit_code=128),
-        ]
+        backend = _fake_git(lambda cmd: ExecResult(output=f"fatal: could not read {self.SECRET}", exit_code=128))
         tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
 
         result = tool.invoke({"repo_url": f"https://bob:{self.SECRET}@github.com/o/r", "branch": "dev"})
@@ -431,3 +429,56 @@ class TestCloneTokensFromSettings:
         settings = Settings(github_token="ghp_x", gitlab_token="",
                             github_api_url="https://github.corp.com/api/v3")
         assert clone_tokens(settings) == {"github.corp.com": ("x-access-token", "ghp_x")}
+
+
+def _fake_git(clone: Callable[[str], ExecResult]) -> MagicMock:
+    """Backend answering by command: empty ``ls`` before a clone, ``clone`` for git, success otherwise."""
+    state = {"cloned": False}
+
+    def execute(cmd: str) -> ExecResult:
+        if "git" in cmd and "clone" in cmd:
+            result = clone(cmd)
+            state["cloned"] = result.exit_code == 0
+            return result
+        if cmd.startswith("ls"):
+            return ExecResult(output="README.md\n" if state["cloned"] else "", exit_code=0)
+        return ExecResult(output="", exit_code=0)
+
+    backend = MagicMock()
+    backend.execute.side_effect = execute
+    return backend
+
+
+class TestRejectedCredentials:
+    """A token the host rejects (e.g. a CI job token) must not break cloning a public repo."""
+
+    SECRET = "glcbt-" + "c" * 30
+
+    def _tool(self, backend: MagicMock) -> Any:
+        return create_clone_repo_tool(
+            lambda: backend, workspace_path=DEFAULT_WORKSPACE, tokens={"gitlab.com": ("oauth2", self.SECRET)}
+        )
+
+    def test_public_repo_is_cloned_anonymously_after_auth_failure(self) -> None:
+        backend = _fake_git(lambda cmd: (
+            ExecResult(output="fatal: Authentication failed", exit_code=128)
+            if "extraHeader" in cmd else ExecResult(output="", exit_code=0)
+        ))
+
+        result = self._tool(backend).invoke({"repo_url": "https://gitlab.com/g/public"})
+
+        assert result.startswith("Successfully cloned")
+        clones = [c[0][0] for c in backend.execute.call_args_list if "clone" in c[0][0]]
+        assert "extraHeader" not in clones[-1] and self.SECRET not in clones[-1]
+
+    def test_private_repo_with_bad_token_reports_the_first_failure(self) -> None:
+        backend = _fake_git(lambda cmd: ExecResult(
+            output="fatal: Authentication failed" if "extraHeader" in cmd else "fatal: could not read Username",
+            exit_code=128,
+        ))
+
+        result = self._tool(backend).invoke({"repo_url": "https://gitlab.com/g/private", "branch": "dev"})
+
+        assert result.startswith("Failed")
+        assert "Authentication failed" in result
+        assert self.SECRET not in result

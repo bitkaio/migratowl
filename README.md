@@ -583,7 +583,7 @@ Run a single server process per database: on startup it marks every `pending` or
 | `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses. Also used to clone private repositories on the host of `GITLAB_API_URL` |
 | `GITLAB_API_URL` | `https://gitlab.com/api/v4` | Override for self-hosted GitLab |
 
-Private repositories: with the token for the repository's host set, `repo_url` needs no credentials. The token goes to `git clone` as a request header for that host only. It is not written to the clone's `.git/config`, which code in the sandbox could read, and it is not echoed in errors. Credentials embedded in `repo_url` (`https://user:token@host/…`) are handled the same way.
+Private repositories: with the token for the repository's host set, `repo_url` needs no credentials. The token goes to `git clone` as a request header for that host only. It is not written to the clone's `.git/config`, which code in the sandbox could read, and it is not echoed in errors. Credentials embedded in `repo_url` (`https://user:token@host/…`) are handled the same way. If the host rejects the token, the clone is retried without it, so a public repository still works.
 
 ### Observability
 

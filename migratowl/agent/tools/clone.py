@@ -105,26 +105,36 @@ def create_clone_repo_tool(
                 text = text.replace(secret, "***")
             return text
 
-        # Clone into source/
-        cmd = f"git{auth} clone --branch {q(branch)} --depth 1 -- {q(repo_url)} {q(source_path)}"
-        result = backend.execute(cmd)
+        def attempt(auth_args: str) -> tuple[Any, str, str]:
+            """Clone with ``auth_args``; returns (result, branch used, failure message when it failed)."""
+            cmd = f"git{auth_args} clone --branch {q(branch)} --depth 1 -- {q(repo_url)} {q(source_path)}"
+            result = backend.execute(cmd)
+            if result.exit_code == 0:
+                return result, branch, ""
+            if branch != "main":
+                return result, branch, (
+                    f"Failed to clone {repo_url} (exit code {result.exit_code}): {scrub(result.output)}"
+                )
+            # Fallback: retry with the repo's default branch
+            backend.execute(f"rm -rf {q(source_path)}")
+            result_default = backend.execute(f"git{auth_args} clone --depth 1 -- {q(repo_url)} {q(source_path)}")
+            if result_default.exit_code == 0:
+                return result_default, "(default)", ""
+            return result_default, branch, (
+                f"Failed to clone {repo_url}: branch 'main' failed (exit {result.exit_code}), "
+                f"default branch also failed (exit {result_default.exit_code}): {scrub(result_default.output)}"
+            )
 
-        if result.exit_code != 0:
-            if branch == "main":
-                # Fallback: retry with repo's default branch
-                backend.execute(f"rm -rf {q(source_path)}")
-                cmd_default = f"git{auth} clone --depth 1 -- {q(repo_url)} {q(source_path)}"
-                result_default = backend.execute(cmd_default)
-                if result_default.exit_code == 0:
-                    result = result_default
-                    branch = "(default)"
-                else:
-                    return (
-                        f"Failed to clone {repo_url}: branch 'main' failed (exit {result.exit_code}), "
-                        f"default branch also failed (exit {result_default.exit_code}): {scrub(result_default.output)}"
-                    )
-            else:
-                return f"Failed to clone {repo_url} (exit code {result.exit_code}): {scrub(result.output)}"
+        result, branch, failure = attempt(auth)
+        if failure and auth:
+            # A token the host rejects (a CI job token, an expired PAT) must not break a public repo:
+            # retry without it. A private repo fails again, and the first error is the one reported.
+            backend.execute(f"rm -rf {q(source_path)}")
+            result_anonymous, branch_anonymous, failure_anonymous = attempt("")
+            if not failure_anonymous:
+                result, branch, failure = result_anonymous, branch_anonymous, ""
+        if failure:
+            return failure
 
         verify = backend.execute(f"ls {q(source_path)}")
         if not verify.output.strip():
