@@ -1248,3 +1248,45 @@ class TestRepositoryUrlDiscovery:
         async with httpx.AsyncClient(transport=transport) as client:
             result = await query_npm(client, _dep("pkg", "1.0.0", Ecosystem.NODEJS, "package.json"))
         assert result.repository_url == "https://github.com/o/pkg"
+
+
+class TestGoMajorVersionModules:
+    """Go majors >= 2 live at <module>/vN; the base path's version list never shows them."""
+
+    @staticmethod
+    async def _go(name: str, current: str, lists: dict[str, str], mode=None):
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({f"/{path}/@v/list": httpx.Response(200, text=body) for path, body in lists.items()})
+        options = CheckOptions(mode=mode) if mode else CheckOptions()
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_golang(client, _dep(name, current, Ecosystem.GO, "go.mod"), options)
+
+    LISTS = {
+        "github.com/x/y": "v1.0.0\nv1.5.0\n",
+        "github.com/x/y/v2": "v2.0.0\nv2.3.0\n",
+        "github.com/x/y/v3": "v3.0.0-rc.1\n",  # prerelease only: not a stable major
+    }
+
+    async def test_reports_newest_major_module(self) -> None:
+        result = await self._go("github.com/x/y", "1.0.0", self.LISTS)
+        assert (result.latest_version, result.module_path) == ("v2.3.0", "github.com/x/y/v2")
+
+    async def test_module_already_on_v2_probes_v3(self) -> None:
+        lists = {**self.LISTS, "github.com/x/y/v3": "v3.0.0\nv3.1.0\n"}
+        result = await self._go("github.com/x/y/v2", "2.0.0", lists)
+        assert (result.latest_version, result.module_path) == ("v3.1.0", "github.com/x/y/v3")
+
+    async def test_no_newer_major_keeps_module_path_empty(self) -> None:
+        result = await self._go("github.com/x/y", "1.0.0", {"github.com/x/y": "v1.0.0\nv1.5.0\n"})
+        assert (result.latest_version, result.module_path) == ("v1.5.0", None)
+
+    async def test_safe_mode_stays_on_the_declared_major(self) -> None:
+        from migratowl.models.schemas import OutdatedCheckMode
+
+        result = await self._go("github.com/x/y", "1.0.0", self.LISTS, mode=OutdatedCheckMode.SAFE)
+        assert (result.latest_version, result.module_path) == ("v1.5.0", None)
+
+    async def test_gopkg_in_is_not_probed(self) -> None:
+        result = await self._go("gopkg.in/yaml.v2", "2.4.0", {"gopkg.in/yaml.v2": "v2.4.0\nv2.4.1\n"})
+        assert (result.latest_version, result.module_path) == ("v2.4.1", None)

@@ -577,3 +577,44 @@ class TestPythonVenvIsolation:
         pin = f"echo requests==2.31.0 > {DEFAULT_WORKSPACE}/.venvs/main/pins/requests"
         assert pin in cmd
         assert cmd.index("pip install requests==2.31.0 &&") < cmd.index(pin)
+
+
+class TestGoMajorModuleUpdate:
+    def _cmds(self, pkg: dict) -> list[str]:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE).invoke(
+            {"folder_name": "main", "ecosystem": "go", "packages_json": json.dumps([pkg])}
+        )
+        return [c[0][0] for c in backend.execute.call_args_list]
+
+    def test_new_major_gets_new_path_and_imports_rewritten(self) -> None:
+        cmds = self._cmds({"name": "github.com/x/y", "latest_version": "v2.3.0",
+                           "module_path": "github.com/x/y/v2", "manifest_path": "go.mod"})
+        assert "go get github.com/x/y/v2@v2.3.0" in cmds[0]
+        rewrite = cmds[1]
+        assert rewrite.startswith("python3 -c ")
+        assert rewrite.endswith(f"{DEFAULT_WORKSPACE}/main github.com/x/y github.com/x/y/v2")
+        assert "go mod tidy" in cmds[2]
+
+    def test_same_major_update_is_unchanged(self) -> None:
+        cmds = self._cmds({"name": "github.com/x/y", "latest_version": "v1.5.0", "manifest_path": "go.mod"})
+        assert "go get github.com/x/y@v1.5.0" in cmds[0]
+        assert not any(c.startswith("python3 -c ") for c in cmds)
+
+
+def test_go_import_rewrite_script(tmp_path) -> None:
+    """The rewrite script itself, run on real files (no sandbox needed)."""
+    import subprocess
+
+    from migratowl.agent.tools.update import _go_import_rewrite_cmd
+
+    src = tmp_path / "main.go"
+    src.write_text('import (\n\t"github.com/x/y"\n\t"github.com/x/y/sub"\n\t"github.com/x/yz"\n)\n')
+    (tmp_path / "vendor").mkdir()
+    vendored = tmp_path / "vendor" / "v.go"
+    vendored.write_text('import "github.com/x/y"\n')
+    cmd = _go_import_rewrite_cmd(str(tmp_path), "github.com/x/y", "github.com/x/y/v2")
+    subprocess.run(cmd, shell=True, check=True)
+    assert src.read_text() == 'import (\n\t"github.com/x/y/v2"\n\t"github.com/x/y/v2/sub"\n\t"github.com/x/yz"\n)\n'
+    assert vendored.read_text() == 'import "github.com/x/y"\n'  # vendor/ untouched

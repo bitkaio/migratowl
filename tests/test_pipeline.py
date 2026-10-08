@@ -434,3 +434,29 @@ class TestExcerptOrdering:
                                  ecosystem=Ecosystem.NODEJS, manifest_path="package.json")
         excerpts = await fetch_major_changelogs(tools, [dep], {})
         assert excerpts["express"].startswith("v5.0.0\nBREAKING: app.del() removed")
+
+
+async def test_update_receives_go_module_path() -> None:
+    import json as _json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from migratowl.models.schemas import ScanWebhookPayload
+    from migratowl.pipeline import prepare_scan
+
+    deps = [{"name": "github.com/x/y", "current_version": "1.0.0", "ecosystem": "go", "manifest_path": "go.mod"}]
+    outdated = {"outdated": [{"name": "github.com/x/y", "current_version": "1.0.0", "latest_version": "v2.3.0",
+                              "ecosystem": "go", "manifest_path": "go.mod", "module_path": "github.com/x/y/v2"}],
+                "failures": [], "warning": None}
+    update = AsyncMock(return_value="Updated 1 package(s) in main/\n  github.com/x/y: OK")
+    tools = SimpleNamespace(
+        clone_repo=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully cloned")),
+        scan_dependencies=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(deps))),
+        check_outdated_deps=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(outdated))),
+        copy_source=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully copied")),
+        update_dependencies=SimpleNamespace(ainvoke=update),
+        validate_project=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps({"steps": [], "passed": True}))),
+    )
+    await prepare_scan(tools, ScanWebhookPayload(repo_url="https://github.com/o/r"), {})
+    sent = _json.loads(update.await_args.args[0]["packages_json"])
+    assert sent[0]["module_path"] == "github.com/x/y/v2"

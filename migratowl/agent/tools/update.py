@@ -73,6 +73,7 @@ def create_update_dependencies_tool(
                 current_version=current_version,
                 manifest_abs_path=manifest_abs,
                 venv=venv_path(workspace_path, folder_name),
+                module_path=pkg.get("module_path"),
             )
             pkg_succeeded = True
             for cmd in cmds:
@@ -248,6 +249,27 @@ def _build_python_manifest_patch_cmd(
     return _manifest_patch_cmd(manifest_abs_path, old_string, new_string)
 
 
+_GO_IMPORT_REWRITE = (
+    "import os, re, sys\n"
+    "root, old, new = sys.argv[1:]\n"
+    "pat = re.compile('\"' + re.escape(old) + '(?=[\"/])')\n"
+    "for d, dirs, files in os.walk(root):\n"
+    "    dirs[:] = [x for x in dirs if x not in ('vendor', '.git')]\n"
+    "    for f in files:\n"
+    "        if f.endswith('.go'):\n"
+    "            p = os.path.join(d, f)\n"
+    "            s = open(p, encoding='utf-8', errors='surrogateescape').read()\n"
+    "            t = pat.sub('\"' + new, s)\n"
+    "            if t != s:\n"
+    "                open(p, 'w', encoding='utf-8', errors='surrogateescape').write(t)\n"
+)
+
+
+def _go_import_rewrite_cmd(root: str, old: str, new: str) -> str:
+    """Rewrite Go imports of ``old`` (and its subpackages) to ``new`` under ``root``, skipping vendor/."""
+    return f"python3 -c {shlex.quote(_GO_IMPORT_REWRITE)} {q(root)} {q(old)} {q(new)}"
+
+
 def _build_update_cmd(
     ecosystem: str,
     name: str,
@@ -257,6 +279,7 @@ def _build_update_cmd(
     current_version: str | None = None,
     manifest_abs_path: str | None = None,
     venv: str | None = None,
+    module_path: str | None = None,
 ) -> list[str]:
     """Build the shell command(s) to update a single package.
 
@@ -284,7 +307,13 @@ def _build_update_cmd(
     elif ecosystem == "go":
         run_dir = os.path.dirname(manifest_abs_path) if manifest_abs_path else folder_path
         clean_version = version.lstrip("v")
-        return [_sh(f"cd {q(run_dir)} && go get {q(f'{name}@v{clean_version}')}")]
+        # A new major lives at a new module path (github.com/x/y → github.com/x/y/v2):
+        # require it and point the code's imports at it, or `go mod tidy` drops it again.
+        target = module_path or name
+        cmds = [_sh(f"cd {q(run_dir)} && go get {q(f'{target}@v{clean_version}')}")]
+        if module_path and module_path != name:
+            cmds.append(_go_import_rewrite_cmd(folder_path, name, module_path))
+        return cmds
     elif ecosystem == "rust":
         if current_version and _is_major_bump(current_version, version) and manifest_abs_path:
             return [

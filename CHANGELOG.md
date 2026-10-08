@@ -102,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Go major versions were never reported** — a Go module's next major release lives at a new module path
+  (`github.com/x/y` → `github.com/x/y/v2`), so the registry only ever saw versions of the current major. It now
+  probes `/v{N+1}` onwards (up to five majors, skipping `gopkg.in/`) and reports the newest stable major as
+  the latest version. Updating to it runs `go get` on the new path and rewrites the code's imports (including
+  subpackages, skipping `vendor/`) before `go mod tidy`, so the requirement is not dropped again.
+
 - **Changelogs were not found or not understood for many packages** — the registry now also treats a "Code"
   link or a GitHub/GitLab homepage as the repository (Sphinx, psutil); a "changelog" link that is just the
   repository page (aiofiles' `github.com/Tinche/aiofiles#history`) is used as a repository hint instead of

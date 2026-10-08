@@ -433,16 +433,57 @@ async def query_crates(
     )
 
 
+_GO_MAJOR_SUFFIX = re.compile(r"^(?P<base>.+?)/v(?P<major>\d+)$")
+_GO_MAX_MAJOR_PROBES = 5
+
+
+async def _go_version_list(client: httpx.AsyncClient, module: str) -> list[str]:
+    resp = await client.get(f"https://proxy.golang.org/{_go_proxy_encode(module)}/@v/list")
+    resp.raise_for_status()
+    return [v for v in resp.text.splitlines() if v.strip()]
+
+
+async def _newest_go_major(
+    client: httpx.AsyncClient, module: str, include_prerelease: bool
+) -> tuple[str, list[str]] | None:
+    """``(module_path, versions)`` of the highest released major above ``module``, if any.
+
+    Probes ``<base>/v{N+1}``, ``/v{N+2}``, ... until a path has no release.
+    ``gopkg.in`` modules encode the major as ``.vN`` and are left alone.
+    """
+    if module.startswith("gopkg.in/"):
+        return None
+    m = _GO_MAJOR_SUFFIX.match(module)
+    base, major = (m["base"], int(m["major"])) if m else (module, 1)
+    found: tuple[str, list[str]] | None = None
+    for candidate in range(major + 1, major + 1 + _GO_MAX_MAJOR_PROBES):
+        path = f"{base}/v{candidate}"
+        try:
+            versions = await _go_version_list(client, path)
+        except httpx.HTTPStatusError:
+            break  # 404/410: no such major
+        if _max_version(versions, include_prerelease, semver=True) is None:
+            break  # only prereleases (or nothing) at this major
+        found = (path, versions)
+    return found
+
+
 async def query_golang(
     client: httpx.AsyncClient,
     dep: Dependency,
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
-    """Query Go module proxy for latest version."""
-    encoded = _go_proxy_encode(dep.name)
-    resp = await client.get(f"https://proxy.golang.org/{encoded}/@v/list")
-    resp.raise_for_status()
-    all_versions = [v for v in resp.text.splitlines() if v.strip()]
+    """Query Go module proxy for latest version.
+
+    Majors >= 2 live at a different module path (``<module>/v2``); in NORMAL mode
+    the next major paths are probed too, and ``module_path`` names the new path.
+    """
+    all_versions = await _go_version_list(client, dep.name)
+    module_path: str | None = None
+    if options.mode == OutdatedCheckMode.NORMAL:
+        newer = await _newest_go_major(client, dep.name, options.include_prerelease)
+        if newer is not None:
+            module_path, all_versions = newer
 
     target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
@@ -464,6 +505,7 @@ async def query_golang(
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         installed_version=dep.installed_version,
+        module_path=module_path,
         repository_url=_go_module_to_repo_url(dep.name),
     )
 
