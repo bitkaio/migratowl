@@ -460,3 +460,4 @@ async def test_update_receives_go_module_path() -> None:
     await prepare_scan(tools, ScanWebhookPayload(repo_url="https://github.com/o/r"), {})
     sent = _json.loads(update.await_args.args[0]["packages_json"])
     assert sent[0]["module_path"] == "github.com/x/y/v2"
+    assert "version_key" in sent[0]

@@ -30,6 +30,7 @@ from migratowl.parsers import (
     parse_cargo_lock,
     parse_cargo_toml,
     parse_go_mod,
+    parse_gradle_version_catalog,
     parse_package_json,
     parse_package_lock_json,
     parse_pom_xml,
@@ -49,6 +50,7 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
     "pom.xml": (parse_pom_xml, Ecosystem.JAVA),
     "build.gradle": (parse_build_gradle, Ecosystem.JAVA),
     "build.gradle.kts": (parse_build_gradle, Ecosystem.JAVA),
+    "libs.versions.toml": (parse_gradle_version_catalog, Ecosystem.JAVA),
 }
 
 # Lockfiles give the installed version behind a declared range.
@@ -125,7 +127,7 @@ def create_scan_dependencies_tool(
         """Scan manifest files in the workspace and extract all declared dependencies.
 
         Reads requirements.txt, pyproject.toml, package.json, go.mod, Cargo.toml,
-        pom.xml, and build.gradle files, parses them, and returns a JSON array of
+        pom.xml, build.gradle and libs.versions.toml files, parses them, and returns a JSON array of
         dependency objects with name, current_version, ecosystem, and manifest_path.
         """
         backend = get_backend()

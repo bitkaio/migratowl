@@ -7,6 +7,7 @@ from migratowl.parsers import (
     parse_build_gradle,
     parse_cargo_toml,
     parse_go_mod,
+    parse_gradle_version_catalog,
     parse_package_json,
     parse_pom_xml,
     parse_pyproject_toml,
@@ -715,3 +716,85 @@ version = "2.0.48"
         assert parse_package_lock_json('{"packages": 5}') == {}
         assert parse_python_lock("package = 3") == {}
         assert parse_cargo_lock('[[package]]\nname = 1\nversion = "x"') == {}
+
+
+class TestPomPropertyVersions:
+    POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <properties>
+    <spring.version>6.1.0</spring.version>
+    <jackson.base>2.15.0</jackson.base>
+    <jackson.version>${jackson.base}</jackson.version>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.springframework</groupId><artifactId>spring-core</artifactId>
+      <version>${spring.version}</version></dependency>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version></dependency>
+    <dependency><groupId>a</groupId><artifactId>self</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>a</groupId><artifactId>plain</artifactId><version>1.0</version></dependency>
+  </dependencies>
+</project>"""
+
+    def test_property_version_is_resolved_and_key_recorded(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        spring = deps["org.springframework:spring-core"]
+        assert spring.current_version == "6.1.0"
+        assert spring.version_key == "spring.version"
+
+    def test_chained_property_records_the_literal_one(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        jackson = deps["com.fasterxml.jackson.core:jackson-databind"]
+        assert jackson.current_version == "2.15.0"
+        assert jackson.version_key == "jackson.base"
+
+    def test_unknown_property_is_skipped_and_literal_has_no_key(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        assert "a:self" not in deps
+        assert deps["a:plain"].version_key is None
+
+
+class TestParseGradleVersionCatalog:
+    CATALOG = """
+[versions]
+spring = "6.1.0"
+rich = { strictly = "1.0" }
+
+[libraries]
+spring-core = { module = "org.springframework:spring-core", version.ref = "spring" }
+guava = "com.google.guava:guava:32.0.0-jre"
+junit = { group = "junit", name = "junit", version = "4.13" }
+okio = { module = "com.squareup.okio:okio", version = "3.5.0" }
+no-version = { module = "a:bom-managed" }
+also-no-version = "a:b"
+pinned = { module = "a:rich", version.ref = "rich" }
+ranged = { module = "a:ranged", version = { require = "1.0" } }
+
+[plugins]
+kotlin = { id = "org.jetbrains.kotlin.jvm", version = "1.9.0" }
+"""
+
+    def _deps(self) -> dict:
+        deps = parse_gradle_version_catalog(self.CATALOG, "gradle/libs.versions.toml")
+        assert all(d.ecosystem == Ecosystem.JAVA for d in deps)
+        assert all(d.manifest_path == "gradle/libs.versions.toml" for d in deps)
+        return {d.name: d for d in deps}
+
+    def test_version_ref(self) -> None:
+        dep = self._deps()["org.springframework:spring-core"]
+        assert (dep.current_version, dep.version_key) == ("6.1.0", "spring")
+
+    def test_inline_forms(self) -> None:
+        deps = self._deps()
+        assert deps["com.google.guava:guava"].current_version == "32.0.0-jre"
+        assert deps["junit:junit"].current_version == "4.13"
+        assert deps["com.squareup.okio:okio"].current_version == "3.5.0"
+        assert all(deps[n].version_key is None for n in ("com.google.guava:guava", "junit:junit"))
+
+    def test_unversioned_rich_and_plugins_are_skipped(self) -> None:
+        assert set(self._deps()) == {
+            "org.springframework:spring-core", "com.google.guava:guava", "junit:junit", "com.squareup.okio:okio",
+        }
+
+    def test_empty_and_invalid(self) -> None:
+        assert parse_gradle_version_catalog("", "libs.versions.toml") == []
+        assert parse_gradle_version_catalog("[libraries\n", "libs.versions.toml") == []

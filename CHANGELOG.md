@@ -102,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Java versions set through a pom property or a Gradle version catalog were ignored** — `<version>${spring.version}</version>`
+  is now resolved from the pom's `<properties>` (following chained properties), and `gradle/libs.versions.toml` is scanned
+  (`"group:artifact:version"`, inline `version` and `version.ref`; rich versions, BOM-managed entries and plugins are
+  skipped). Updates patch the place that defines the version — the property or the `[versions]` key, shared by every
+  library that uses it — instead of the dependency line, so validation tests the new version.
+
 - **Go major versions were never reported** — a Go module's next major release lives at a new module path
   (`github.com/x/y` → `github.com/x/y/v2`), so the registry only ever saw versions of the current major. It now
   probes `/v{N+1}` onwards (up to five majors, skipping `gopkg.in/`) and reports the newest stable major as

@@ -274,14 +274,22 @@ def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:
     if root.tag.startswith("{"):
         ns = root.tag.split("}")[0] + "}"
 
+    properties: dict[str, str] = {}
+    props = root.find(f"{ns}properties")
+    if props is not None:
+        for prop in props:
+            if isinstance(prop.tag, str):
+                properties[prop.tag.removeprefix(ns)] = (prop.text or "").strip()
+
     deps: list[Dependency] = []
     for dep in root.iter(f"{ns}dependency"):
         group_id = (dep.findtext(f"{ns}groupId") or "").strip()
         artifact_id = (dep.findtext(f"{ns}artifactId") or "").strip()
         version = (dep.findtext(f"{ns}version") or "").strip()
-        if not group_id or not artifact_id:
+        if not group_id or not artifact_id or not version:
             continue
-        if not version or version.startswith("${"):
+        version, key = _resolve_pom_property(version, properties)
+        if not version:
             continue
         deps.append(
             Dependency(
@@ -289,9 +297,31 @@ def parse_pom_xml(content: str, manifest_path: str) -> list[Dependency]:
                 current_version=version,
                 ecosystem=Ecosystem.JAVA,
                 manifest_path=manifest_path,
+                version_key=key,
             )
         )
     return deps
+
+
+_POM_PROPERTY = re.compile(r"^\$\{([^}]+)\}$")
+
+
+def _resolve_pom_property(version: str, properties: dict[str, str]) -> tuple[str | None, str | None]:
+    """Follow ``${name}`` through the pom's own <properties>: (literal version, property holding it).
+
+    Returns ``(None, None)`` when the chain ends outside this pom (``${project.version}``, a parent's
+    property) or loops, and ``(version, None)`` for a literal version.
+    """
+    key = None
+    for _ in range(5):
+        m = _POM_PROPERTY.match(version)
+        if not m:
+            return (None, None) if "${" in version else (version, key)
+        key = m.group(1)
+        if key not in properties:
+            return None, None
+        version = properties[key]
+    return None, None
 
 
 def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
@@ -312,6 +342,52 @@ def parse_build_gradle(content: str, manifest_path: str) -> list[Dependency]:
             )
         )
     return deps
+
+def parse_gradle_version_catalog(content: str, manifest_path: str) -> list[Dependency]:
+    """Parse a Gradle version catalog (``gradle/libs.versions.toml``).
+
+    Covers ``"group:artifact:version"`` strings, inline ``version = "x"`` and ``version.ref``
+    into ``[versions]`` (recorded as ``version_key``). Rich versions (``strictly``, ``require``),
+    unversioned (BOM-managed) entries and ``[plugins]`` are skipped.
+    """
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError:
+        return []
+    versions = data.get("versions", {})
+
+    deps: list[Dependency] = []
+    for spec in data.get("libraries", {}).values():
+        key = None
+        if isinstance(spec, str):
+            parts = spec.split(":")
+            if len(parts) != 3:
+                continue
+            name, version = f"{parts[0]}:{parts[1]}", parts[2]
+        elif isinstance(spec, dict):
+            module = spec.get("module")
+            if not module and spec.get("group") and spec.get("name"):
+                module = f"{spec['group']}:{spec['name']}"
+            raw = spec.get("version")
+            if isinstance(raw, dict) and isinstance(raw.get("ref"), str):
+                key = raw["ref"]
+                raw = versions.get(key)
+            if not isinstance(module, str) or not isinstance(raw, str):
+                continue
+            name, version = module, raw
+        else:
+            continue
+        deps.append(
+            Dependency(
+                name=name,
+                current_version=version,
+                ecosystem=Ecosystem.JAVA,
+                manifest_path=manifest_path,
+                version_key=key,
+            )
+        )
+    return deps
+
 
 # ---------------------------------------------------------------------------
 # Lockfiles: name → installed version

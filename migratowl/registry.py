@@ -546,6 +546,7 @@ async def query_maven_central(
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
         installed_version=dep.installed_version,
+        version_key=dep.version_key,
     )
 
 

@@ -618,3 +618,103 @@ def test_go_import_rewrite_script(tmp_path) -> None:
     subprocess.run(cmd, shell=True, check=True)
     assert src.read_text() == 'import (\n\t"github.com/x/y/v2"\n\t"github.com/x/y/v2/sub"\n\t"github.com/x/yz"\n)\n'
     assert vendored.read_text() == 'import "github.com/x/y"\n'  # vendor/ untouched
+
+
+class TestJavaIndirectVersions:
+    """Versions defined outside the dependency line: pom properties and Gradle version catalogs."""
+
+    def _run(self, tmp_path, filename: str, content: str, name: str, version_key: str | None,
+             old: str, new: str) -> str:
+        import subprocess
+
+        from migratowl.agent.tools.update import _build_update_cmd
+
+        path = tmp_path / filename
+        path.write_text(content)
+        cmds = _build_update_cmd("java", name, new, str(tmp_path), current_version=old,
+                                 manifest_abs_path=str(path), version_key=version_key)
+        assert len(cmds) == 1
+        assert "mvn " not in cmds[0]
+        subprocess.run(cmds[0], shell=True, check=True)
+        return path.read_text()
+
+    def test_pom_property_is_patched(self, tmp_path) -> None:
+        pom = ("<project><properties><spring.version>6.1.0</spring.version></properties>"
+               "<dependencies><dependency><version>${spring.version}</version></dependency></dependencies></project>")
+        out = self._run(tmp_path, "pom.xml", pom, "org.springframework:spring-core", "spring.version",
+                        "6.1.0", "6.2.0")
+        assert "<spring.version>6.2.0</spring.version>" in out
+        assert "${spring.version}" in out
+
+    def test_pom_literal_version_still_uses_maven(self) -> None:
+        from migratowl.agent.tools.update import _build_update_cmd
+
+        cmds = _build_update_cmd("java", "a:b", "2.0", "/w/main", current_version="1.0",
+                                 manifest_abs_path="/w/main/pom.xml")
+        assert "mvn versions:use-dep-version" in cmds[0]
+
+    CATALOG = """[versions]
+spring = "6.1.0"
+other = "6.1.0"
+
+[libraries]
+spring-core = { module = "org.springframework:spring-core", version.ref = "spring" }
+guava = "com.google.guava:guava:32.0.0-jre"
+junit = { group = "junit", name = "junit", version = "4.13" }
+okio = { module = "com.squareup.okio:okio", version = "3.5.0" }
+okio-x = { module = "com.squareup.okio:okio-x", version = "3.5.0" }
+"""
+
+    def test_catalog_version_ref(self, tmp_path) -> None:
+        out = self._run(tmp_path, "libs.versions.toml", self.CATALOG, "org.springframework:spring-core",
+                        "spring", "6.1.0", "6.2.0")
+        assert 'spring = "6.2.0"' in out
+        assert 'other = "6.1.0"' in out
+
+    def test_catalog_string_notation(self, tmp_path) -> None:
+        out = self._run(tmp_path, "libs.versions.toml", self.CATALOG, "com.google.guava:guava", None,
+                        "32.0.0-jre", "33.0.0-jre")
+        assert '"com.google.guava:guava:33.0.0-jre"' in out
+
+    def test_catalog_inline_module(self, tmp_path) -> None:
+        out = self._run(tmp_path, "libs.versions.toml", self.CATALOG, "com.squareup.okio:okio", None,
+                        "3.5.0", "3.9.0")
+        assert 'okio = { module = "com.squareup.okio:okio", version = "3.9.0" }' in out
+        assert 'okio-x = { module = "com.squareup.okio:okio-x", version = "3.5.0" }' in out
+
+    def test_catalog_inline_group_name(self, tmp_path) -> None:
+        out = self._run(tmp_path, "libs.versions.toml", self.CATALOG, "junit:junit", None, "4.13", "4.13.2")
+        assert 'junit = { group = "junit", name = "junit", version = "4.13.2" }' in out
+
+    def test_catalog_string_notation_needs_exact_module(self, tmp_path) -> None:
+        catalog = '[libraries]\nx = "org.a:b:1.0"\ny = "a:b:1.0"\n'
+        out = self._run(tmp_path, "libs.versions.toml", catalog, "a:b", None, "1.0", "2.0")
+        assert out == '[libraries]\nx = "org.a:b:1.0"\ny = "a:b:2.0"\n'
+
+    def test_catalog_shared_key_already_bumped_is_ok(self, tmp_path) -> None:
+        catalog = '[versions]\nspring = "6.2.0"\n'
+        out = self._run(tmp_path, "libs.versions.toml", catalog, "org.springframework:spring-web", "spring",
+                        "6.1.0", "6.2.0")
+        assert out == catalog
+
+    def test_catalog_missing_entry_fails(self, tmp_path) -> None:
+        import subprocess
+
+        from migratowl.agent.tools.update import _build_update_cmd
+
+        path = tmp_path / "libs.versions.toml"
+        path.write_text('[libraries]\nx = "a:b:1.0"\n')
+        cmd = _build_update_cmd("java", "c:d", "2.0", str(tmp_path), current_version="1.0",
+                                manifest_abs_path=str(path))[0]
+        assert subprocess.run(cmd, shell=True, capture_output=True).returncode != 0
+
+    def test_tool_passes_version_key(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE).invoke(
+            {"folder_name": "main", "ecosystem": "java", "packages_json": json.dumps([{
+                "name": "org.springframework:spring-core", "current_version": "6.1.0", "latest_version": "6.2.0",
+                "manifest_path": "pom.xml", "version_key": "spring.version"}])}
+        )
+        cmd = backend.execute.call_args_list[0][0][0]
+        assert "<spring.version>6.1.0</spring.version>" in cmd

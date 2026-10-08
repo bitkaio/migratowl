@@ -210,7 +210,8 @@ async def prepare_scan(
     for ecosystem, packages in by_ecosystem.items():
         packages_json = json.dumps([
             {"name": p.name, "current_version": p.current_version, "latest_version": p.latest_version,
-             "manifest_path": p.manifest_path, "module_path": p.module_path}
+             "manifest_path": p.manifest_path, "module_path": p.module_path,
+             "version_key": p.version_key}
             for p in packages
         ])
         summary = await tools.update_dependencies.ainvoke(

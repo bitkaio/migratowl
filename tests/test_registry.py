@@ -903,6 +903,21 @@ class TestQueryMavenCentralModes:
         assert result is not None
         assert result.latest_version == "3.3.1"
 
+    async def test_version_key_is_passed_through(self) -> None:
+        from migratowl.registry import query_maven_central
+
+        transport = _mock_transport({
+            "/solrsearch/select": httpx.Response(200, json=self._maven_gav_response(["6.1.0", "6.2.0"])),
+        })
+        opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=False)
+        async with httpx.AsyncClient(transport=transport, base_url="https://search.maven.org") as client:
+            dep = _dep("org.springframework:spring-core", "6.1.0", Ecosystem.JAVA, "pom.xml")
+            dep.version_key = "spring.version"
+            result = await query_maven_central(client, dep, opts)
+
+        assert result is not None
+        assert result.version_key == "spring.version"
+
 
 # ===========================================================================
 # check_outdated with CheckOptions

@@ -81,6 +81,9 @@ class Dependency(BaseModel):
     ecosystem: Ecosystem
     manifest_path: str
     installed_version: str | None = None  # from a lockfile, when one exists
+    # Where the version is defined when not on the dependency line:
+    # a pom.xml <properties> name or a Gradle catalog [versions] key.
+    version_key: str | None = None
 
 
 class OutdatedDependency(BaseModel):
@@ -95,6 +98,7 @@ class OutdatedDependency(BaseModel):
     # Go only: the new module path when the latest version is a new major
     # (github.com/x/y → github.com/x/y/v2); None when the path does not change.
     module_path: str | None = None
+    version_key: str | None = None  # see Dependency.version_key
     homepage_url: str | None = None
     repository_url: str | None = None
     changelog_url: str | None = None

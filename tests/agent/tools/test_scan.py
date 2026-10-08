@@ -278,3 +278,19 @@ class TestScanInstalledVersions:
             "uv.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n',
         })
         assert deps["requests"]["installed_version"] is None
+
+
+def test_gradle_version_catalog_is_scanned() -> None:
+    find_output = f"{DEFAULT_WORKSPACE}/gradle/libs.versions.toml\n"
+    backend = _make_backend_multi([
+        ExecResult(output=find_output, exit_code=0),
+        ExecResult(output='[libraries]\nguava = "com.google.guava:guava:32.0.0-jre"\n', exit_code=0),
+    ])
+    tool = create_scan_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+    result = json.loads(tool.invoke({}))
+
+    assert "-name 'libs.versions.toml'" in backend.execute.call_args_list[0][0][0]
+    assert result[0]["name"] == "com.google.guava:guava"
+    assert result[0]["ecosystem"] == Ecosystem.JAVA
+    assert result[0]["manifest_path"] == "gradle/libs.versions.toml"
