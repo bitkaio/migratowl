@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`langchain-kubernetes` now comes from the maintained fork** — the dependency is installed from
+  `github.com/barnakun/langchain-kubernetes` at tag `py-0.4.1` (MIT, forked from `bitkaio/langchain-kubernetes`
+  0.4.0) instead of PyPI. 0.4.1 deletes a raw-mode sandbox's NetworkPolicy together with its Pod (previously one
+  policy leaked per scan) and reopens the sandbox-router tunnel when reconnecting, so
+  `POST /jobs/{id}/resume` reuses the surviving sandbox instead of starting over. Installing now needs `git`.
+
 - **Default model is now `claude-sonnet-5-5`** (was `claude-sonnet-5`; same price, $2/$10 per 1M tokens).
   With the Anthropic provider the agent now requests native structured output (`output_config.format`)
   instead of letting LangChain fall back to a forced tool call: Claude Sonnet 5.5, Opus 5.5 and Fable 5.1

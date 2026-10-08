@@ -6,7 +6,9 @@ requires-python = ">=3.13"
 dependencies = [
     "deepagents>=0.6,<0.7",  # 0.7 removes the callable backend API (agent/factory.py, agent/subagents.py)
     "fastapi>=0.115.0",
-    "langchain-kubernetes[agent-sandbox]>=0.4.0",
+    # Maintained fork (MIT, originally bitkaio/langchain-kubernetes): carries the raw-mode
+    # NetworkPolicy cleanup and the agent-sandbox reconnect fix that PyPI's 0.4.0 lacks.
+    "langchain-kubernetes[agent-sandbox] @ git+https://github.com/barnakun/langchain-kubernetes@py-0.4.1#subdirectory=python",
     "langchain-anthropic",
     "langchain-openai",
     "pydantic>=2.0",

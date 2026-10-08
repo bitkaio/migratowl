@@ -916,14 +916,10 @@ wheels = [
 
 [[package]]
 name = "langchain-kubernetes"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.4.1"
+source = { git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.1#e71bfb86a3477abb76f02fc6f6459baa07b9922b" }
 dependencies = [
     { name = "deepagents" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/8a/36bac269e886d257c937f220679205f57c56173d2ba93b4ed18ca7cd5428/langchain_kubernetes-0.4.0.tar.gz", hash = "sha256:5ce1ace10c5ff2019e673541631c10db42f076d203fa097a5350275fad0b88c3", size = 46456, upload-time = "2026-04-01T19:21:36.728Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/da/e19309b97d450d2ab62bc1cd717e551740e8cb1a302204a9e46dae701550/langchain_kubernetes-0.4.0-py3-none-any.whl", hash = "sha256:e407522fe5038aea8b41e5b8f17f8e4bb284fa185cabfa0c8324e1ac12d0207c", size = 48538, upload-time = "2026-04-01T19:21:35.808Z" },
 ]
 
 [package.optional-dependencies]
@@ -1279,7 +1275,7 @@ requires-dist = [
     { name = "html2text", specifier = ">=2024.2.26" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic" },
-    { name = "langchain-kubernetes", extras = ["agent-sandbox"], specifier = ">=0.4.0" },
+    { name = "langchain-kubernetes", extras = ["agent-sandbox"], git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.1" },
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
