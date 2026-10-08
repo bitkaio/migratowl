@@ -11,12 +11,28 @@ spec:
   # to opt out.
   podTemplate:
     spec:
+      # The sandbox runs untrusted repository code: no API credentials,
+      # no root, no privilege escalation, no Linux capabilities.
+      automountServiceAccountToken: false
+      # For kernel-level isolation, install gVisor (or Kata) on the nodes and
+      # uncomment (the RuntimeClass name depends on your installation):
+      # runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000   # matches USER 1000 in k8s/runtime/Dockerfile
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sandbox
           image: sandbox-runtime:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 8888
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 500m

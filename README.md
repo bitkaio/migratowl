@@ -536,7 +536,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 
 ## Kubernetes Setup
 
-Migratowl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kubernetes) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and gVisor/Kata isolation.
+Migratowl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kubernetes) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
 
 ```bash
 # Install controller + CRDs (one-time)
@@ -575,12 +575,15 @@ kubectl apply -f k8s/sandbox-egress-raw.yaml
 
 With `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true`, every sandbox pod gets a deny-all `NetworkPolicy`. On a CNI that enforces it, that also blocks DNS, `git clone` and package installs, so the scan can't fetch anything. `k8s/sandbox-egress-raw.yaml` re-opens DNS and HTTP/HTTPS to public addresses only. Apply it in every namespace that runs sandboxes.
 
-**Security defaults applied to every pod:**
+**Sandbox pod security:**
 
-- `runAsNonRoot: true`, `runAsUser: 1000`
-- `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
-- `automountServiceAccountToken: false`
-- Ingress denied; egress limited to DNS and ports 80/443 on public addresses (no pod/service CIDRs, node networks or cloud metadata) when `k8s/sandbox-egress-raw.yaml` is applied
+| | agent-sandbox mode (`k8s/sandbox-template.yaml`) | raw mode (set by langchain-kubernetes) |
+|---|---|---|
+| User | `runAsNonRoot`, UID/GID 1000 | `runAsNonRoot`, UID 1000 |
+| Privileges | `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, seccomp `RuntimeDefault` | same |
+| Service account token | not mounted | not mounted |
+| Network | agent-sandbox's managed policy: cluster IPs, VPC subnets and node metadata blocked; external egress open | deny-all per pod; with `k8s/sandbox-egress-raw.yaml`, DNS plus ports 80/443 to public addresses only |
+| Kernel isolation | opt-in: install gVisor or Kata and set `runtimeClassName` in the template | not available |
 
 ---
 
@@ -664,7 +667,7 @@ flowchart TB
     end
 
     subgraph Sandbox["Kubernetes Sandbox<br/>(langchain-kubernetes)"]
-        Pod["Ephemeral Pod<br/>• Non-root, no caps<br/>• No ingress; egress to public HTTP(S) only<br/>• gVisor / Kata isolation"]
+        Pod["Ephemeral Pod<br/>• Non-root, no caps, no SA token<br/>• Internal network blocked<br/>• Optional gVisor / Kata"]
     end
 
     Client["HTTP Client"] --> W

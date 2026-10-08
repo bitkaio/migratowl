@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **agent-sandbox pods were not hardened** — `k8s/sandbox-template.yaml` set no security context, so
+  sandbox pods ran untrusted repository code with the image defaults and a mounted service account token,
+  while the README claimed otherwise. The template now sets `automountServiceAccountToken: false`,
+  `runAsNonRoot` with UID/GID 1000, seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false` and drops
+  all capabilities (matching raw mode). gVisor/Kata is documented as an opt-in `runtimeClassName`. The
+  README now describes the security settings of each mode accurately. Re-apply the template.
+
 - **Optional API authentication and callback SSRF protection** — new `MIGRATOWL_API_TOKEN`: when set,
   `POST /webhook` and all `/jobs` endpoints require `Authorization: Bearer <token>` (`/healthz` stays
   open); when unset, the server logs a startup warning. `callback_url` must be an http(s) URL and may not

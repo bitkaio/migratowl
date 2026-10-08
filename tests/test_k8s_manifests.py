@@ -2,6 +2,7 @@
 
 """Tests for the Kubernetes manifests shipped in k8s/."""
 
+import re
 from ipaddress import ip_network
 from pathlib import Path
 
@@ -86,3 +87,37 @@ class TestSandboxEgressPolicy:
         for rule in policy["spec"]["egress"]:
             if any("ipBlock" in peer for peer in rule.get("to", [])):
                 assert {p["port"] for p in rule["ports"]} == {80, 443}
+
+
+SANDBOX_TEMPLATE = K8S_DIR / "sandbox-template.yaml"
+
+
+class TestSandboxTemplateHardening:
+    """agent-sandbox pods run untrusted repo code; lock the pod down like raw mode does."""
+
+    @pytest.fixture
+    def pod_spec(self) -> dict:
+        return yaml.safe_load(SANDBOX_TEMPLATE.read_text())["spec"]["podTemplate"]["spec"]
+
+    def test_no_service_account_token_in_the_pod(self, pod_spec: dict) -> None:
+        assert pod_spec["automountServiceAccountToken"] is False
+
+    def test_pod_runs_as_non_root_with_seccomp(self, pod_spec: dict) -> None:
+        ctx = pod_spec["securityContext"]
+        assert ctx["runAsNonRoot"] is True
+        assert ctx["runAsUser"] == 1000
+        assert ctx["runAsGroup"] == 1000
+        assert ctx["seccompProfile"] == {"type": "RuntimeDefault"}
+
+    def test_container_cannot_escalate_and_has_no_capabilities(self, pod_spec: dict) -> None:
+        (container,) = pod_spec["containers"]
+        ctx = container["securityContext"]
+        assert ctx["allowPrivilegeEscalation"] is False
+        assert ctx["capabilities"] == {"drop": ["ALL"]}
+        assert ctx.get("privileged", False) is False
+
+    def test_runtime_image_user_matches_run_as_user(self, pod_spec: dict) -> None:
+        # runAsNonRoot needs a numeric USER in the image; it must match runAsUser.
+        dockerfile = (K8S_DIR / "runtime" / "Dockerfile").read_text()
+        users = re.findall(r"^USER (\S+)$", dockerfile, re.M)
+        assert users[-1] == str(pod_spec["securityContext"]["runAsUser"])
