@@ -129,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MIGRATOWL_SANDBOX_CONNECTION_MODE=direct` could not work** — the sandbox-router URL it needs was never passed
+  to the library, so the mode failed at the first scan. New `MIGRATOWL_SANDBOX_API_URL` carries it (for a server
+  running inside the cluster, where there is no `kubectl` to tunnel with), and `direct` without it is now rejected
+  at startup with a clear message.
+
 - **Java versions set through a pom property or a Gradle version catalog were ignored** — `<version>${spring.version}</version>`
   is now resolved from the pom's `<properties>` (following chained properties), and `gradle/libs.versions.toml` is scanned
   (`"group:artifact:version"`, inline `version` and `version.ref`; rich versions, BOM-managed entries and plugins are

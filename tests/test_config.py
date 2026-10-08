@@ -129,8 +129,10 @@ class TestSettingsFromEnv:
 
     def test_env_override_sandbox_connection_mode(self, monkeypatch: object) -> None:
         monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_API_URL", "http://sandbox-router-svc:8080")
         settings = Settings()
         assert settings.sandbox_connection_mode == "direct"
+        assert settings.sandbox_api_url == "http://sandbox-router-svc:8080"
 
     def test_env_override_sandbox_mode_raw(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MIGRATOWL_SANDBOX_MODE", "raw")

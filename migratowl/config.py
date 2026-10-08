@@ -16,7 +16,7 @@
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     sandbox_template: str = "migratowl-sandbox-template"
     sandbox_namespace: str = "default"
     sandbox_connection_mode: str = "tunnel"
+    # Sandbox-router URL for connection_mode "direct" (in-cluster: the router Service, since there is
+    # no kubectl to tunnel with), e.g. http://sandbox-router-svc.default.svc.cluster.local:8080.
+    sandbox_api_url: str | None = None
     # Raw mode only. Needs git plus each ecosystem toolchain (see k8s/runtime/).
     sandbox_image: str = "ghcr.io/bitkaio/migratowl-runtime:latest"
     sandbox_block_network: bool = True
@@ -149,6 +152,13 @@ class Settings(BaseSettings):
     http_timeout: float = 30.0
     http_retry_count: int = 3
     http_retry_backoff_base: float = 0.5
+
+    @model_validator(mode="after")
+    def _direct_mode_needs_router_url(self) -> "Settings":
+        direct = self.sandbox_mode == "agent-sandbox" and self.sandbox_connection_mode == "direct"
+        if direct and not self.sandbox_api_url:
+            raise ValueError("MIGRATOWL_SANDBOX_CONNECTION_MODE=direct requires MIGRATOWL_SANDBOX_API_URL")
+        return self
 
 
 def get_settings() -> Settings:

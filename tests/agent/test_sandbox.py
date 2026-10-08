@@ -48,6 +48,7 @@ class TestCreateSandboxManagerAgentSandboxMode:
             connection_mode=settings.sandbox_connection_mode,
             kube_api_url=settings.sandbox_kube_api_url,
             kube_token=settings.sandbox_kube_token,
+            api_url=settings.sandbox_api_url,
         )
 
 
@@ -102,3 +103,24 @@ class TestKubeApiWiring:
         kwargs = mock_config_cls.call_args.kwargs
         assert kwargs["kube_api_url"] == "http://localhost:8001"
         assert kwargs["kube_token"] == "tok"
+
+
+class TestDirectConnection:
+    """Inside the cluster there is no kubectl to tunnel with: the sandbox-router is reached by URL."""
+
+    def test_router_url_reaches_the_provider_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_API_URL", "http://sandbox-router-svc.default.svc.cluster.local:8080")
+        settings = Settings(_env_file=None)
+        with patch("migratowl.agent.sandbox.KubernetesProviderConfig") as mock_config_cls, \
+             patch("migratowl.agent.sandbox.KubernetesSandboxManager"):
+            create_sandbox_manager(settings)
+
+        kwargs = mock_config_cls.call_args.kwargs
+        assert kwargs["connection_mode"] == "direct"
+        assert kwargs["api_url"] == "http://sandbox-router-svc.default.svc.cluster.local:8080"
+
+    def test_direct_mode_without_a_url_is_rejected_at_startup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
+        with pytest.raises(ValueError, match="MIGRATOWL_SANDBOX_API_URL"):
+            Settings(_env_file=None)
