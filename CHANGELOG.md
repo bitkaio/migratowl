@@ -41,8 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dependencies refreshed within their current majors** — FastAPI 0.141, pydantic 2.14, pydantic-settings 2.15,
   langchain-core 1.6, langchain 1.4, langgraph 1.2.13, langfuse 4.15, plus pytest, ruff and langgraph-cli in the dev
   group. The dev group now requires `langgraph-api>=0.11.1`; without it the resolver picked an older `langgraph dev`
-  server in exchange for a newer OpenTelemetry. The LLM SDK majors (`anthropic` 1.x, `openai` 3.x) are not part of
-  this update.
+  server in exchange for a newer OpenTelemetry.
+
+- **LLM SDK majors** — `anthropic` 1.12 (built on `httpx2`), `openai` 3.26, `langchain-anthropic` 1.7 and `langchain-openai`
+  1.7. A new test runs the real Anthropic SDK against a local stub server and checks that the agent still asks for
+  native structured output (`output_config.format`, no forced `tool_choice`), parses the reply and counts cache
+  tokens; an OpenAI-compatible endpoint was exercised live.
 
 - **README brought up to date** — documents `GET /jobs?state=`, `POST /jobs/{id}/resume` and the `interrupted`
   state, the crash-recovery and concurrency settings (`MIGRATOWL_PERSISTENCE_BACKEND`, `*_DB_PATH`,
