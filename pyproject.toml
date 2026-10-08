@@ -73,6 +73,8 @@ dev = [
     "mypy>=1.10",
     "bandit[toml]>=1.7",
     "langgraph-cli[inmem]",
+    # Floor keeps uv from trading the dev server down for a newer OpenTelemetry.
+    "langgraph-api>=0.11.1",
     # Coverage-guided fuzzing of the untrusted-input manifest/changelog parsers.
     # Linux-only wheels; guarded so non-Linux dev installs still resolve.
     "atheris>=2.3.0 ; sys_platform == 'linux'",
