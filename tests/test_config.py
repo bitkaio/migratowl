@@ -375,3 +375,12 @@ class TestCrashRecoverySettings:
         monkeypatch.setenv("MIGRATOWL_MAX_SCAN_RETRIES", "5")
         settings = Settings(_env_file=None)
         assert settings.max_scan_retries == 5
+
+def test_default_sandbox_python_version_matches_runtime_image() -> None:
+    import re
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parent.parent / "k8s" / "runtime" / "Dockerfile").read_text()
+    image_python = re.search(r"^FROM python:(\d+\.\d+)", dockerfile, re.M)
+    assert image_python, "runtime image must be based on an official python image"
+    assert Settings(_env_file=None).sandbox_python_version == image_python.group(1)

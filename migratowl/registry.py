@@ -51,6 +51,9 @@ class CheckOptions:
 
     mode: OutdatedCheckMode = field(default=OutdatedCheckMode.NORMAL)
     include_prerelease: bool = False
+    # Python version the sandbox installs with; PyPI releases whose
+    # requires_python excludes it are skipped. None = no filtering.
+    python_version: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +233,22 @@ def _is_outdated(current: str, latest: str, *, semver: bool = False) -> bool:
     return lat[0] > cur[0]  # type: ignore[operator]
 
 
+def _supports_python(files: list[dict[str, Any]], python_version: str | None) -> bool:
+    """False only when every file's ``requires_python`` excludes ``python_version``."""
+    if python_version is None or not files:
+        return True
+    for f in files:
+        requires = f.get("requires_python")
+        if not requires:
+            return True
+        try:
+            if Version(python_version) in SpecifierSet(requires):
+                return True
+        except (InvalidSpecifier, InvalidVersion):
+            return True
+    return False
+
+
 def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) -> str | None:
     """Extract first matching URL from a project_urls dict (case-insensitive key lookup)."""
     if not project_urls:
@@ -310,10 +329,12 @@ async def query_pypi(
     info = data["info"]
 
     # PEP 592: a release whose files are all yanked was withdrawn — never suggest it.
+    # A release the sandbox's Python cannot install would only fail the install step.
     all_versions = [
         version
         for version, files in data.get("releases", {}).items()
-        if not files or not all(f.get("yanked", False) for f in files)
+        if (not files or not all(f.get("yanked", False) for f in files))
+        and _supports_python(files, options.python_version)
     ]
     target = _resolve_latest(dep.current_version, all_versions, options)
 

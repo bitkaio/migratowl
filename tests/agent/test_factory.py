@@ -574,3 +574,13 @@ class TestUsageCallback:
 
         assert mock_init.call_args[1]["callbacks"] == [langfuse, usage_cb]
         assert mock_sub.call_args[1]["model"] is mock_init.return_value
+
+
+class TestBuildToolsPythonVersion:
+    def test_outdated_check_uses_the_sandbox_python_version(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        with patch("migratowl.agent.factory.create_check_outdated_tool") as mock_check:
+            build_tools(_make_mock_manager(), settings=Settings(_env_file=None, sandbox_python_version="3.12"))
+
+        assert mock_check.call_args.kwargs["options"].python_version == "3.12"

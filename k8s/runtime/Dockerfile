@@ -1,11 +1,12 @@
-FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
+# Official Python image on Debian bookworm: Python 3.13 (+ pip, venv) in /usr/local.
+# Keep in sync with MIGRATOWL_SANDBOX_PYTHON_VERSION (migratowl/config.py).
+FROM python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ── System deps (heaviest / most-cached layer) ──────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl ca-certificates build-essential unzip \
-        python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js 22 LTS via NodeSource ───────────────────────────────────────

@@ -85,6 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Releases the sandbox's Python cannot install were reported as breaking** — the runtime image ran Debian's
+  Python 3.11, and the PyPI check ignored `requires_python`, so e.g. Sphinx 9.1 (Python ≥3.12) failed to
+  install and was flagged as a breaking upgrade. The runtime image is now based on the official
+  `python:3.13-slim-bookworm` image, and the PyPI check skips releases whose `requires_python` excludes the
+  sandbox's Python (new setting `MIGRATOWL_SANDBOX_PYTHON_VERSION`, default `3.13`). Rebuild the runtime image.
+
 - **A missing pytest made a dependency bump look breaking** — when a project declares pytest only in a dev
   group or tool config, the install step left it out of the venv and validation failed with
   `No module named pytest`. Validation now installs pytest when it is missing; if that fails, the test step is

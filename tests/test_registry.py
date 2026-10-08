@@ -1144,3 +1144,41 @@ class TestCheckOutdatedUsesSharedClient:
         assert failures == []
         assert [o.latest_version for o in outdated] == ["2.0.0"]
         assert calls["n"] == 2
+
+
+class TestPypiRequiresPython:
+    """Releases the sandbox's Python cannot install are not upgrade targets."""
+
+    @staticmethod
+    async def _latest(releases: dict, python_version: str | None) -> str | None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/sphinx/json": httpx.Response(200, json={"info": {}, "releases": releases}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(
+                client, _dep("sphinx", "==7.4.7", Ecosystem.PYTHON), CheckOptions(python_version=python_version)
+            )
+        return result.latest_version if result else None
+
+    RELEASES = {
+        "7.4.7": [{"requires_python": ">=3.9"}],
+        "9.0.0": [{"requires_python": ">=3.11"}],
+        "9.1.0": [{"requires_python": ">=3.14"}],
+        "9.2.0": [{"requires_python": "not a specifier"}],
+    }
+
+    async def test_skips_releases_requiring_a_newer_python(self) -> None:
+        releases = {k: v for k, v in self.RELEASES.items() if k != "9.2.0"}
+        assert await self._latest(releases, "3.13") == "9.0.0"
+
+    async def test_without_python_version_every_release_counts(self) -> None:
+        releases = {k: v for k, v in self.RELEASES.items() if k != "9.2.0"}
+        assert await self._latest(releases, None) == "9.1.0"
+
+    async def test_unparseable_requires_python_is_not_excluded(self) -> None:
+        assert await self._latest(self.RELEASES, "3.13") == "9.2.0"
+
+    async def test_missing_requires_python_is_not_excluded(self) -> None:
+        assert await self._latest({"7.4.7": [{}], "8.0.0": [{"requires_python": None}]}, "3.13") == "8.0.0"

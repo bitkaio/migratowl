@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # Raw mode only. Needs git plus each ecosystem toolchain (see k8s/runtime/).
     sandbox_image: str = "ghcr.io/bitkaio/migratowl-runtime:latest"
     sandbox_block_network: bool = True
+    # Python version in the sandbox image (k8s/runtime/Dockerfile). PyPI releases
+    # whose requires_python excludes it are not suggested as upgrades.
+    sandbox_python_version: str = "3.13"
     # Kubernetes API for SandboxClaim list/delete (agent-sandbox mode). Unset means
     # the in-cluster URL; off-cluster point it at `kubectl proxy` (http://localhost:8001)
     # or pass a bearer token, otherwise TTL sweep and shutdown cleanup can't run.

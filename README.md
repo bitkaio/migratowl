@@ -484,6 +484,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SANDBOX_KUBE_API_URL` | in-cluster URL | Kubernetes API used to list and delete SandboxClaims (agent-sandbox mode only). Off-cluster, run `kubectl proxy` and set `http://localhost:8001`; otherwise TTL sweep and shutdown cleanup can't run |
 | `MIGRATOWL_SANDBOX_KUBE_TOKEN` | — | Bearer token for `MIGRATOWL_SANDBOX_KUBE_API_URL` (not needed with `kubectl proxy` or in-cluster) |
 | `MIGRATOWL_SANDBOX_IMAGE` | `ghcr.io/bitkaio/migratowl-runtime:latest` | Container image for sandbox pods (raw mode only). The default bundles git and every supported toolchain (built from `k8s/runtime/`). A custom image must include `git`, `python3` and the toolchains for the ecosystems you scan — slim language images such as `python:3.13-slim` have no `git`, so the clone fails. |
+| `MIGRATOWL_SANDBOX_PYTHON_VERSION` | `3.13` | Python version in the sandbox image. PyPI releases whose `requires_python` excludes it are not suggested as upgrades (they could not be installed). Change it if you use a custom image with another Python |
 | `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it). Apply `k8s/sandbox-egress-raw.yaml` so scans can still reach DNS, git hosts and registries |
 | `MIGRATOWL_WORKSPACE_PATH` | `/home/user/workspace` | Workspace root inside the sandbox |
 

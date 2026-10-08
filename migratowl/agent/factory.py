@@ -154,7 +154,11 @@ def build_tools(
         scan_dependencies=create_scan_dependencies_tool(get_sandbox, workspace_path=source_path),
         check_outdated_deps=create_check_outdated_tool(
             concurrency=settings.scan_registry_concurrency,
-            options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
+            options=CheckOptions(
+                mode=mode,
+                include_prerelease=include_prerelease,
+                python_version=settings.sandbox_python_version,
+            ),
         ),
         update_dependencies=create_update_dependencies_tool(get_sandbox, workspace_path=workspace_path),
         validate_project=create_validate_project_tool(
