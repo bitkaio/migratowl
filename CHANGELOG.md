@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Release jobs used the shared uv cache** — every workflow passed `enable-caching` to `astral-sh/setup-uv`, which
+  has no such input (it is `enable-cache`), so the setting was ignored and the default (`auto`, on) applied. The
+  release workflow, which meant to disable the cache against cache poisoning, ran with it. The input is now spelled
+  correctly, and all workflows pin the same `setup-uv` v7 commit; `migratowl-scan.yml` pinned the v7 tag object
+  instead of its commit, which GitHub cannot resolve.
+
 - **PR comments rendered LLM text unescaped** — fix suggestions (partly derived from untrusted changelogs) and
   package names went into the PR/MR comment as raw Markdown, so a `|` broke the table and the text could
   ping people with `@mentions`, embed tracking images or inject HTML. Table cells are now escaped and kept
