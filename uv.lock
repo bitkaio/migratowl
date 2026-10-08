@@ -1273,7 +1273,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "deepagents", specifier = ">=0.6" },
+    { name = "deepagents", specifier = ">=0.6,<0.7" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "html2text", specifier = ">=2024.2.26" },

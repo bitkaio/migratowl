@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`deepagents` had no upper bound** — `deepagents>=0.6` allowed 0.7, which removes the callable-backend
+  API the agent factory and the package-analyzer subagent use, so a fresh `pip install` could pull a version
+  Migratowl cannot run on. The range is now `>=0.6,<0.7` until the migration to the new backend API.
+
 - **Resume leaked the old sandbox when it restarted a job** — when the surviving sandbox failed the
   liveness probe, `POST /jobs/{id}/resume` provisioned a new one and left the old SandboxClaim running
   until the idle-TTL sweep. The abandoned sandbox is now deleted (best effort).
