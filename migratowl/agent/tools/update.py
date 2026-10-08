@@ -76,19 +76,16 @@ def create_update_dependencies_tool(
                 module_path=pkg.get("module_path"),
                 version_key=pkg.get("version_key"),
             )
-            pkg_succeeded = True
+            # One summary entry per package: the first failing step, else the last step.
+            entry: dict[str, Any] = {"package": name, "version": version, "exit_code": 0, "output": ""}
             for cmd in cmds:
                 result = backend.execute(cmd)
-                results.append({
-                    "package": name,
-                    "version": version,
-                    "exit_code": result.exit_code,
-                    "output": result.output.strip(),
-                })
+                entry.update(exit_code=result.exit_code, output=result.output.strip())
                 if result.exit_code != 0:
                     has_failure = True
-                    pkg_succeeded = False
                     break  # skip manifest patch if pip/cargo step failed
+            results.append(entry)
+            pkg_succeeded = entry["exit_code"] == 0
 
             if ecosystem == "go" and pkg_succeeded:
                 go_tidy_dirs.add(

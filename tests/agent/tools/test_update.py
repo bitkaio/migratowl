@@ -597,6 +597,16 @@ class TestGoMajorModuleUpdate:
         assert rewrite.endswith(f"{DEFAULT_WORKSPACE}/main github.com/x/y github.com/x/y/v2")
         assert "go mod tidy" in cmds[2]
 
+    def test_summary_has_one_line_per_package(self) -> None:
+        backend = MagicMock()
+        backend.execute.return_value = ExecResult(output="", exit_code=0)
+        out = create_update_dependencies_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE).invoke(
+            {"folder_name": "main", "ecosystem": "go", "packages_json": json.dumps([{
+                "name": "github.com/x/y", "latest_version": "v2.3.0",
+                "module_path": "github.com/x/y/v2", "manifest_path": "go.mod"}])}
+        )
+        assert out.count("github.com/x/y: OK") == 1
+
     def test_same_major_update_is_unchanged(self) -> None:
         cmds = self._cmds({"name": "github.com/x/y", "latest_version": "v1.5.0", "manifest_path": "go.mod"})
         assert "go get github.com/x/y@v1.5.0" in cmds[0]
