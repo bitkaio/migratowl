@@ -30,3 +30,9 @@ def test_langchain_kubernetes_comes_from_the_maintained_fork() -> None:
     req = _requirement("langchain-kubernetes")
     assert req.url == "git+https://github.com/barnakun/langchain-kubernetes@py-0.4.1#subdirectory=python"
     assert "agent-sandbox" in req.extras
+
+
+def test_uvicorn_is_a_runtime_dependency() -> None:
+    # The server is started with `uvicorn migratowl.api.main:app`; it used to arrive only through the
+    # dev group (langgraph-cli), so a production install (`uv sync --no-dev`) could not start.
+    assert _requirement("uvicorn").name == "uvicorn"
