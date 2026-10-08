@@ -14,7 +14,34 @@
 
 """Format ScanAnalysisReport as a GitHub/GitLab PR comment."""
 
+import re
+
 from migratowl.models.schemas import ScanAnalysisReport
+
+# LLM-written text (partly derived from untrusted changelogs) and manifest names are
+# rendered as Markdown on GitHub/GitLab; keep them from breaking or abusing the comment.
+_MAX_FIELD_CHARS = 1000
+_MENTION = re.compile(r"(?<![\w.])@(?=[A-Za-z0-9])")  # @user / @org/team, not emails
+_UNSAFE_NAME_CHARS = re.compile(r"[^\w@/.:+\-\[\]]")
+
+
+def _safe_text(text: str, limit: int = _MAX_FIELD_CHARS) -> str:
+    """Escape HTML, neutralise @mentions and image embeds, and cap the length."""
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    text = text.replace("![", "!\\[")
+    return _MENTION.sub("@\u200b", text)
+
+
+def _cell(text: str) -> str:
+    """``_safe_text`` for a table cell: one line, no column breaks."""
+    return _safe_text(text).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
+def _code(name: str) -> str:
+    """A package name as inline code; characters no real package name uses are replaced."""
+    return f"`{_UNSAFE_NAME_CHARS.sub('_', name)[:200]}`"
 
 # USD per 1M tokens: (input, output, cache read or None). Anthropic prices from
 # the published model table as of 2026-09-25. None = cache reads at 0.1x input.
@@ -115,24 +142,24 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         )
         for r in sorted_reports:
             status = "⚠️ Breaking" if r.is_breaking else "✅ Safe"
-            fix_inline = _short_fix(r.suggested_human_fix) if r.is_breaking and r.suggested_human_fix else "—"
-            lines.append(f"| `{r.dependency_name}` | {status} | {fix_inline} |")
+            fix_inline = _cell(_short_fix(r.suggested_human_fix)) if r.is_breaking and r.suggested_human_fix else "—"
+            lines.append(f"| {_code(r.dependency_name)} | {status} | {fix_inline} |")
 
         breaking_with_fix = [r for r in sorted_reports if r.is_breaking and r.suggested_human_fix]
         if breaking_with_fix:
             fix_body = "\n\n".join(
-                f"**`{r.dependency_name}`** — {r.suggested_human_fix}"
+                f"**{_code(r.dependency_name)}** — {_safe_text(r.suggested_human_fix)}"
                 for r in breaking_with_fix
             )
             lines += _details_block(f"Fix details ({len(breaking_with_fix)} package(s))", fix_body)
 
     if report.skipped:
-        skipped_str = ", ".join(f"`{s}`" for s in report.skipped)
+        skipped_str = ", ".join(_code(s) for s in report.skipped)
         lines += _details_block(f"{len(report.skipped)} package(s) skipped", skipped_str)
 
     if report.scan_result.registry_failures:
         failed_str = ", ".join(
-            f"`{f.name}` ({f.ecosystem})"
+            f"{_code(f.name)} ({f.ecosystem})"
             for f in report.scan_result.registry_failures
         )
         lines += _details_block(

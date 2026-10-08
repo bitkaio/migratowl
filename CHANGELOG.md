@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **PR comments rendered LLM text unescaped** — fix suggestions (partly derived from untrusted changelogs) and
+  package names went into the PR/MR comment as raw Markdown, so a `|` broke the table and the text could
+  ping people with `@mentions`, embed tracking images or inject HTML. Table cells are now escaped and kept
+  on one line, HTML is escaped, mentions and image embeds are neutralised, package names are restricted to
+  normal name characters, and each field is capped at 1000 characters.
+
 - **agent-sandbox pods were not hardened** — `k8s/sandbox-template.yaml` set no security context, so
   sandbox pods ran untrusted repository code with the image defaults and a mounted service account token,
   while the README claimed otherwise. The template now sets `automountServiceAccountToken: false`,

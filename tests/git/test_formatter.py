@@ -325,3 +325,50 @@ class TestCurrentModelPricing:
             total_cache_read_tokens=1_000_000, model_name="claude-sonnet-5-5",
         )
         assert "~$0.20" in format_pr_comment(report)
+
+
+class TestCommentEscaping:
+    """LLM text (partly from untrusted changelogs) must not break or abuse the PR comment."""
+
+    def _comment(self, **report_fields) -> str:
+        from migratowl.git.formatter import format_pr_comment
+        from migratowl.models.schemas import AnalysisReport, ScanAnalysisReport, ScanResult
+
+        fields = {"dependency_name": "pkg", "is_breaking": True, "error_summary": "e",
+                  "changelog_citation": "", "suggested_human_fix": "fix", "confidence": 0.9}
+        fields.update(report_fields)
+        return format_pr_comment(ScanAnalysisReport(
+            repo_url="r", branch_name="main",
+            scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0),
+            reports=[AnalysisReport(**fields)], total_duration_seconds=1.0,
+        ))
+
+    def _table_row(self, comment: str) -> str:
+        return next(line for line in comment.splitlines() if line.startswith("| `"))
+
+    def test_pipes_and_newlines_cannot_break_the_table(self) -> None:
+        row = self._table_row(self._comment(suggested_human_fix="Use a | b.\nThen | c"))
+        assert row.count(" | ") == 2  # still exactly three cells
+        assert "\\|" in row
+
+    def test_mentions_do_not_ping_anyone(self) -> None:
+        comment = self._comment(suggested_human_fix="Ask @octocat or @org/team. Mail a@b.com.")
+        assert "@octocat" not in comment and "@org/team" not in comment
+        assert "a@b.com" in comment  # email addresses stay readable
+
+    def test_raw_html_is_escaped(self) -> None:
+        comment = self._comment(suggested_human_fix='</details><img src="https://evil.example/x.png">')
+        assert "<img" not in comment
+        assert comment.count("</details>") == comment.count("<details>")
+
+    def test_markdown_images_are_neutralised(self) -> None:
+        comment = self._comment(suggested_human_fix="See ![pixel](https://evil.example/t.gif)")
+        assert "![pixel](" not in comment
+
+    def test_long_text_is_capped(self) -> None:
+        comment = self._comment(suggested_human_fix="x" * 20_000)
+        assert len(comment) < 5_000
+
+    def test_backticks_in_names_cannot_escape_code_span(self) -> None:
+        row = self._table_row(self._comment(dependency_name="evil`<b>x</b>`"))
+        assert "<b>" not in row
