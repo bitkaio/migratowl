@@ -125,7 +125,12 @@ def assemble_report(
         current = by_name.get(name)
         # Several verdicts for one name (same package in several manifests): breaking wins.
         if current is None or (report.is_breaking and not current.is_breaking):
-            by_name[name] = report.model_copy(update={"dependency_name": name})
+            update: dict[str, str] = {"dependency_name": name}
+            # Back an empty citation with the changelog excerpt fetched in code.
+            excerpt = prepared.changelog_excerpts.get(name)
+            if excerpt and not report.changelog_citation.strip():
+                update["changelog_citation"] = excerpt
+            by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
     missing = [name for name in names if name not in by_name]
     if missing:

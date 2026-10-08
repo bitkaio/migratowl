@@ -62,3 +62,16 @@ async def test_invalid_arguments_returned_to_agent_not_raised() -> None:
     out = await tool.ainvoke({"repo_url": "https://x/y", "max_deps": 0})
 
     assert out.startswith("prepare_scan failed:")
+
+
+async def test_brief_includes_changelog_excerpts_for_major_bumps() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+
+    with patch("migratowl.agent.tools.prepare.prepare_scan", AsyncMock(return_value=_prepared())), \
+         patch("migratowl.agent.tools.prepare.fetch_major_changelogs",
+               AsyncMock(return_value={"flask": "3.0\nRemoved flask.ext"})) as mock_fetch:
+        tool = create_prepare_scan_tool(MagicMock(), tail_chars=100)
+        out = await tool.ainvoke({"repo_url": "https://x/y"}, config={"configurable": {"thread_id": "t-1"}})
+
+    assert [d.name for d in mock_fetch.await_args.args[1]] == ["flask"]
+    assert "Removed flask.ext" in out

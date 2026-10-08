@@ -306,7 +306,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 )
 
             from migratowl.agent.factory import build_tools, create_migratowl_agent
-            from migratowl.pipeline import build_analysis_brief, prepare_scan, presolve
+            from migratowl.pipeline import build_analysis_brief, fetch_major_changelogs, prepare_scan, presolve
 
             settings = app.state.settings
             config: RunnableConfig = {"configurable": {"thread_id": job_id}}
@@ -320,6 +320,8 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             )
             prepared = await prepare_scan(tools, job.payload, config, tail_chars=settings.analysis_tail_chars)
             resolved, pending = presolve(prepared)
+            if pending:
+                prepared.changelog_excerpts = await fetch_major_changelogs(tools, pending, config)
 
             verdicts: list = []
             tokens = TokenUsage()

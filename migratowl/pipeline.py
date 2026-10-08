@@ -70,6 +70,8 @@ class PreparedScan(BaseModel):
     skipped: list[str]
     update_failures: dict[str, str] = {}
     validations: list[EcosystemValidation] = []
+    # name → breaking-change excerpt fetched in code for pending major bumps
+    changelog_excerpts: dict[str, str] = {}
 
 
 def parse_major(version: str) -> int | None:
@@ -262,6 +264,46 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
     return resolved, pending
 
 
+_EXCERPT_CHARS = 1500
+_NO_BREAKING = "(no breaking changes noted)"
+_MAJOR_RELEASE = re.compile(r"^v?\d+\.0\.0$")
+
+
+async def fetch_major_changelogs(
+    tools: MigratowlTools, pending: list[OutdatedDependency], config: RunnableConfig
+) -> dict[str, str]:
+    """Fetch a breaking-change excerpt for each pending major bump (best effort).
+
+    Doing this in code means a citation exists even when the model skips the
+    changelog tool; the excerpt goes into the brief and backs empty citations.
+    """
+    excerpts: dict[str, str] = {}
+    for dep in pending:
+        if dep.name in excerpts or dependency_is_major_bump(dep) is not True:
+            continue
+        payload = {
+            "name": dep.name,
+            "current_version": dep.installed_version or dep.current_version,
+            "latest_version": dep.latest_version,
+            "changelog_url": dep.changelog_url,
+            "repository_url": dep.repository_url,
+        }
+        try:
+            raw = await tools.fetch_changelog.ainvoke({"outdated_dep_json": json.dumps(payload)}, config=config)
+            chunks = json.loads(raw).get("chunks", [])
+        except Exception:
+            logger.info("No changelog for %s", dep.name, exc_info=True)
+            continue
+        useful = [c for c in chunks if isinstance(c, dict) and c.get("content") and c["content"] != _NO_BREAKING]
+        # A new major's X.0.0 notes carry the breaking changes; put them first so the
+        # character cap does not cut them off behind later minor releases.
+        useful.sort(key=lambda c: not _MAJOR_RELEASE.match(str(c.get("version", ""))))
+        text = "\n\n".join(f"{c.get('version', '')}\n{c['content']}".strip() for c in useful)
+        if text:
+            excerpts[dep.name] = text[:_EXCERPT_CHARS]
+    return excerpts
+
+
 def build_analysis_brief(
     payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
 ) -> str:
@@ -295,5 +337,10 @@ def build_analysis_brief(
         else:
             lines.append(f'- {v.ecosystem}: FAILED at step "{v.failed_step}". Output tail:')
             lines.append(f"```\n{v.output_tail}\n```")
+    excerpts = {name: text for name, text in prepared.changelog_excerpts.items() if name in pending_names}
+    if excerpts:
+        lines += ["", "Changelog excerpts (already fetched; cite from these instead of fetching again):"]
+        for name, text in excerpts.items():
+            lines += [f"- {name}:", f"```\n{text}\n```"]
     lines += ["", "Return exactly one AnalysisReport per package listed above."]
     return "\n".join(lines)

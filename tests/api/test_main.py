@@ -847,3 +847,24 @@ class TestRepoUrlCredentialsNeverEchoed:
         assert listed["payload"]["repo_url"] == self.SAFE_URL
         # The stored payload keeps the real URL: resume needs it to clone.
         assert app.state.job_store.get(job.job_id).payload.repo_url == self.CRED_URL
+
+
+class TestRunScanFetchesChangelogs:
+    @pytest.mark.asyncio
+    async def test_major_bump_changelog_reaches_the_report(self, app) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.pipeline.fetch_major_changelogs",
+                   AsyncMock(return_value={"flask": "3.0.0\nRemoved flask.ext"})), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = _ok_result()  # verdict with empty citation
+            mock_factory.return_value = mock_graph
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        brief = mock_graph.ainvoke.call_args.args[0]["messages"][0][1]
+        assert "Removed flask.ext" in brief
+        assert app.state.job_store.get(job.job_id).result.reports[0].changelog_citation == "3.0.0\nRemoved flask.ext"

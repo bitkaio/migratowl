@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Major bumps came back without a changelog citation** — the citation depended on the model calling the
+  changelog tool, which small models often skip. The pipeline now fetches a breaking-change excerpt for each
+  pending major bump itself, puts it in the LLM brief, and uses it as the citation when the model leaves it
+  empty. The changelog tool also keeps major-release notes (`X.0.0`) ahead of newer minor releases, so the
+  context budget no longer cuts off the release where the breaking changes are.
+
 - **Migratowl's own log lines never appeared** — uvicorn configures only its own loggers, so `migratowl.*` INFO
   messages (pipeline candidates, validation results, sandbox lifecycle) were dropped and only warnings showed.
   New setting `MIGRATOWL_LOG_LEVEL` (default `INFO`); each line is printed once whether or not the root logger

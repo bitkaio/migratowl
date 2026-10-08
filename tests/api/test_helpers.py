@@ -129,3 +129,31 @@ class TestAssembleDuplicateNames:
 
         assert [(r.dependency_name, r.is_breaking) for r in report.reports] == [("lodash", True)]
         assert report.skipped == []
+
+
+class TestCitationFallback:
+    def _prepared(self, excerpts: dict):
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanResult
+        from migratowl.pipeline import PreparedScan
+
+        dep = OutdatedDependency(name="express", current_version="4.0.0", latest_version="5.0.0",
+                                 ecosystem=Ecosystem.NODEJS, manifest_path="package.json")
+        return PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], changelog_excerpts=excerpts,
+        )
+
+    def test_empty_citation_filled_from_fetched_changelog(self) -> None:
+        from migratowl.api.helpers import assemble_report
+
+        report = assemble_report(ScanWebhookPayload(repo_url="r"), self._prepared({"express": "5.0.0\nremoved x"}),
+                                 [_verdict("express")], duration=0, tokens=TokenUsage())
+        assert report.reports[0].changelog_citation == "5.0.0\nremoved x"
+
+    def test_model_citation_is_kept(self) -> None:
+        from migratowl.api.helpers import assemble_report
+
+        verdict = _verdict("express").model_copy(update={"changelog_citation": "## 5.0.0 removed x"})
+        report = assemble_report(ScanWebhookPayload(repo_url="r"), self._prepared({"express": "other"}),
+                                 [verdict], duration=0, tokens=TokenUsage())
+        assert report.reports[0].changelog_citation == "## 5.0.0 removed x"

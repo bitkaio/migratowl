@@ -23,7 +23,13 @@ from langchain_core.runnables.config import ensure_config
 from pydantic import ValidationError
 
 from migratowl.models.schemas import ScanWebhookPayload
-from migratowl.pipeline import PipelineError, build_analysis_brief, prepare_scan, presolve
+from migratowl.pipeline import (
+    PipelineError,
+    build_analysis_brief,
+    fetch_major_changelogs,
+    prepare_scan,
+    presolve,
+)
 
 if TYPE_CHECKING:
     from migratowl.agent.factory import MigratowlTools
@@ -43,9 +49,10 @@ def create_prepare_scan_tool(tools: MigratowlTools, *, tail_chars: int) -> Any:
             branch: Branch to scan.
             max_deps: Maximum number of outdated dependencies to analyze.
         """
+        config = ensure_config()
         try:
             payload = ScanWebhookPayload(repo_url=repo_url, branch_name=branch, max_deps=max_deps)
-            prepared = await prepare_scan(tools, payload, ensure_config(), tail_chars=tail_chars)
+            prepared = await prepare_scan(tools, payload, config, tail_chars=tail_chars)
         except (PipelineError, ValidationError) as exc:
             # Return to the agent so it can tell the user; raising would abort the whole run.
             return f"prepare_scan failed: {exc}"
@@ -53,6 +60,7 @@ def create_prepare_scan_tool(tools: MigratowlTools, *, tail_chars: int) -> Any:
         if not pending:
             safe = ", ".join(r.dependency_name for r in resolved) or "none"
             return f"Repository: {repo_url}. Nothing to analyze: no outdated package needs review (safe: {safe})."
+        prepared.changelog_excerpts = await fetch_major_changelogs(tools, pending, config)
         return build_analysis_brief(payload, prepared, pending)
 
     return prepare_scan_tool

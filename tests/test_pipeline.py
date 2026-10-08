@@ -349,3 +349,88 @@ class TestInstalledVersionInPipeline:
         )
         brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, [dep])
         assert "pkg 2.31.0 (declared >=2.0) -> 3.0.0" in brief
+
+
+class TestMajorBumpChangelogs:
+    def _dep(self, name: str, current: str, latest: str):
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+
+        return OutdatedDependency(name=name, current_version=current, latest_version=latest,
+                                  ecosystem=Ecosystem.NODEJS, manifest_path="package.json",
+                                  repository_url=f"https://github.com/x/{name}")
+
+    def _tools(self, responses: dict[str, object]):
+        import json as _json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        async def fetch(args: dict, config=None) -> str:
+            name = _json.loads(args["outdated_dep_json"])["name"]
+            result = responses[name]
+            if isinstance(result, Exception):
+                raise result
+            return _json.dumps(result)
+
+        return SimpleNamespace(fetch_changelog=SimpleNamespace(ainvoke=AsyncMock(side_effect=fetch)))
+
+    async def test_fetches_only_major_bumps_and_keeps_breaking_text(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({
+            "express": {"chunks": [{"version": "5.0.0", "content": "BREAKING: app.del() removed"},
+                                   {"version": "4.22.0", "content": "(no breaking changes noted)"}],
+                        "warnings": []},
+        })
+        pending = [self._dep("express", "4.21.2", "5.2.1"), self._dep("ejs-lint", "1.1.0", "1.2.0")]
+        excerpts = await fetch_major_changelogs(tools, pending, {})
+        assert excerpts == {"express": "5.0.0\nBREAKING: app.del() removed"}
+        assert tools.fetch_changelog.ainvoke.await_count == 1  # minor bump not fetched
+
+    async def test_fetch_failures_and_empty_changelogs_are_skipped(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({
+            "a": RuntimeError("github down"),
+            "b": {"chunks": [{"version": "2.0.0", "content": "(no breaking changes noted)"}], "warnings": []},
+        })
+        excerpts = await fetch_major_changelogs(tools, [self._dep("a", "1.0.0", "2.0.0"), self._dep("b", "1.0.0", "2.0.0")], {})
+        assert excerpts == {}
+
+    async def test_excerpt_is_capped(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({"a": {"chunks": [{"version": "2.0.0", "content": "x" * 10_000}], "warnings": []}})
+        excerpts = await fetch_major_changelogs(tools, [self._dep("a", "1.0.0", "2.0.0")], {})
+        assert len(excerpts["a"]) <= 1500
+
+    def test_brief_includes_excerpts(self) -> None:
+        from migratowl.models.schemas import ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan, build_analysis_brief
+
+        dep = self._dep("express", "4.21.2", "5.2.1")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], changelog_excerpts={"express": "5.0.0\nBREAKING: app.del() removed"},
+        )
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, [dep])
+        assert "Changelog excerpts" in brief
+        assert "BREAKING: app.del() removed" in brief
+
+
+class TestExcerptOrdering:
+    async def test_major_release_notes_come_first(self) -> None:
+        import json as _json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+        from migratowl.pipeline import fetch_major_changelogs
+
+        chunks = [{"version": "5.2.0", "content": "bump codeql " * 200},
+                  {"version": "v5.0.0", "content": "BREAKING: app.del() removed"}]
+        tools = SimpleNamespace(fetch_changelog=SimpleNamespace(
+            ainvoke=AsyncMock(return_value=_json.dumps({"chunks": chunks, "warnings": []}))))
+        dep = OutdatedDependency(name="express", current_version="4.21.2", latest_version="5.2.1",
+                                 ecosystem=Ecosystem.NODEJS, manifest_path="package.json")
+        excerpts = await fetch_major_changelogs(tools, [dep], {})
+        assert excerpts["express"].startswith("v5.0.0\nBREAKING: app.del() removed")
