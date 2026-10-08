@@ -482,3 +482,21 @@ class TestRejectedCredentials:
         assert result.startswith("Failed")
         assert "Authentication failed" in result
         assert self.SECRET not in result
+
+
+def test_configured_token_is_never_sent_over_plain_http() -> None:
+    secret = "ghp_" + "d" * 36
+    backend = MagicMock()
+    backend.execute.side_effect = [
+        ExecResult(output="", exit_code=0),
+        ExecResult(output="", exit_code=0),
+        ExecResult(output="README.md\n", exit_code=0),
+    ]
+    tool = create_clone_repo_tool(
+        lambda: backend, workspace_path=DEFAULT_WORKSPACE, tokens={"github.com": ("x-access-token", secret)}
+    )
+
+    tool.invoke({"repo_url": "http://github.com/o/private"})
+
+    cmd = backend.execute.call_args_list[1][0][0]
+    assert secret not in cmd and "extraHeader" not in cmd

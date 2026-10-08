@@ -52,7 +52,7 @@ def _clone_auth(repo_url: str, tokens: CloneTokens) -> tuple[str, list[str], tup
     credentials: tuple[str, str] | None = None
     if parts.username or parts.password:
         credentials = (unquote(parts.username or ""), unquote(parts.password or ""))
-    elif parts.hostname in tokens:
+    elif parts.scheme == "https" and parts.hostname in tokens:  # a configured token never travels in cleartext
         credentials = tokens[parts.hostname]
     host = parts.hostname + (f":{parts.port}" if parts.port else "")
     clean = urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
