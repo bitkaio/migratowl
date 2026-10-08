@@ -168,7 +168,7 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 | Language | Manifest files | Lockfiles (installed versions) | Registry |
 |----------|----------------|--------------------------------|----------|
 | Python | `pyproject.toml` (PEP 621 incl. optional deps, PEP 735 groups, Poetry incl. groups), `requirements.txt` | `uv.lock`, `poetry.lock` | PyPI |
-| Node.js | `package.json` | `package-lock.json` | npm |
+| Node.js | `package.json` | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` | npm |
 | Go | `go.mod` | — (`go.mod` pins exact versions) | proxy.golang.org |
 | Rust | `Cargo.toml` | `Cargo.lock` | crates.io |
 | Java | `pom.xml` (Maven, including `${property}` versions), `build.gradle` / `build.gradle.kts`, `gradle/libs.versions.toml` (Gradle) | — | Maven Central |

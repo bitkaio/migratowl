@@ -19,6 +19,7 @@ import re
 import tomllib
 
 import defusedxml.ElementTree as ET
+import yaml
 
 from migratowl.models.schemas import Dependency, Ecosystem
 
@@ -354,10 +355,15 @@ def parse_gradle_version_catalog(content: str, manifest_path: str) -> list[Depen
         data = tomllib.loads(content)
     except tomllib.TOMLDecodeError:
         return []
-    versions = data.get("versions", {})
+    versions = data.get("versions")
+    libraries = data.get("libraries")
+    if not isinstance(versions, dict):
+        versions = {}
+    if not isinstance(libraries, dict):
+        return []
 
     deps: list[Dependency] = []
-    for spec in data.get("libraries", {}).values():
+    for spec in libraries.values():
         key = None
         if isinstance(spec, str):
             parts = spec.split(":")
@@ -426,6 +432,108 @@ def parse_package_lock_json(content: str) -> dict[str, str]:
             if isinstance(info, dict) and isinstance(info.get("version"), str):
                 locked[name] = info["version"]
     return locked
+
+
+def _split_npm_descriptor(descriptor: str) -> tuple[str, str]:
+    """``"@scope/pkg@^1.0"`` → ``("@scope/pkg", "^1.0")``; Yarn Berry's ``npm:`` protocol is dropped."""
+    at = descriptor.find("@", 1)
+    if at < 0:
+        return descriptor, ""
+    return descriptor[:at], descriptor[at + 1 :].removeprefix("npm:")
+
+
+def _node_lock_index(entries: list[tuple[str, str, str]]) -> dict[str, str]:
+    """``name@range`` → version for each ``(name, range, version)``, plus ``name`` → version
+    where the lockfile holds only one version of that package (yarn and pnpm lock several)."""
+    locked: dict[str, str] = {}
+    by_name: dict[str, set[str]] = {}
+    for name, spec, version in entries:
+        if not name or not version:
+            continue
+        if spec:
+            locked[f"{name}@{spec}"] = version
+        by_name.setdefault(name, set()).add(version)
+    for name, versions in by_name.items():
+        if len(versions) == 1:
+            locked[name] = versions.pop()
+    return locked
+
+
+_YARN_V1_VERSION = re.compile(r'^\s+version:?\s+"?([^"\s]+)"?\s*$')
+
+
+def parse_yarn_lock(content: str) -> dict[str, str]:
+    """Installed versions from ``yarn.lock``, classic (v1) or Berry (YAML), keyed as in ``_node_lock_index``."""
+    entries: list[tuple[str, str, str]] = []
+    try:
+        if "__metadata:" in content:
+            # BaseLoader keeps every scalar a string ("1.10" must not become 1.1).
+            data = yaml.load(content, Loader=yaml.BaseLoader)  # noqa: S506 - BaseLoader builds no objects
+            if not isinstance(data, dict):
+                return {}
+            blocks = [(key, value.get("version")) for key, value in data.items()
+                      if key != "__metadata" and isinstance(value, dict)]
+        else:
+            blocks = []
+            header: str | None = None
+            for line in content.splitlines():
+                if line and not line[0].isspace() and not line.startswith("#") and line.rstrip().endswith(":"):
+                    header = line.rstrip()[:-1]
+                    continue
+                m = _YARN_V1_VERSION.match(line)
+                if header is not None and m:
+                    blocks.append((header, m.group(1)))
+                    header = None
+        for header, version in blocks:
+            if not isinstance(header, str) or not isinstance(version, str):
+                continue
+            for descriptor in header.split(","):
+                name, spec = _split_npm_descriptor(descriptor.strip().strip('"'))
+                if ":" in spec:  # workspace:, patch:, file:, link:, git … — not a registry version
+                    continue
+                entries.append((name, spec, version))
+    except Exception:
+        return {}
+    return _node_lock_index(entries)
+
+
+_PNPM_DEP_SECTIONS = ("dependencies", "devDependencies", "optionalDependencies")
+
+
+def parse_pnpm_lock(content: str) -> dict[str, str]:
+    """Installed versions from ``pnpm-lock.yaml`` (v5 to v9, workspaces included), keyed as in ``_node_lock_index``."""
+    entries: list[tuple[str, str, str]] = []
+    try:
+        data = yaml.load(content, Loader=yaml.BaseLoader)  # noqa: S506 - BaseLoader builds no objects
+        if not isinstance(data, dict):
+            return {}
+        importers = data.get("importers")
+        projects = list(importers.values()) if isinstance(importers, dict) else [data]
+        for project in projects:
+            if not isinstance(project, dict):
+                continue
+            specifiers = project.get("specifiers")  # v5 keeps ranges in a separate map
+            if not isinstance(specifiers, dict):
+                specifiers = {}
+            for section in _PNPM_DEP_SECTIONS:
+                deps = project.get(section)
+                if not isinstance(deps, dict):
+                    continue
+                for name, info in deps.items():
+                    if isinstance(info, dict):
+                        spec, version = info.get("specifier", ""), info.get("version")
+                    else:
+                        spec, version = specifiers.get(name, ""), info
+                    if not isinstance(version, str) or not isinstance(spec, str):
+                        continue
+                    # Strip peer-dependency suffixes: "18.2.0(react@18.2.0)" (v6+), "18.2.0_react@18.2.0" (v5).
+                    version = re.split(r"[(_]", version, maxsplit=1)[0]
+                    if ":" in version or "/" in version:  # link:, file:, git and aliased deps
+                        continue
+                    entries.append((name, spec, version))
+    except Exception:
+        return {}
+    return _node_lock_index(entries)
 
 
 def _toml_packages(content: str) -> list[tuple[str, str]]:

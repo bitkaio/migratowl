@@ -33,10 +33,12 @@ from migratowl.parsers import (
     parse_gradle_version_catalog,
     parse_package_json,
     parse_package_lock_json,
+    parse_pnpm_lock,
     parse_pom_xml,
     parse_pyproject_toml,
     parse_python_lock,
     parse_requirements_txt,
+    parse_yarn_lock,
     pick_cargo_locked,
 )
 
@@ -56,6 +58,8 @@ _MANIFEST_PARSERS: dict[str, tuple[Callable[[str, str], list[Dependency]], Ecosy
 # Lockfiles give the installed version behind a declared range.
 _LOCKFILES: dict[str, Ecosystem] = {
     "package-lock.json": Ecosystem.NODEJS,
+    "yarn.lock": Ecosystem.NODEJS,
+    "pnpm-lock.yaml": Ecosystem.NODEJS,
     "poetry.lock": Ecosystem.PYTHON,
     "uv.lock": Ecosystem.PYTHON,
     "Cargo.lock": Ecosystem.RUST,
@@ -68,6 +72,10 @@ def _parse_lock(filename: str, content: str) -> dict[str, str | list[str]]:
     try:
         if filename == "package-lock.json":
             return dict(parse_package_lock_json(content))
+        if filename == "yarn.lock":
+            return dict(parse_yarn_lock(content))
+        if filename == "pnpm-lock.yaml":
+            return dict(parse_pnpm_lock(content))
         if filename == "Cargo.lock":
             return dict(parse_cargo_lock(content))
         return dict(parse_python_lock(content))
@@ -81,6 +89,24 @@ def _lock_key(dep: Dependency) -> str:
     return dep.name
 
 
+# package.json parsing drops one leading range operator ("^4.1.0" → "4.1.0").
+_NPM_RANGE_OPERATORS = ("^", "~", "", ">=", "<=", ">", "<", "=")
+
+
+def _lock_lookup(dep: Dependency, lock: dict[str, str | list[str]]) -> str | list[str] | None:
+    """The lock entry for ``dep``: yarn and pnpm entries are keyed by ``name@range`` as well as by name."""
+    key = _lock_key(dep)
+    if dep.ecosystem == Ecosystem.NODEJS:
+        by_range = {
+            str(lock[candidate])
+            for op in _NPM_RANGE_OPERATORS
+            if (candidate := f"{key}@{op}{dep.current_version}") in lock
+        }
+        if len(by_range) == 1:
+            return by_range.pop()
+    return lock.get(key)
+
+
 def _apply_locks(
     deps: list[Dependency], locks: dict[tuple[Ecosystem, str], dict[str, str | list[str]]]
 ) -> None:
@@ -90,7 +116,7 @@ def _apply_locks(
         while True:
             lock = locks.get((dep.ecosystem, directory))
             if lock is not None:
-                found = lock.get(_lock_key(dep))
+                found = _lock_lookup(dep, lock)
                 if isinstance(found, list):
                     found = pick_cargo_locked(dep.current_version, found)
                 dep.installed_version = found

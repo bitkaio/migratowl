@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.27",
     "packaging>=24.0",
     "defusedxml>=0.7.1",
+    "pyyaml>=6.0",
     "html2text>=2024.2.26",
     "langfuse",
     "aiosqlite>=0.20",
@@ -71,6 +72,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff",
     "mypy>=1.10",
+    "types-PyYAML",
     "bandit[toml]>=1.7",
     "langgraph-cli[inmem]",
     # Floor keeps uv from trading the dev server down for a newer OpenTelemetry.

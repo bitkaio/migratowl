@@ -51,6 +51,7 @@ _PARSERS = [
     (parsers.parse_cargo_toml, (ValueError, tomllib.TOMLDecodeError)),
     (parsers.parse_pom_xml, (ValueError, DefusedET.ParseError, DefusedXmlException)),
     (parsers.parse_build_gradle, (ValueError,)),
+    (parsers.parse_gradle_version_catalog, (ValueError,)),
 ]
 
 # Lockfile parsers swallow malformed input themselves: they must never raise.
@@ -58,6 +59,8 @@ _LOCK_PARSERS = [
     parsers.parse_package_lock_json,
     parsers.parse_python_lock,
     parsers.parse_cargo_lock,
+    parsers.parse_yarn_lock,
+    parsers.parse_pnpm_lock,
 ]
 
 

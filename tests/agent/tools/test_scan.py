@@ -272,6 +272,21 @@ class TestScanInstalledVersions:
         })
         assert deps["syn"]["installed_version"] == "1.0.109"
 
+    def test_yarn_lock_matches_the_declared_range(self) -> None:
+        deps = self._scan({
+            "package.json": '{"dependencies": {"debug": "^4.1.0"}}',
+            "yarn.lock": 'debug@2.6.9:\n  version "2.6.9"\n\ndebug@^4.1.0:\n  version "4.3.4"\n',
+        })
+        assert deps["debug"]["installed_version"] == "4.3.4"
+
+    def test_pnpm_lock(self) -> None:
+        deps = self._scan({
+            "package.json": '{"dependencies": {"lodash": "^4.17.0"}}',
+            "pnpm-lock.yaml": "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n"
+                              "      lodash:\n        specifier: ^4.17.0\n        version: 4.17.21\n",
+        })
+        assert deps["lodash"]["installed_version"] == "4.17.21"
+
     def test_lock_of_another_ecosystem_is_ignored(self) -> None:
         deps = self._scan({
             "package.json": '{"dependencies": {"requests": "1.0.0"}}',
