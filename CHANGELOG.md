@@ -102,6 +102,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Changelogs were not found or not understood for many packages** — the registry now also treats a "Code"
+  link or a GitHub/GitLab homepage as the repository (Sphinx, psutil); a "changelog" link that is just the
+  repository page (aiofiles' `github.com/Tinche/aiofiles#history`) is used as a repository hint instead of
+  being parsed as HTML; a short changelog file that only points elsewhere ("History has moved to: …") is
+  followed; version ranges given as constraints (`>=5.9`, `^4.21.2`) filter correctly instead of keeping every
+  release; and breaking changes written as `**Backward incompatible changes**`, `* breaking: …` or indented
+  `#123, [Platform]: …` items are recognised.
+
 - **Major bumps came back without a changelog citation** — the citation depended on the model calling the
   changelog tool, which small models often skip. The pipeline now fetches a breaking-change excerpt for each
   pending major bump itself, puts it in the LLM brief, and uses it as the citation when the model leaves it

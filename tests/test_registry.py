@@ -1209,3 +1209,42 @@ class TestInstalledVersionFromLockfile:
             result = await query_pypi(client, dep)
         assert result is not None
         assert (result.current_version, result.installed_version, result.latest_version) == (">=2.0", "2.31.0", "2.32.3")
+
+
+class TestRepositoryUrlDiscovery:
+    @staticmethod
+    async def _pypi(info: dict) -> object:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/pkg/json": httpx.Response(200, json={"info": info, "releases": {"1.0": [], "2.0": []}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_pypi(client, _dep("pkg", "==1.0", Ecosystem.PYTHON))
+
+    async def test_code_key_is_a_repository(self) -> None:
+        # Sphinx labels its repository "Code".
+        result = await self._pypi({"project_urls": {"Code": "https://github.com/sphinx-doc/sphinx",
+                                                    "Homepage": "https://www.sphinx-doc.org/"}})
+        assert result.repository_url == "https://github.com/sphinx-doc/sphinx"
+
+    async def test_github_homepage_is_the_repository_fallback(self) -> None:
+        # psutil only publishes a GitHub homepage.
+        result = await self._pypi({"home_page": "https://github.com/giampaolo/psutil",
+                                   "project_urls": {"Homepage": "https://github.com/giampaolo/psutil"}})
+        assert result.repository_url == "https://github.com/giampaolo/psutil"
+
+    async def test_non_forge_homepage_is_not_a_repository(self) -> None:
+        result = await self._pypi({"project_urls": {"Homepage": "https://www.sphinx-doc.org/"}})
+        assert result.repository_url is None
+
+    async def test_npm_github_homepage_fallback(self) -> None:
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/pkg": httpx.Response(200, json={"homepage": "https://github.com/o/pkg#readme",
+                                             "versions": {"1.0.0": {}, "2.0.0": {}}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_npm(client, _dep("pkg", "1.0.0", Ecosystem.NODEJS, "package.json"))
+        assert result.repository_url == "https://github.com/o/pkg"

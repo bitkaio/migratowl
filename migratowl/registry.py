@@ -260,6 +260,19 @@ def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) ->
     return None
 
 
+# github.com/<owner>/<repo> (optionally .git, a trailing slash or #fragment) — a
+# repository root, not an issues page or a file inside it.
+_FORGE_REPO_RE = re.compile(
+    r"^https?://(?:www\.)?(github\.com|gitlab\.com)/([^/#?\s]+)/([^/#?\s]+?)(?:\.git)?/?(?:[#?].*)?$"
+)
+
+
+def forge_repo_url(url: str | None) -> str | None:
+    """``https://<forge>/<owner>/<repo>`` when ``url`` is a GitHub/GitLab repository page, else None."""
+    m = _FORGE_REPO_RE.match((url or "").strip())
+    return f"https://{m[1]}/{m[2]}/{m[3]}" if m else None
+
+
 def _clean_git_url(url: str) -> str:
     """Strip ``git+`` prefix and ``.git`` suffix from a repository URL."""
     if url.startswith("git+"):
@@ -350,7 +363,14 @@ async def query_pypi(
         manifest_path=dep.manifest_path,
         installed_version=dep.installed_version,
         homepage_url=info.get("home_page") or None,
-        repository_url=_extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub"]),
+        repository_url=(
+            _extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub", "Code"])
+            # Many projects only publish a GitHub homepage (e.g. psutil).
+            or next(
+                filter(None, (forge_repo_url(u) for u in [info.get("home_page"), *(project_urls or {}).values()])),
+                None,
+            )
+        ),
         changelog_url=_extract_url_by_key(project_urls, ["Changelog", "Changes", "Release Notes", "History"]),
     )
 
@@ -379,7 +399,7 @@ async def query_npm(
         manifest_path=dep.manifest_path,
         installed_version=dep.installed_version,
         homepage_url=data.get("homepage") or None,
-        repository_url=_extract_npm_repo_url(data.get("repository")),
+        repository_url=_extract_npm_repo_url(data.get("repository")) or forge_repo_url(data.get("homepage")),
     )
 
 
@@ -408,7 +428,7 @@ async def query_crates(
         manifest_path=dep.manifest_path,
         installed_version=dep.installed_version,
         homepage_url=crate.get("homepage") or None,
-        repository_url=crate.get("repository") or None,
+        repository_url=crate.get("repository") or forge_repo_url(crate.get("homepage")),
         changelog_url=crate.get("documentation") or None,
     )
 
