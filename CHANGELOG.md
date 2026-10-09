@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Changelog files on branches other than `main` / `master` were never found** — the lookup guessed those two branch
+  names, so repos with `develop`, `trunk` or `13.x` as default branch (Laravel) got no changelog file. It now reads
+  from `HEAD`, which GitHub resolves to the default branch, and makes half as many probe requests.
+- **GitHub release notes were fetched for every release** — paging stopped only at the oldest release, so a
+  repository with hundreds of releases cost many API calls per package. It now stops after the page that reaches the
+  version the project is already on (express 4.21.2: 1 API page instead of 2).
+- **Version headers with a link were not recognised** — `## [1.2.3](https://…/compare/…) (2024-01-01)`, written by
+  release-please and common Keep a Changelog tooling, parsed to no versions, so a 200 KB changelog gave no excerpt.
+
 ## [0.7.0] - 2026-10-08
 
 ### Security

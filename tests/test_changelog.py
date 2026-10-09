@@ -326,7 +326,7 @@ class TestStubFilePointingOffGithub:
 
         async def get(url: str, *args, **kwargs) -> httpx.Response:
             req = httpx.Request("GET", url)
-            if url.endswith("/master/HISTORY.rst"):
+            if url.endswith("/HEAD/HISTORY.rst"):
                 return httpx.Response(200, text=stub, request=req)
             return httpx.Response(404, request=req)
 
@@ -381,3 +381,135 @@ class TestIndentedPrefixedItems:
         out = extract_breaking_changes([{"version": "7.0.0", "content": content}])
         assert "memory_info_ex" in out[0]["content"]
         assert "broadcast" not in out[0]["content"]
+
+
+class TestDefaultBranch:
+    """Repos name their default branch anything; raw.githubusercontent.com resolves ``HEAD`` to it."""
+
+    async def test_changelog_is_found_on_a_branch_called_develop(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_github
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            req = httpx.Request("GET", url)
+            if url == "https://raw.githubusercontent.com/o/r/HEAD/CHANGELOG.md":
+                return httpx.Response(200, text="## 2.0.0\n- Removed x\n\n## 1.0.0\n- First\n", request=req)
+            return httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github("https://github.com/o/r")
+
+        assert "Removed x" in text
+        assert not any("/main/" in u or "/master/" in u for u in requested), "no per-branch guessing"
+
+
+class TestReleasePagination:
+    @staticmethod
+    def _client(pages: dict[str, tuple[list[str], str | None]]) -> tuple[object, list[str]]:
+        """Fake GitHub API: url -> (release tags, next url)."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            tags, nxt = pages[url]
+            headers = {"Link": f'<{nxt}>; rel="next"'} if nxt else {}
+            body = [{"tag_name": t, "body": f"notes {t}", "draft": False, "prerelease": False} for t in tags]
+            return httpx.Response(200, json=body, headers=headers, request=httpx.Request("GET", url))
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        return client, requested
+
+    BASE = "https://api.github.com/repos/o/r/releases?per_page=100"
+    PAGES = {
+        BASE: (["v4.0.0", "v3.0.0", "v2.1.0"], "https://p2"),
+        "https://p2": (["v2.0.0", "v1.9.0"], "https://p3"),
+        "https://p3": (["v1.0.0"], None),
+    }
+
+    async def test_stops_once_releases_at_or_below_the_current_version_are_reached(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client, requested = self._client(self.PAGES)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github_releases("https://github.com/o/r", current_version="2.0.0")
+
+        assert requested == [self.BASE, "https://p2"], "page 3 only holds releases older than the current version"
+        assert "## v4.0.0" in text and "## v2.0.0" in text
+
+    async def test_without_a_current_version_every_page_is_read(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client, requested = self._client(self.PAGES)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            await _fetch_from_github_releases("https://github.com/o/r")
+
+        assert len(requested) == 3
+
+    async def test_odd_tags_do_not_stop_pagination_early(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        pages = {
+            self.BASE: (["nightly", "pkg@3.0.0", "release-2.5"], "https://p2"),
+            "https://p2": (["1.0.0"], None),
+        }
+        client, requested = self._client(pages)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            await _fetch_from_github_releases("https://github.com/o/r", current_version="2.0.0")
+
+        assert len(requested) == 2  # 1.0.0 is on page 2, so page 2 was needed to find it
+
+    async def test_fetch_changelog_passes_the_current_version_down(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        releases = _AsyncMock(return_value="## 2.0.0\nnotes")
+        with (
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", _AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", _AsyncMock(side_effect=FileNotFoundError)),
+            patch("migratowl.changelog._fetch_from_github_releases", releases),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            await fetch_changelog(None, "https://github.com/o/r", "pkg", current_version="1.5.0")
+
+        releases.assert_awaited_once_with("https://github.com/o/r", "1.5.0")
+
+
+class TestLinkedVersionHeaders:
+    """release-please and Keep a Changelog tooling write ``## [1.2.3](compare-url) (date)``."""
+
+    def test_version_headers_with_a_compare_link(self) -> None:
+        from migratowl.changelog import _parse_version_from_line
+
+        cases = {
+            "## [v13.35.0](https://github.com/laravel/framework/compare/v13.34.0...v13.35.0) - 2026-10-06": "13.35.0",
+            "## [1.2.3](https://github.com/o/r/compare/v1.2.2...v1.2.3) (2024-01-01)": "1.2.3",
+            "### [2.0.0](https://github.com/o/r/compare/v1.9.0...v2.0.0) (2023-05-04)": "2.0.0",
+            "## [5.0.0](https://example.com/r) - 2020-01-01": "5.0.0",
+        }
+        for line, expected in cases.items():
+            assert _parse_version_from_line(line) == expected, line
+
+    def test_prose_with_a_link_is_still_not_a_header(self) -> None:
+        from migratowl.changelog import _parse_version_from_line
+
+        assert _parse_version_from_line("1.2.3 fixed [the bug](https://x.io/y) in the parser today") is None
+
+    def test_chunking_a_release_please_changelog(self) -> None:
+        from migratowl.changelog import chunk_changelog_by_version
+
+        text = (
+            "# Changelog\n\n"
+            "## [2.0.0](https://github.com/o/r/compare/v1.0.0...v2.0.0) (2024-02-01)\n\n"
+            "### ⚠ BREAKING CHANGES\n\n* drop node 16\n\n"
+            "## [1.0.0](https://github.com/o/r/compare/v0.9.0...v1.0.0) (2024-01-01)\n\n* first\n"
+        )
+        assert [c["version"] for c in chunk_changelog_by_version(text)] == ["2.0.0", "1.0.0"]
