@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub release notes were fetched for every release** — paging stopped only at the oldest release, so a
   repository with hundreds of releases cost many API calls per package. It now stops after the page that reaches the
   version the project is already on (express 4.21.2: 1 API page instead of 2).
+- **Changelog excerpts opened with a list of pull requests** — a release body without a "Breaking changes" heading
+  was cut from the top: one pull-request title starting with "remove" made the whole auto-generated "What's Changed"
+  list one section (express 5.0.0: 13 KB), so the 1500-character excerpt held pull-request titles instead of "Dropped
+  support for Node < 18" and "Deprecated API methods removed". Long sections are now ordered hand-written lines
+  about removals, renames and behaviour changes first, then matching pull-request lines, then the rest; nothing is
+  dropped and short notes keep their order.
 - **Version headers with a link were not recognised** — `## [1.2.3](https://…/compare/…) (2024-01-01)`, written by
   release-please and common Keep a Changelog tooling, parsed to no versions, so a 200 KB changelog gave no excerpt.
 

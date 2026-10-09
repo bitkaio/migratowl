@@ -513,3 +513,55 @@ class TestLinkedVersionHeaders:
             "## [1.0.0](https://github.com/o/r/compare/v0.9.0...v1.0.0) (2024-01-01)\n\n* first\n"
         )
         assert [c["version"] for c in chunk_changelog_by_version(text)] == ["2.0.0", "1.0.0"]
+
+
+class TestExcerptPrefersEvidence:
+    """MO-41: with no 'Breaking changes' heading, the lines that matter must come before the PR list."""
+
+    @staticmethod
+    def _express_style() -> list[dict]:
+        prs = "\n".join(
+            f"* {title} by @someone in https://github.com/expressjs/express/pull/{5000 + i}"
+            for i, title in enumerate(
+                ["4.19.2 Staging", "remove duplicate location test for data uri", "docs: update Security.md",
+                 "Cut down on duplicated CI runs", "deprecate res.json(status, obj) in tests", "Add a Threat Model"] * 12
+            )
+        )
+        body = (
+            "Express v5 is finally here.\n\n"
+            "### Major Changes in v5\n\n"
+            "- **Node.js version support**: Dropped support for Node.js versions before v18.\n"
+            "- **Routing changes**: Updated to path-to-regexp@8.x, removing sub-expression regex patterns.\n"
+            "- **Deprecated API methods removed**: Removed old, deprecated API method signatures from Express v3/v4.\n"
+            "- **Promise support**: Middleware can now return rejected promises.\n\n"
+            "### What's Changed\n\n" + prs + "\n"
+        )
+        return [{"version": "5.0.0", "content": body}]
+
+    def test_human_written_removals_come_before_the_pull_request_list(self) -> None:
+        excerpt = extract_breaking_changes(self._express_style())[0]["content"][:1500]
+
+        assert "Dropped support for Node.js versions before v18" in excerpt
+        assert "removing sub-expression regex patterns" in excerpt
+        assert "Deprecated API methods removed" in excerpt
+
+    def test_auto_generated_pr_lines_rank_below_prose(self) -> None:
+        content = extract_breaking_changes(self._express_style())[0]["content"]
+
+        first_pr = content.index("in https://github.com/expressjs/express/pull/")
+        assert content.index("Deprecated API methods removed") < first_pr
+        assert content.index("Dropped support for Node.js") < first_pr
+
+    def test_nothing_is_lost_only_reordered(self) -> None:
+        original = self._express_style()[0]["content"]
+        content = extract_breaking_changes(self._express_style())[0]["content"]
+
+        assert "Threat Model" in content or len(content) >= len(original) * 0.5  # PR lines still follow the prose
+
+    def test_short_notes_keep_their_order(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "### Breaking Changes\n\n* drop node 16\n\n### Fixes\n\n* a fix\n"}]
+
+        content = extract_breaking_changes(chunks)[0]["content"]
+
+        assert content.startswith("### Breaking Changes")
+        assert "drop node 16" in content
