@@ -94,6 +94,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      chart_digest: ${{ steps.chart.outputs.digest }}
 
     steps:
       - name: Harden Runner
@@ -128,6 +131,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push server image
+        id: build
         uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6
         with:
           context: .
@@ -137,6 +141,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Package and push Helm chart
+        id: chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
@@ -145,7 +150,99 @@ jobs:
           VERSION="${REF_NAME#v}"
           echo "$GITHUB_TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
           helm package deploy/helm/migratowl --version "$VERSION" --app-version "$VERSION" --destination /tmp/chart
-          helm push "/tmp/chart/migratowl-${VERSION}.tgz" oci://ghcr.io/bitkaio/charts
+          helm push "/tmp/chart/migratowl-${VERSION}.tgz" oci://ghcr.io/bitkaio/charts 2>&1 | tee /tmp/helm-push.log
+          DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/helm-push.log | head -1)
+          test -n "$DIGEST"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+  # ── Sign, attest and scan the server image and chart ──────────────────────
+  server-sign-and-attest:
+    name: Sign & Attest (server, chart)
+    runs-on: ubuntu-latest
+    needs: server-image
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    env:
+      IMAGE_REF: ghcr.io/bitkaio/migratowl-server@${{ needs.server-image.outputs.digest }}
+      CHART_REF: ghcr.io/bitkaio/charts/migratowl@${{ needs.server-image.outputs.chart_digest }}
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df  # v2
+        with:
+          egress-policy: audit
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image and chart (keyless via OIDC)
+        run: |
+          cosign sign --yes "$IMAGE_REF"
+          cosign sign --yes "$CHART_REF"
+
+      - name: Install syft CLI
+        run: |
+          SYFT_VERSION="1.25.0"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin syft
+
+      - name: Generate and attach SBOM
+        run: |
+          syft "$IMAGE_REF" -o cyclonedx-json > sbom-server.cdx.json
+          cosign attest --yes --predicate sbom-server.cdx.json --type cyclonedx "$IMAGE_REF"
+
+      - name: Install Trivy CLI
+        run: |
+          TRIVY_VERSION="0.69.3"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C /usr/local/bin trivy
+
+      - name: Scan server image with Trivy
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format json \
+            -o trivy-server-report.json \
+            "$IMAGE_REF" || true
+
+      - name: Upload SBOM as artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom-server-${{ github.ref_name }}
+          path: sbom-server.cdx.json
+
+      - name: Upload Trivy scan report as artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: trivy-server-${{ github.ref_name }}
+          path: trivy-server-report.json
+
+  server-provenance:
+    name: SLSA Provenance (server)
+    needs: server-image
+    permissions:
+      actions: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0  # zizmor: ignore[unpinned-uses] -- SHA pinning not supported by this action
+    with:
+      image: ghcr.io/bitkaio/migratowl-server
+      digest: ${{ needs.server-image.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   # ── Build and push Docker image with LangGraph CLI ─────────────────────────
   docker:
@@ -323,7 +420,7 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [sign-and-attest, provenance, docker, runtime-image, server-image]
+    needs: [sign-and-attest, provenance, docker, runtime-image, server-image, server-sign-and-attest, server-provenance]
     permissions:
       contents: write
 
@@ -349,6 +446,7 @@ jobs:
         id: changelog
         env:
           IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+          SERVER_DIGEST: ${{ needs.server-image.outputs.digest }}
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           IMAGE="$REGISTRY/$IMAGE_NAME"
@@ -392,6 +490,14 @@ jobs:
             echo '```'
             echo "docker pull ${IMAGE}@${IMAGE_DIGEST}"
             echo '```'
+            echo ""
+            echo "### Server Image and Helm Chart"
+            echo ""
+            echo '```'
+            echo "docker pull ghcr.io/bitkaio/migratowl-server:${VERSION}"
+            echo "docker pull ghcr.io/bitkaio/migratowl-server@${SERVER_DIGEST}"
+            echo "helm install migratowl oci://ghcr.io/bitkaio/charts/migratowl --version ${VERSION}"
+            echo '```'
           } >> changelog.md
 
           cat changelog.md
@@ -406,3 +512,5 @@ jobs:
           files: |
             sbom.cdx.json
             trivy-release-report.json
+            sbom-server.cdx.json
+            trivy-server-report.json

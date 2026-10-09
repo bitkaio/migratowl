@@ -104,7 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scoped to the sandbox namespace (SandboxClaims in agent-sandbox mode; pods, exec and the NetworkPolicy in raw
   mode), a PVC that survives `helm uninstall`, and credentials read from an existing Secret. The release workflow
   pushes the image (amd64 and arm64) and the chart (`oci://ghcr.io/bitkaio/charts`); CI lints the Dockerfile and
-  the chart. Signing and an SBOM for the new image are not part of this change.
+  the chart. Like the LangGraph image, the server image and the chart are signed with cosign (keyless) and the
+  image gets an SBOM attestation, a Trivy report and SLSA provenance.
 
 - **Private repositories** — `GITHUB_TOKEN` / `GITLAB_TOKEN` are now also used to clone private repositories on their
   host, so `repo_url` stays free of credentials. The token is sent to `git clone` as a request header scoped to that
