@@ -102,13 +102,10 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.model_provider == "anthropic"
 
-    def test_default_api_host(self) -> None:
-        settings = Settings(_env_file=None)
-        assert settings.api_host == "0.0.0.0"
-
-    def test_default_api_port(self) -> None:
-        settings = Settings(_env_file=None)
-        assert settings.api_port == 8000
+    def test_no_bind_settings(self) -> None:
+        # uvicorn's own --host/--port decide the bind address; settings for it were never read.
+        assert "api_host" not in Settings.model_fields
+        assert "api_port" not in Settings.model_fields
 
 
 class TestSettingsFromEnv:

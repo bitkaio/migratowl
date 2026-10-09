@@ -10,13 +10,10 @@ from migratowl.models.schemas import (
     ChangelogResult,
     Dependency,
     Ecosystem,
-    ExecutionResult,
     JobState,
     JobStatus,
-    MainExecutionAnalysis,
     OutdatedCheckMode,
     OutdatedDependency,
-    PackageConfidence,
     ScanAnalysisReport,
     ScanResult,
     ScanWebhookPayload,
@@ -192,27 +189,6 @@ class TestScanResult:
         assert result.scan_duration_seconds == 1.5
 
 
-class TestExecutionResult:
-    def test_construction(self) -> None:
-        result = ExecutionResult(
-            command_run="pip install requests",
-            exit_code=0,
-            stdout="Successfully installed",
-            stderr="",
-        )
-        assert result.command_run == "pip install requests"
-        assert result.exit_code == 0
-
-    def test_truncated_default_false(self) -> None:
-        result = ExecutionResult(
-            command_run="ls",
-            exit_code=0,
-            stdout="",
-            stderr="",
-        )
-        assert result.truncated is False
-
-
 class TestChangelogResult:
     def test_construction(self) -> None:
         result: ChangelogResult = {
@@ -363,58 +339,6 @@ class TestScanAnalysisReport:
         assert restored.scan_result.outdated[0].latest_version == "3.0.0"
 
 
-class TestPackageConfidence:
-    def test_construction(self) -> None:
-        pc = PackageConfidence(
-            name="requests",
-            confidence=0.85,
-            reason="Error message directly references requests import",
-        )
-        assert pc.name == "requests"
-        assert pc.confidence == 0.85
-        assert "requests" in pc.reason
-
-    def test_confidence_boundaries(self) -> None:
-        pc_zero = PackageConfidence(name="x", confidence=0.0, reason="safe")
-        assert pc_zero.confidence == 0.0
-        pc_one = PackageConfidence(name="x", confidence=1.0, reason="certain")
-        assert pc_one.confidence == 1.0
-
-    def test_confidence_too_high(self) -> None:
-        with pytest.raises(ValidationError):
-            PackageConfidence(name="x", confidence=1.5, reason="bad")
-
-    def test_confidence_too_low(self) -> None:
-        with pytest.raises(ValidationError):
-            PackageConfidence(name="x", confidence=-0.1, reason="bad")
-
-
-class TestMainExecutionAnalysis:
-    def test_construction(self) -> None:
-        analysis = MainExecutionAnalysis(
-            packages_likely_breaking=[
-                PackageConfidence(name="flask", confidence=0.9, reason="ImportError"),
-            ],
-            packages_likely_safe=["requests"],
-            overall_test_passed=False,
-            raw_error_summary="ImportError: cannot import name 'escape' from 'markupsafe'",
-        )
-        assert len(analysis.packages_likely_breaking) == 1
-        assert analysis.packages_likely_breaking[0].name == "flask"
-        assert analysis.packages_likely_safe == ["requests"]
-        assert analysis.overall_test_passed is False
-
-    def test_all_pass(self) -> None:
-        analysis = MainExecutionAnalysis(
-            packages_likely_breaking=[],
-            packages_likely_safe=["requests", "flask"],
-            overall_test_passed=True,
-            raw_error_summary="",
-        )
-        assert analysis.overall_test_passed is True
-        assert len(analysis.packages_likely_breaking) == 0
-
-
 class TestJobState:
     def test_valid_values(self) -> None:
         assert JobState("pending") == JobState.PENDING
@@ -507,3 +431,15 @@ class TestScanWebhookPayloadGitFields:
     def test_git_provider_unknown_rejected(self) -> None:
         with pytest.raises(ValidationError):
             ScanWebhookPayload(repo_url="https://bitbucket.org/a/b", git_provider="bitbucket")
+
+
+def test_unused_models_are_gone() -> None:
+    from migratowl.models import schemas
+
+    for name in ("ExecutionResult", "PackageConfidence", "MainExecutionAnalysis"):
+        assert not hasattr(schemas, name), name
+
+
+def test_job_status_has_no_unused_lease_fields() -> None:
+    assert "owner_pid" not in JobStatus.model_fields
+    assert "heartbeat_at" not in JobStatus.model_fields

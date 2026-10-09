@@ -145,3 +145,27 @@ class TestCreateJobStoreSqlite:
         settings = Settings(_env_file=None, persistence_backend="sqlite", jobs_db_path=db_path)
         store = create_job_store(settings)
         assert isinstance(store, SqliteJobStore)
+
+
+def test_database_from_0_6_with_lease_columns_still_loads(db_path: str, payload: ScanWebhookPayload) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE jobs (job_id TEXT PRIMARY KEY, state TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, result_json TEXT, error TEXT, sandbox_id TEXT, "
+        "retry_count INTEGER NOT NULL DEFAULT 0, side_effects_done INTEGER NOT NULL DEFAULT 0, "
+        "owner_pid INTEGER, heartbeat_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO jobs VALUES ('j1', 'interrupted', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', "
+        "?, NULL, NULL, 'sb-1', 1, 0, 4242, '2026-01-01T00:00:00+00:00')",
+        (payload.model_dump_json(),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteJobStore(db_path)
+    job = store.get("j1")
+    assert job is not None and job.state == JobState.INTERRUPTED and job.sandbox_id == "sb-1"
+    assert store.create(payload).job_id

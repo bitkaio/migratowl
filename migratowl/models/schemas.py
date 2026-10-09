@@ -121,16 +121,6 @@ class ScanResult(BaseModel):
     registry_failures: list[RegistryFailure] = []
 
 
-class ExecutionResult(BaseModel):
-    """Sandbox command execution result."""
-
-    command_run: str
-    exit_code: int
-    stdout: str
-    stderr: str
-    truncated: bool = False
-
-
 class ChangelogResult(TypedDict):
     """Return envelope for fetch_changelog tool."""
 
@@ -139,23 +129,6 @@ class ChangelogResult(TypedDict):
     strategy_used: int
     truncated: bool
     format_warning: bool
-
-
-class PackageConfidence(BaseModel):
-    """Per-package confidence that this package caused a failure."""
-
-    name: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str
-
-
-class MainExecutionAnalysis(BaseModel):
-    """Agent's analysis after running main/ with all deps updated."""
-
-    packages_likely_breaking: list[PackageConfidence]
-    packages_likely_safe: list[str]
-    overall_test_passed: bool
-    raw_error_summary: str
 
 
 class AnalysisReport(BaseModel):
@@ -217,10 +190,6 @@ class JobStatus(BaseModel):
     retry_count: int = 0
     # Guards duplicate PR comments / callbacks when a job is resumed.
     side_effects_done: bool = False
-    # Lease — identifies the process that owns a RUNNING job, so a restarted
-    # process only reconciles jobs whose owner is gone (stale lease).
-    owner_pid: int | None = None
-    heartbeat_at: datetime | None = None
 
 
 class WebhookAcceptedResponse(BaseModel):

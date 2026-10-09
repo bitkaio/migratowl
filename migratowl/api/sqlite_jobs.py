@@ -49,9 +49,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     sandbox_id TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
-    side_effects_done INTEGER NOT NULL DEFAULT 0,
-    owner_pid INTEGER,
-    heartbeat_at TEXT
+    side_effects_done INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -96,10 +94,6 @@ class SqliteJobStore:
             sandbox_id=row["sandbox_id"],
             retry_count=row["retry_count"],
             side_effects_done=bool(row["side_effects_done"]),
-            owner_pid=row["owner_pid"],
-            heartbeat_at=(
-                datetime.fromisoformat(row["heartbeat_at"]) if row["heartbeat_at"] else None
-            ),
         )
 
     # ------------------------------------------------------------------

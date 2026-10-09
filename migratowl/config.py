@@ -145,10 +145,6 @@ class Settings(BaseSettings):
     # Logging for migratowl.* (DEBUG, INFO, WARNING, ERROR)
     log_level: str = "INFO"
 
-    # API server
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-
     # Package registries. Unset = the public registries. A mirror (Artifactory, Nexus, devpi, Verdaccio, a
     # Go proxy) is used for the version checks and written into the sandbox's tool config for installs.
     pypi_url: str | None = None  # base of the PyPI JSON API; pip uses <base>/simple

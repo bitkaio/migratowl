@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Removed settings and models nothing used** — `MIGRATOWL_API_HOST` / `MIGRATOWL_API_PORT` were documented but
+  never read (the bind address comes from uvicorn's `--host` / `--port`; the server image uses `0.0.0.0:8000`), so
+  they are gone from the settings and docs. The unused `ExecutionResult`, `PackageConfidence` and
+  `MainExecutionAnalysis` models and the never-set job lease fields (`owner_pid`, `heartbeat_at`) are removed too;
+  existing SQLite job databases keep working.
+
 - **Dependencies refreshed within their current majors** — FastAPI 0.141, pydantic 2.14, pydantic-settings 2.15,
   langchain-core 1.6, langchain 1.4, langgraph 1.2.13, langfuse 4.15, plus pytest, ruff and langgraph-cli in the dev
   group. The dev group now requires `langgraph-api>=0.11.1`; without it the resolver picked an older `langgraph dev`
