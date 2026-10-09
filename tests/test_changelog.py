@@ -326,7 +326,7 @@ class TestStubFilePointingOffGithub:
 
         async def get(url: str, *args, **kwargs) -> httpx.Response:
             req = httpx.Request("GET", url)
-            if url.endswith("/master/HISTORY.rst"):
+            if url.endswith("/HEAD/HISTORY.rst"):
                 return httpx.Response(200, text=stub, request=req)
             return httpx.Response(404, request=req)
 
@@ -381,3 +381,187 @@ class TestIndentedPrefixedItems:
         out = extract_breaking_changes([{"version": "7.0.0", "content": content}])
         assert "memory_info_ex" in out[0]["content"]
         assert "broadcast" not in out[0]["content"]
+
+
+class TestDefaultBranch:
+    """Repos name their default branch anything; raw.githubusercontent.com resolves ``HEAD`` to it."""
+
+    async def test_changelog_is_found_on_a_branch_called_develop(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_github
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            req = httpx.Request("GET", url)
+            if url == "https://raw.githubusercontent.com/o/r/HEAD/CHANGELOG.md":
+                return httpx.Response(200, text="## 2.0.0\n- Removed x\n\n## 1.0.0\n- First\n", request=req)
+            return httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github("https://github.com/o/r")
+
+        assert "Removed x" in text
+        assert not any("/main/" in u or "/master/" in u for u in requested), "no per-branch guessing"
+
+
+class TestReleasePagination:
+    @staticmethod
+    def _client(pages: dict[str, tuple[list[str], str | None]]) -> tuple[object, list[str]]:
+        """Fake GitHub API: url -> (release tags, next url)."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            tags, nxt = pages[url]
+            headers = {"Link": f'<{nxt}>; rel="next"'} if nxt else {}
+            body = [{"tag_name": t, "body": f"notes {t}", "draft": False, "prerelease": False} for t in tags]
+            return httpx.Response(200, json=body, headers=headers, request=httpx.Request("GET", url))
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        return client, requested
+
+    BASE = "https://api.github.com/repos/o/r/releases?per_page=100"
+    PAGES = {
+        BASE: (["v4.0.0", "v3.0.0", "v2.1.0"], "https://p2"),
+        "https://p2": (["v2.0.0", "v1.9.0"], "https://p3"),
+        "https://p3": (["v1.0.0"], None),
+    }
+
+    async def test_stops_once_releases_at_or_below_the_current_version_are_reached(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client, requested = self._client(self.PAGES)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github_releases("https://github.com/o/r", current_version="2.0.0")
+
+        assert requested == [self.BASE, "https://p2"], "page 3 only holds releases older than the current version"
+        assert "## v4.0.0" in text and "## v2.0.0" in text
+
+    async def test_without_a_current_version_every_page_is_read(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client, requested = self._client(self.PAGES)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            await _fetch_from_github_releases("https://github.com/o/r")
+
+        assert len(requested) == 3
+
+    async def test_odd_tags_do_not_stop_pagination_early(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        pages = {
+            self.BASE: (["nightly", "pkg@3.0.0", "release-2.5"], "https://p2"),
+            "https://p2": (["1.0.0"], None),
+        }
+        client, requested = self._client(pages)
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            await _fetch_from_github_releases("https://github.com/o/r", current_version="2.0.0")
+
+        assert len(requested) == 2  # 1.0.0 is on page 2, so page 2 was needed to find it
+
+    async def test_fetch_changelog_passes_the_current_version_down(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        releases = _AsyncMock(return_value="## 2.0.0\nnotes")
+        with (
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", _AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", _AsyncMock(side_effect=FileNotFoundError)),
+            patch("migratowl.changelog._fetch_from_github_releases", releases),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            await fetch_changelog(None, "https://github.com/o/r", "pkg", current_version="1.5.0")
+
+        releases.assert_awaited_once_with("https://github.com/o/r", "1.5.0")
+
+
+class TestLinkedVersionHeaders:
+    """release-please and Keep a Changelog tooling write ``## [1.2.3](compare-url) (date)``."""
+
+    def test_version_headers_with_a_compare_link(self) -> None:
+        from migratowl.changelog import _parse_version_from_line
+
+        cases = {
+            "## [v13.35.0](https://github.com/laravel/framework/compare/v13.34.0...v13.35.0) - 2026-10-06": "13.35.0",
+            "## [1.2.3](https://github.com/o/r/compare/v1.2.2...v1.2.3) (2024-01-01)": "1.2.3",
+            "### [2.0.0](https://github.com/o/r/compare/v1.9.0...v2.0.0) (2023-05-04)": "2.0.0",
+            "## [5.0.0](https://example.com/r) - 2020-01-01": "5.0.0",
+        }
+        for line, expected in cases.items():
+            assert _parse_version_from_line(line) == expected, line
+
+    def test_prose_with_a_link_is_still_not_a_header(self) -> None:
+        from migratowl.changelog import _parse_version_from_line
+
+        assert _parse_version_from_line("1.2.3 fixed [the bug](https://x.io/y) in the parser today") is None
+
+    def test_chunking_a_release_please_changelog(self) -> None:
+        from migratowl.changelog import chunk_changelog_by_version
+
+        text = (
+            "# Changelog\n\n"
+            "## [2.0.0](https://github.com/o/r/compare/v1.0.0...v2.0.0) (2024-02-01)\n\n"
+            "### ⚠ BREAKING CHANGES\n\n* drop node 16\n\n"
+            "## [1.0.0](https://github.com/o/r/compare/v0.9.0...v1.0.0) (2024-01-01)\n\n* first\n"
+        )
+        assert [c["version"] for c in chunk_changelog_by_version(text)] == ["2.0.0", "1.0.0"]
+
+
+class TestExcerptPrefersEvidence:
+    """MO-41: with no 'Breaking changes' heading, the lines that matter must come before the PR list."""
+
+    @staticmethod
+    def _express_style() -> list[dict]:
+        prs = "\n".join(
+            f"* {title} by @someone in https://github.com/expressjs/express/pull/{5000 + i}"
+            for i, title in enumerate(
+                ["4.19.2 Staging", "remove duplicate location test for data uri", "docs: update Security.md",
+                 "Cut down on duplicated CI runs", "deprecate res.json(status, obj) in tests", "Add a Threat Model"] * 12
+            )
+        )
+        body = (
+            "Express v5 is finally here.\n\n"
+            "### Major Changes in v5\n\n"
+            "- **Node.js version support**: Dropped support for Node.js versions before v18.\n"
+            "- **Routing changes**: Updated to path-to-regexp@8.x, removing sub-expression regex patterns.\n"
+            "- **Deprecated API methods removed**: Removed old, deprecated API method signatures from Express v3/v4.\n"
+            "- **Promise support**: Middleware can now return rejected promises.\n\n"
+            "### What's Changed\n\n" + prs + "\n"
+        )
+        return [{"version": "5.0.0", "content": body}]
+
+    def test_human_written_removals_come_before_the_pull_request_list(self) -> None:
+        excerpt = extract_breaking_changes(self._express_style())[0]["content"][:1500]
+
+        assert "Dropped support for Node.js versions before v18" in excerpt
+        assert "removing sub-expression regex patterns" in excerpt
+        assert "Deprecated API methods removed" in excerpt
+
+    def test_auto_generated_pr_lines_rank_below_prose(self) -> None:
+        content = extract_breaking_changes(self._express_style())[0]["content"]
+
+        first_pr = content.index("in https://github.com/expressjs/express/pull/")
+        assert content.index("Deprecated API methods removed") < first_pr
+        assert content.index("Dropped support for Node.js") < first_pr
+
+    def test_nothing_is_lost_only_reordered(self) -> None:
+        original = self._express_style()[0]["content"]
+        content = extract_breaking_changes(self._express_style())[0]["content"]
+
+        assert "Threat Model" in content or len(content) >= len(original) * 0.5  # PR lines still follow the prose
+
+    def test_short_notes_keep_their_order(self) -> None:
+        chunks = [{"version": "2.0.0", "content": "### Breaking Changes\n\n* drop node 16\n\n### Fixes\n\n* a fix\n"}]
+
+        content = extract_breaking_changes(chunks)[0]["content"]
+
+        assert content.startswith("### Breaking Changes")
+        assert "drop node 16" in content

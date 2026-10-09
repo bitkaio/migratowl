@@ -48,6 +48,7 @@ def create_fetch_changelog_tool() -> Any:
             changelog_url=dep.get("changelog_url"),
             repository_url=dep.get("repository_url"),
             dep_name=dep["name"],
+            current_version=dep.get("current_version"),
         )
         chunks = chunk_changelog_by_version(text)
         filtered = filter_chunks_by_version_range(

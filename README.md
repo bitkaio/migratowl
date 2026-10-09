@@ -602,6 +602,7 @@ Credentials are sent only to the mirror hosts, never to the public registries or
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server (e.g. `https://github.corp.com/api/v3`) |
 | `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses. Also used to clone private repositories on the host of `GITLAB_API_URL` |
 | `GITLAB_API_URL` | `https://gitlab.com/api/v4` | Override for self-hosted GitLab |
+| `MIGRATOWL_GITLAB_TOKEN_USER` | `oauth2` | Username sent with `GITLAB_TOKEN` when cloning: `oauth2` for personal, project and group access tokens, `gitlab-ci-token` for a CI job token |
 
 Private repositories: with the token for the repository's host set, `repo_url` needs no credentials. The token goes to `git clone` as a request header for that host only. It is not written to the clone's `.git/config`, which code in the sandbox could read, and it is not echoed in errors. Credentials embedded in `repo_url` (`https://user:token@host/…`) are handled the same way. If the host rejects the token, the clone is retried without it, so a public repository still works.
 

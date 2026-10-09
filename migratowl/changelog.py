@@ -36,8 +36,12 @@ async def fetch_changelog(
     changelog_url: str | None,
     repository_url: str | None,
     dep_name: str,
+    current_version: str | None = None,
 ) -> tuple[str, list[str]]:
     """Fetch changelog text, trying changelog_url first, then GitHub raw fallback.
+
+    ``current_version`` lets the GitHub Releases strategy stop paging once it has reached
+    releases the project is already on.
 
     Returns (text, warnings) where warnings is a list of diagnostic messages
     explaining why the changelog could not be fetched (empty on success).
@@ -78,6 +82,8 @@ async def fetch_changelog(
         )
         for strategy in ordered:
             try:
+                if strategy is _fetch_from_github_releases:
+                    return await strategy(repository_url, current_version), []
                 return await strategy(repository_url), []
             except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
                 logger.debug("strategy %s failed for %s: %s", strategy.__name__, dep_name, exc)
@@ -284,7 +290,8 @@ async def _fetch_from_github(repository_url: str) -> str:
         raise ValueError(f"Cannot parse GitHub URL: {repository_url}")
 
     owner, repo = match.group(1), match.group(2)
-    branches = ["main", "master"]
+    # HEAD is the repository's default branch, whatever it is called (main, master, develop, trunk ...).
+    branches = ["HEAD"]
     sem = asyncio.Semaphore(10)
 
     client = get_http_client()
@@ -338,14 +345,28 @@ def _parse_next_link(link_header: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-async def _fetch_from_github_releases(repository_url: str) -> str:
+_TAG_VERSION = re.compile(r"\d+(?:\.\d+)+")
+
+
+def _tag_reached(tag: str, current: Version | tuple[int, ...] | None) -> bool:
+    """True when ``tag`` names a version at or below ``current`` (tags without a version never do)."""
+    if current is None or not (m := _TAG_VERSION.search(tag)):
+        return False
+    version = _coerce_comparable(m.group(0))
+    if version is None or type(version) is not type(current):
+        return False
+    return version <= current  # type: ignore[operator]
+
+
+async def _fetch_from_github_releases(repository_url: str, current_version: str | None = None) -> str:
     """Fetch release notes from the GitHub Releases API.
 
-    Follows ``Link: <next>`` pagination headers to retrieve all releases, not
-    just the first 100.  Constructs changelog text from release ``body`` fields,
-    skipping drafts and pre-releases.  Raises ``FileNotFoundError`` if no
-    usable releases exist.  Sends an ``Authorization`` header when
-    ``GITHUB_TOKEN`` is set.
+    Follows ``Link: <next>`` pagination headers, newest releases first. With a
+    ``current_version`` it stops after the page that reaches that version: older
+    releases cannot be part of the upgrade, and large repos have hundreds.
+    Constructs changelog text from release ``body`` fields, skipping drafts and
+    pre-releases.  Raises ``FileNotFoundError`` if no usable releases exist.
+    Sends an ``Authorization`` header when ``GITHUB_TOKEN`` is set.
     """
     match = re.search(r"github\.com[/:]([^/]+)/([^/#]+?)(?:\.git)?(?:[#/]|$)", repository_url)
     if not match:
@@ -359,12 +380,16 @@ async def _fetch_from_github_releases(repository_url: str) -> str:
     if settings.github_token:
         headers["Authorization"] = f"Bearer {settings.github_token}"
 
+    current = _coerce_comparable(_bound_version(current_version)) if current_version else None
     all_releases: list[dict] = []
     client = get_http_client()
     while url is not None:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
-        all_releases.extend(response.json())
+        page = response.json()
+        all_releases.extend(page)
+        if any(_tag_reached(str(r.get("tag_name", "")), current) for r in page):
+            break
         url = _parse_next_link(response.headers.get("Link"))
 
     usable = [r for r in all_releases if not r.get("draft") and not r.get("prerelease")]
@@ -415,8 +440,9 @@ def _parse_version_from_line(line: str) -> str | None:
     version = m.group(1)
     remainder = s[m.end() :].strip()
 
-    # Allow: nothing, ], closing **, optional "- YYYY-MM-DD" or "(YYYY-MM-DD)"
+    # Allow: nothing, ], closing **, a link target "[1.2.3](compare-url)", optional "- YYYY-MM-DD" or "(YYYY-MM-DD)"
     remainder = re.sub(r"^[]* ]+", "", remainder).strip()
+    remainder = re.sub(r"^\(https?://[^)\s]*\)", "", remainder).strip()
     remainder = re.sub(r"^[-–]\s*\d{4}[\d\-]*\s*", "", remainder).strip()
     remainder = re.sub(r"^\(\d{4}[\d\-]*\)\s*", "", remainder).strip()
 
@@ -597,6 +623,37 @@ _BREAKING_CHANGE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Lines that say what changed for a user, looser than the section-start patterns above.
+_CHANGE_WORDS = re.compile(
+    r"remov|deprecat|renam|breaking|incompatib|no[\s_-]?longer|drop(?:s|ped|ping)?\b|replac|migrat|"
+    r"now\s+(?:throws|requires|returns|rejects|defaults)|default(?:s|ed|ing)?\s+to|behaviou?r",
+    re.IGNORECASE,
+)
+# GitHub's auto-generated "What's Changed" items: "* title by @user in https://github.com/o/r/pull/12".
+_PR_LINE = re.compile(r"\bby\s+@\S+\s+in\s+https?://\S+/pull/\d+|\sin\s+https?://\S+/pull/\d+\s*$")
+# Excerpts are cut to a few hundred characters downstream; only text longer than this needs ranking.
+_RANK_ABOVE_CHARS = 1500
+
+
+def _rank_lines(text: str) -> str:
+    """Order a long section so the lines that matter survive a cut from the top.
+
+    Hand-written lines naming a removal, rename or behaviour change come first, then
+    auto-generated pull-request lines that do, then the remaining prose, then the other
+    pull-request lines. Nothing is dropped; short sections keep their order.
+    """
+    if len(text) <= _RANK_ABOVE_CHARS:
+        return text
+    tiers: list[list[str]] = [[], [], [], []]
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        is_pr = bool(_PR_LINE.search(line))
+        is_key = bool(_CHANGE_WORDS.search(line))
+        tiers[(0 if is_key else 2) if not is_pr else (1 if is_key else 3)].append(line)
+    return "\n".join(line for tier in tiers for line in tier)
+
+
 # Matches the start of a markdown heading or a blank line (section boundary).
 _SECTION_BOUNDARY = re.compile(r"(?:^|\n)(?=#{1,6}\s|\s*$)")
 
@@ -624,7 +681,11 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
 
         # Extract paragraphs around each match.
         extracted_sections: list[str] = []
+        covered_until = 0
         for m in matches:
+            # A match inside a section already taken (every item of a pull-request list matches) adds nothing.
+            if m.start() < covered_until:
+                continue
             # Find start of the line containing the match.
             line_start = content.rfind("\n", 0, m.start()) + 1
             # Find the end of the section: next blank line or heading.
@@ -634,13 +695,26 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
                 section_end = m.end() + boundary.start()
             else:
                 section_end = len(content)
+            covered_until = section_end
             section = content[line_start:section_end].strip()
             if section and section not in extracted_sections:
                 extracted_sections.append(section)
 
+        # Lines elsewhere in the notes that name a removal or behaviour change but do not start a
+        # section ("- **Node.js support**: Dropped support for Node < 18").
+        taken = {line.strip() for section in extracted_sections for line in section.splitlines()}
+        extra = [
+            line for line in content.splitlines()
+            if line.strip() and line.strip() not in taken and _CHANGE_WORDS.search(line)
+        ]
+        if extra and len(content) > _RANK_ABOVE_CHARS:
+            extracted_sections.append("\n".join(extra))
+
         result.append({
             "version": chunk["version"],
-            "content": "\n\n".join(extracted_sections) if extracted_sections else "(no breaking changes noted)",
+            "content": _rank_lines("\n\n".join(extracted_sections))
+            if extracted_sections
+            else "(no breaking changes noted)",
         })
 
     return result
