@@ -299,9 +299,12 @@ jobs:
       - name: Install pip-audit
         run: pip install --require-hashes -r .github/requirements/pip-audit.txt
 
+      # langchain-kubernetes is pinned by git tag (our fork): pip cannot hash a VCS requirement and the
+      # vulnerability databases do not know it, so it is left out here. Its own dependencies are still
+      # exported and audited.
       - name: Run pip-audit against lockfile
         run: |
-          uv export --frozen --no-dev --format requirements-txt > /tmp/reqs.txt
+          uv export --frozen --no-dev --format requirements-txt --no-emit-package langchain-kubernetes > /tmp/reqs.txt
           pip-audit --requirement /tmp/reqs.txt --strict
 
       # The sandbox runtime image pins its own dependency set, separate from
