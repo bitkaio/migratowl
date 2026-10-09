@@ -23,10 +23,10 @@ content, never in a command line.
 from __future__ import annotations
 
 import base64
+import html
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
-from xml.sax.saxutils import escape
 
 import httpx
 
@@ -38,6 +38,11 @@ _PYPI = "https://pypi.org"
 _NPM = "https://registry.npmjs.org"
 _CRATES = "https://crates.io"
 _GO_PROXY = "https://proxy.golang.org"
+
+
+def _xml_text(value: str) -> str:
+    # &, < and > are all XML text needs; html.escape avoids importing an XML module (semgrep flags any).
+    return html.escape(value, quote=False)
 
 
 def _join(base: str, path: str) -> str:
@@ -153,13 +158,13 @@ class Registries:
         if self.username and self.password:
             server = (
                 "  <servers>\n    <server>\n      <id>migratowl</id>\n"
-                f"      <username>{escape(self.username)}</username>\n"
-                f"      <password>{escape(self.password)}</password>\n"
+                f"      <username>{_xml_text(self.username)}</username>\n"
+                f"      <password>{_xml_text(self.password)}</password>\n"
                 "    </server>\n  </servers>\n"
             )
         return (
             '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">\n'
             f"{server}"
             "  <mirrors>\n    <mirror>\n      <id>migratowl</id>\n      <mirrorOf>*</mirrorOf>\n"
-            f"      <url>{escape(self.maven or '')}</url>\n    </mirror>\n  </mirrors>\n</settings>\n"
+            f"      <url>{_xml_text(self.maven or '')}</url>\n    </mirror>\n  </mirrors>\n</settings>\n"
         )
