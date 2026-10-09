@@ -156,6 +156,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Changelogs were missed for packages with `git://` or SSH repository URLs** — npm metadata such as ejs's
+  `git://github.com/mde/ejs.git` was kept as is, so no GitHub changelog or release notes were looked up. `git://`,
+  `git+ssh://`, `ssh://`, `git@host:owner/repo` and `github:owner/repo` now all become `https://host/owner/repo`.
+
 - **A production install could not start the server** — `uvicorn` was not a dependency; it only arrived through
   the dev group (`langgraph-cli`), so `uv sync --no-dev` produced an environment with no way to run
   `uvicorn migratowl.api.main:app`. It is now a runtime dependency.

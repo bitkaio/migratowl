@@ -1412,3 +1412,22 @@ class TestRegistryMirrors:
 
         assert str(seen[0].url) == "https://registry.npmjs.org/a"
         assert "Authorization" not in seen[0].headers
+
+
+class TestCleanGitUrl:
+    """npm repository fields come in several git spellings; changelog lookup needs the https page."""
+
+    def test_spellings_become_https(self) -> None:
+        from migratowl.registry import _clean_git_url
+
+        cases = {
+            "git://github.com/mde/ejs.git": "https://github.com/mde/ejs",
+            "git+https://github.com/expressjs/express.git": "https://github.com/expressjs/express",
+            "git+ssh://git@github.com/o/r.git": "https://github.com/o/r",
+            "ssh://git@gitlab.com/g/p.git": "https://gitlab.com/g/p",
+            "git@github.com:o/r.git": "https://github.com/o/r",
+            "github:o/r": "https://github.com/o/r",
+            "https://github.com/o/r": "https://github.com/o/r",
+        }
+        for raw, expected in cases.items():
+            assert _clean_git_url(raw) == expected, raw

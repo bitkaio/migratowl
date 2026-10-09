@@ -277,13 +277,27 @@ def forge_repo_url(url: str | None) -> str | None:
     return f"https://{m[1]}/{m[2]}/{m[3]}" if m else None
 
 
+_SCP_GIT_URL = re.compile(r"^[\w.-]+@([\w.-]+):(.+)$")  # git@github.com:owner/repo
+_SHORTHAND = {"github:": "https://github.com/", "gitlab:": "https://gitlab.com/", "bitbucket:": "https://bitbucket.org/"}
+
+
 def _clean_git_url(url: str) -> str:
-    """Strip ``git+`` prefix and ``.git`` suffix from a repository URL."""
-    if url.startswith("git+"):
-        url = url[4:]
-    if url.endswith(".git"):
-        url = url[:-4]
-    return url
+    """The https page of a repository URL in any spelling npm and PyPI use.
+
+    ``git+https://…``, ``git://…``, ``git+ssh://git@host/…``, ``git@host:owner/repo`` and
+    ``github:owner/repo`` all become ``https://host/owner/repo``; ``.git`` is dropped.
+    """
+    url = url.strip().removeprefix("git+")
+    for prefix, base in _SHORTHAND.items():
+        if url.startswith(prefix):
+            url = base + url[len(prefix):]
+    if m := _SCP_GIT_URL.match(url):
+        url = f"https://{m[1]}/{m[2]}"
+    for scheme in ("git://", "ssh://"):
+        if url.startswith(scheme):
+            host, _, path = url[len(scheme):].partition("/")
+            url = f"https://{host.rpartition('@')[2]}/{path}"  # drop a git@ user
+    return url.removesuffix(".git")
 
 
 def _extract_npm_repo_url(repository: dict[str, Any] | str | None) -> str | None:
