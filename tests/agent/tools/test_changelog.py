@@ -112,3 +112,26 @@ class TestFetchChangelogTool:
             result = json.loads(await tool.ainvoke({"outdated_dep_json": input_json}))
 
         assert any("truncated" in w.lower() for w in result["warnings"])
+
+class TestMajorReleaseSurvivesTruncation:
+    async def test_major_release_notes_kept_when_budget_is_tight(self) -> None:
+        # Release notes arrive newest first; a long 5.1.0 must not push 5.0.0
+        # (where the breaking changes are) out of the budget.
+        changelog = "\n".join([
+            "## 5.1.0\nBREAKING CHANGE: " + "minor noise " * 800,
+            "## 5.0.0\nBREAKING CHANGE: app.del() removed",
+            "## 4.22.0\nBREAKING CHANGE: " + "older noise " * 800,
+        ])
+        input_json = json.dumps({"name": "express", "current_version": "4.21.2", "latest_version": "5.1.0",
+                                 "changelog_url": "https://example.com/CHANGELOG.md"})
+        with (
+            patch("migratowl.agent.tools.changelog.fetch_changelog", new_callable=AsyncMock,
+                  return_value=(changelog, [])),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 3_000
+            raw = await create_fetch_changelog_tool().ainvoke({"outdated_dep_json": input_json})
+
+        chunks = json.loads(raw)["chunks"]
+        assert chunks[0]["version"] == "5.0.0"
+        assert "app.del() removed" in chunks[0]["content"]

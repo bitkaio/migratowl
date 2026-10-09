@@ -70,6 +70,8 @@ class PreparedScan(BaseModel):
     skipped: list[str]
     update_failures: dict[str, str] = {}
     validations: list[EcosystemValidation] = []
+    # name → breaking-change excerpt fetched in code for pending major bumps
+    changelog_excerpts: dict[str, str] = {}
 
 
 def parse_major(version: str) -> int | None:
@@ -86,8 +88,13 @@ def is_major_bump(current: str, latest: str) -> bool | None:
     return new > cur
 
 
+def dependency_is_major_bump(dep: OutdatedDependency) -> bool | None:
+    """Major bump measured from the installed version (lockfile) when known, else the declared one."""
+    return is_major_bump(dep.installed_version or dep.current_version, dep.latest_version)
+
+
 def _major_gap(dep: OutdatedDependency) -> int:
-    cur, new = parse_major(dep.current_version), parse_major(dep.latest_version)
+    cur, new = parse_major(dep.installed_version or dep.current_version), parse_major(dep.latest_version)
     return new - cur if cur is not None and new is not None else 0
 
 
@@ -159,6 +166,11 @@ async def prepare_scan(
     if clone_out.startswith("Failed"):
         raise PipelineError(clone_out)
 
+    # Before anything installs: pip, npm, Go, Cargo and Maven read their mirrors from config files.
+    registries_out = await tools.configure_registries.ainvoke({}, config=config)
+    if registries_out.startswith("Failed"):
+        raise PipelineError(registries_out)
+
     deps_raw = await tools.scan_dependencies.ainvoke({}, config=config)
     try:
         deps = [Dependency(**item) for item in json.loads(deps_raw)]
@@ -203,7 +215,8 @@ async def prepare_scan(
     for ecosystem, packages in by_ecosystem.items():
         packages_json = json.dumps([
             {"name": p.name, "current_version": p.current_version, "latest_version": p.latest_version,
-             "manifest_path": p.manifest_path}
+             "manifest_path": p.manifest_path, "module_path": p.module_path,
+             "version_key": p.version_key}
             for p in packages
         ])
         summary = await tools.update_dependencies.ainvoke(
@@ -216,8 +229,9 @@ async def prepare_scan(
         prepared.validations.append(summarize_validation(ecosystem, raw, tail_chars))
 
     logger.info(
-        "Pipeline prepared %d candidate(s), %d skipped, validations=%s",
-        len(candidates), len(skipped), {v.ecosystem: v.passed for v in prepared.validations},
+        "Pipeline prepared %d candidate(s), %d skipped, %d update failure(s), validations=%s",
+        len(candidates), len(skipped), len(prepared.update_failures),
+        {v.ecosystem: v.passed for v in prepared.validations},
     )
     return prepared
 
@@ -234,7 +248,7 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
         return (
             passed.get(dep.ecosystem.value, False)
             and dep.name not in prepared.update_failures
-            and is_major_bump(dep.current_version, dep.latest_version) is False
+            and dependency_is_major_bump(dep) is False
         )
 
     # One name can appear in several manifests; the report has one verdict per name, so
@@ -256,6 +270,46 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
     return resolved, pending
 
 
+_EXCERPT_CHARS = 1500
+_NO_BREAKING = "(no breaking changes noted)"
+_MAJOR_RELEASE = re.compile(r"^v?\d+\.0\.0$")
+
+
+async def fetch_major_changelogs(
+    tools: MigratowlTools, pending: list[OutdatedDependency], config: RunnableConfig
+) -> dict[str, str]:
+    """Fetch a breaking-change excerpt for each pending major bump (best effort).
+
+    Doing this in code means a citation exists even when the model skips the
+    changelog tool; the excerpt goes into the brief and backs empty citations.
+    """
+    excerpts: dict[str, str] = {}
+    for dep in pending:
+        if dep.name in excerpts or dependency_is_major_bump(dep) is not True:
+            continue
+        payload = {
+            "name": dep.name,
+            "current_version": dep.installed_version or dep.current_version,
+            "latest_version": dep.latest_version,
+            "changelog_url": dep.changelog_url,
+            "repository_url": dep.repository_url,
+        }
+        try:
+            raw = await tools.fetch_changelog.ainvoke({"outdated_dep_json": json.dumps(payload)}, config=config)
+            chunks = json.loads(raw).get("chunks", [])
+        except Exception:
+            logger.info("No changelog for %s", dep.name, exc_info=True)
+            continue
+        useful = [c for c in chunks if isinstance(c, dict) and c.get("content") and c["content"] != _NO_BREAKING]
+        # A new major's X.0.0 notes carry the breaking changes; put them first so the
+        # character cap does not cut them off behind later minor releases.
+        useful.sort(key=lambda c: not _MAJOR_RELEASE.match(str(c.get("version", ""))))
+        text = "\n\n".join(f"{c.get('version', '')}\n{c['content']}".strip() for c in useful)
+        if text:
+            excerpts[dep.name] = text[:_EXCERPT_CHARS]
+    return excerpts
+
+
 def build_analysis_brief(
     payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
 ) -> str:
@@ -268,10 +322,13 @@ def build_analysis_brief(
         f"Packages to analyze ({len(pending)}):",
     ]
     for dep in pending:
-        bump = is_major_bump(dep.current_version, dep.latest_version)
+        bump = dependency_is_major_bump(dep)
+        version = dep.current_version
+        if dep.installed_version:
+            version = f"{dep.installed_version} (declared {dep.current_version})"
         kind = "MAJOR bump" if bump else ("minor/patch bump" if bump is False else "unknown bump size")
         lines.append(
-            f"- {dep.name} {dep.current_version} -> {dep.latest_version} "
+            f"- {dep.name} {version} -> {dep.latest_version} "
             f"({dep.ecosystem.value}, {dep.manifest_path}, {kind})"
         )
     pending_names = {dep.name for dep in pending}
@@ -286,5 +343,10 @@ def build_analysis_brief(
         else:
             lines.append(f'- {v.ecosystem}: FAILED at step "{v.failed_step}". Output tail:')
             lines.append(f"```\n{v.output_tail}\n```")
+    excerpts = {name: text for name, text in prepared.changelog_excerpts.items() if name in pending_names}
+    if excerpts:
+        lines += ["", "Changelog excerpts (already fetched; cite from these instead of fetching again):"]
+        for name, text in excerpts.items():
+            lines += [f"- {name}:", f"```\n{text}\n```"]
     lines += ["", "Return exactly one AnalysisReport per package listed above."]
     return "\n".join(lines)

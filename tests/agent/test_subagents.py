@@ -105,3 +105,35 @@ class TestPackageAnalyzerPromptMajorVersionChangelog:
 
         lower = PACKAGE_ANALYZER_PROMPT.lower()
         assert "do not call fetch_changelog" in lower or "do not call" in lower
+
+
+class TestPackageAnalyzerPromptMatchesMainAgent:
+    """The subagent must follow the same tool rules as the main agent's prompt."""
+
+    def _prompt(self) -> str:
+        from migratowl.agent.subagents import PACKAGE_ANALYZER_PROMPT
+
+        return PACKAGE_ANALYZER_PROMPT
+
+    def test_validates_with_validate_project(self) -> None:
+        # validate_project picks the ecosystem's build/test steps and the folder's
+        # Python venv; execute_project is only for custom commands.
+        prompt = self._prompt()
+        assert 'validate_project("{package_name}", ecosystem)' in prompt
+        assert prompt.index("validate_project(") < prompt.index("execute_project")
+
+    def test_never_directs_to_deepagents_builtin_tools(self) -> None:
+        # The main SYSTEM_PROMPT forbids these; they do not work against the K8s sandbox.
+        for line in self._prompt().splitlines():
+            for builtin in ("read_file", "write_file", "edit_file", "ls,", "grep", "execute:", "glob"):
+                if builtin in line:
+                    assert line.lstrip().lower().startswith("- do not use"), f"suggests {builtin}: {line!r}"
+        assert "read_manifest" in self._prompt()
+
+    def test_inputs_match_what_the_main_agent_sends(self) -> None:
+        # The main agent passes name, current_version, latest_version, ecosystem — no commands.
+        assert "install/test commands" not in self._prompt()
+
+    def test_text_fields_are_empty_strings_not_null(self) -> None:
+        # AnalysisReport types these as str; null fails validation.
+        assert "null" not in self._prompt()

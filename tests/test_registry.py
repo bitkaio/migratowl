@@ -903,6 +903,21 @@ class TestQueryMavenCentralModes:
         assert result is not None
         assert result.latest_version == "3.3.1"
 
+    async def test_version_key_is_passed_through(self) -> None:
+        from migratowl.registry import query_maven_central
+
+        transport = _mock_transport({
+            "/solrsearch/select": httpx.Response(200, json=self._maven_gav_response(["6.1.0", "6.2.0"])),
+        })
+        opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=False)
+        async with httpx.AsyncClient(transport=transport, base_url="https://search.maven.org") as client:
+            dep = _dep("org.springframework:spring-core", "6.1.0", Ecosystem.JAVA, "pom.xml")
+            dep.version_key = "spring.version"
+            result = await query_maven_central(client, dep, opts)
+
+        assert result is not None
+        assert result.version_key == "spring.version"
+
 
 # ===========================================================================
 # check_outdated with CheckOptions
@@ -1010,3 +1025,409 @@ class TestCheckOutdatedReturnsFailures:
         assert outdated[0].name == "flask"
         assert len(failures) == 1
         assert failures[0].name == "requests"
+
+
+# ===========================================================================
+# Semver ecosystems keep the registry's own version strings
+# ===========================================================================
+
+
+class TestSemverVersionStrings:
+    """npm, crates and Go versions are semver: ``-x`` is a prerelease, and the
+    version string must reach ``npm install`` / ``cargo update`` unchanged."""
+
+    @staticmethod
+    async def _npm(versions: list[str], current: str, *, include_prerelease: bool = False):
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/pkg": httpx.Response(200, json={"versions": {v: {} for v in versions}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_npm(
+                client,
+                _dep("pkg", current, Ecosystem.NODEJS, "package.json"),
+                CheckOptions(include_prerelease=include_prerelease),
+            )
+
+    async def test_npm_dash_zero_is_a_prerelease_not_the_latest(self) -> None:
+        # rollup published 5.0.0-0; PEP 440 reads it as 5.0.0.post0 (a release).
+        result = await self._npm(["3.30.0", "4.9.0", "5.0.0-0"], "3.30.0")
+        assert result is not None
+        assert result.latest_version == "4.9.0"
+
+    async def test_npm_prerelease_keeps_its_npm_spelling(self) -> None:
+        result = await self._npm(["1.0.0", "1.1.0-beta.1"], "1.0.0", include_prerelease=True)
+        assert result is not None
+        assert result.latest_version == "1.1.0-beta.1"
+
+    async def test_npm_prerelease_sorts_before_its_release(self) -> None:
+        result = await self._npm(["1.0.0", "2.0.0-rc.1", "2.0.0"], "1.0.0", include_prerelease=True)
+        assert result.latest_version == "2.0.0"
+
+    async def test_npm_numeric_prerelease_identifiers_compare_numerically(self) -> None:
+        result = await self._npm(["1.0.0", "2.0.0-beta.2", "2.0.0-beta.10"], "1.0.0", include_prerelease=True)
+        assert result.latest_version == "2.0.0-beta.10"
+
+    async def test_crates_dash_zero_is_a_prerelease(self) -> None:
+        from migratowl.registry import query_crates
+
+        transport = _mock_transport({
+            "/api/v1/crates/serde": httpx.Response(200, json={
+                "crate": {},
+                "versions": [{"num": v, "yanked": False} for v in ["1.0.0", "1.2.0", "2.0.0-0"]],
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_crates(client, _dep("serde", "1.0.0", Ecosystem.RUST, "Cargo.toml"))
+        assert result is not None
+        assert result.latest_version == "1.2.0"
+
+    async def test_go_rc_is_a_prerelease(self) -> None:
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({
+            "/github.com/a/b/@v/list": httpx.Response(200, text="v1.0.0\nv1.5.0\nv1.6.0-rc.1\n"),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_golang(client, _dep("github.com/a/b", "1.0.0", Ecosystem.GO, "go.mod"))
+        assert result is not None
+        assert result.latest_version == "v1.5.0"
+
+    async def test_pypi_keeps_the_published_spelling(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/pkg/json": httpx.Response(200, json={"info": {}, "releases": {"1.0": [], "2.0-1": []}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("pkg", "==1.0", Ecosystem.PYTHON))
+        assert result is not None
+        assert result.latest_version == "2.0-1"  # not normalized to "2.0.post1"
+
+
+class TestPypiYanked:
+    @staticmethod
+    async def _latest(releases: dict) -> str | None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={"info": {}, "releases": releases}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("requests", "==2.31.0", Ecosystem.PYTHON))
+        return result.latest_version if result else None
+
+    async def test_fully_yanked_release_is_never_latest(self) -> None:
+        latest = await self._latest({
+            "2.31.0": [{"yanked": False}],
+            "2.32.0": [{"yanked": True}, {"yanked": True}],
+            "2.32.1": [{"yanked": False}],
+            "2.33.0": [{"yanked": True}],
+        })
+        assert latest == "2.32.1"
+
+    async def test_release_with_one_unyanked_file_still_counts(self) -> None:
+        latest = await self._latest({
+            "2.31.0": [{"yanked": False}],
+            "2.32.0": [{"yanked": True}, {"yanked": False}],
+        })
+        assert latest == "2.32.0"
+
+
+class TestCheckOutdatedUsesSharedClient:
+    async def test_registry_queries_are_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Registries throttle with 429/503; the shared client's RetryTransport retries them.
+        from migratowl import registry
+        from migratowl.http import RetryTransport
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503)
+            return httpx.Response(200, json={"versions": {"1.0.0": {}, "2.0.0": {}}})
+
+        client = httpx.AsyncClient(transport=RetryTransport(httpx.MockTransport(handler), backoff_base=0.0))
+        monkeypatch.setattr(registry, "get_http_client", lambda: client)
+        try:
+            outdated, failures = await registry.check_outdated([_dep("pkg", "1.0.0", Ecosystem.NODEJS, "package.json")])
+        finally:
+            await client.aclose()
+
+        assert failures == []
+        assert [o.latest_version for o in outdated] == ["2.0.0"]
+        assert calls["n"] == 2
+
+
+class TestPypiRequiresPython:
+    """Releases the sandbox's Python cannot install are not upgrade targets."""
+
+    @staticmethod
+    async def _latest(releases: dict, python_version: str | None) -> str | None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/sphinx/json": httpx.Response(200, json={"info": {}, "releases": releases}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(
+                client, _dep("sphinx", "==7.4.7", Ecosystem.PYTHON), CheckOptions(python_version=python_version)
+            )
+        return result.latest_version if result else None
+
+    RELEASES = {
+        "7.4.7": [{"requires_python": ">=3.9"}],
+        "9.0.0": [{"requires_python": ">=3.11"}],
+        "9.1.0": [{"requires_python": ">=3.14"}],
+        "9.2.0": [{"requires_python": "not a specifier"}],
+    }
+
+    async def test_skips_releases_requiring_a_newer_python(self) -> None:
+        releases = {k: v for k, v in self.RELEASES.items() if k != "9.2.0"}
+        assert await self._latest(releases, "3.13") == "9.0.0"
+
+    async def test_without_python_version_every_release_counts(self) -> None:
+        releases = {k: v for k, v in self.RELEASES.items() if k != "9.2.0"}
+        assert await self._latest(releases, None) == "9.1.0"
+
+    async def test_unparseable_requires_python_is_not_excluded(self) -> None:
+        assert await self._latest(self.RELEASES, "3.13") == "9.2.0"
+
+    async def test_missing_requires_python_is_not_excluded(self) -> None:
+        assert await self._latest({"7.4.7": [{}], "8.0.0": [{"requires_python": None}]}, "3.13") == "8.0.0"
+
+
+class TestInstalledVersionFromLockfile:
+    async def test_range_already_at_latest_is_not_outdated(self) -> None:
+        # Declared ^4.18.0 but the lockfile installs 4.21.2, which is the latest.
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.18.0": {}, "4.21.2": {}}}),
+        })
+        dep = Dependency(name="express", current_version="^4.18.0", ecosystem=Ecosystem.NODEJS,
+                         manifest_path="package.json", installed_version="4.21.2")
+        async with httpx.AsyncClient(transport=transport) as client:
+            assert await query_npm(client, dep) is None
+
+    async def test_outdated_result_carries_installed_version(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={"info": {}, "releases": {"2.31.0": [], "2.32.3": []}}),
+        })
+        dep = Dependency(name="requests", current_version=">=2.0", ecosystem=Ecosystem.PYTHON,
+                         manifest_path="pyproject.toml", installed_version="2.31.0")
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, dep)
+        assert result is not None
+        assert (result.current_version, result.installed_version, result.latest_version) == (">=2.0", "2.31.0", "2.32.3")
+
+
+class TestRepositoryUrlDiscovery:
+    @staticmethod
+    async def _pypi(info: dict) -> object:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/pkg/json": httpx.Response(200, json={"info": info, "releases": {"1.0": [], "2.0": []}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_pypi(client, _dep("pkg", "==1.0", Ecosystem.PYTHON))
+
+    async def test_code_key_is_a_repository(self) -> None:
+        # Sphinx labels its repository "Code".
+        result = await self._pypi({"project_urls": {"Code": "https://github.com/sphinx-doc/sphinx",
+                                                    "Homepage": "https://www.sphinx-doc.org/"}})
+        assert result.repository_url == "https://github.com/sphinx-doc/sphinx"
+
+    async def test_github_homepage_is_the_repository_fallback(self) -> None:
+        # psutil only publishes a GitHub homepage.
+        result = await self._pypi({"home_page": "https://github.com/giampaolo/psutil",
+                                   "project_urls": {"Homepage": "https://github.com/giampaolo/psutil"}})
+        assert result.repository_url == "https://github.com/giampaolo/psutil"
+
+    async def test_non_forge_homepage_is_not_a_repository(self) -> None:
+        result = await self._pypi({"project_urls": {"Homepage": "https://www.sphinx-doc.org/"}})
+        assert result.repository_url is None
+
+    async def test_npm_github_homepage_fallback(self) -> None:
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/pkg": httpx.Response(200, json={"homepage": "https://github.com/o/pkg#readme",
+                                             "versions": {"1.0.0": {}, "2.0.0": {}}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_npm(client, _dep("pkg", "1.0.0", Ecosystem.NODEJS, "package.json"))
+        assert result.repository_url == "https://github.com/o/pkg"
+
+
+class TestGoMajorVersionModules:
+    """Go majors >= 2 live at <module>/vN; the base path's version list never shows them."""
+
+    @staticmethod
+    async def _go(name: str, current: str, lists: dict[str, str], mode=None):
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({f"/{path}/@v/list": httpx.Response(200, text=body) for path, body in lists.items()})
+        options = CheckOptions(mode=mode) if mode else CheckOptions()
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await query_golang(client, _dep(name, current, Ecosystem.GO, "go.mod"), options)
+
+    LISTS = {
+        "github.com/x/y": "v1.0.0\nv1.5.0\n",
+        "github.com/x/y/v2": "v2.0.0\nv2.3.0\n",
+        "github.com/x/y/v3": "v3.0.0-rc.1\n",  # prerelease only: not a stable major
+    }
+
+    async def test_reports_newest_major_module(self) -> None:
+        result = await self._go("github.com/x/y", "1.0.0", self.LISTS)
+        assert (result.latest_version, result.module_path) == ("v2.3.0", "github.com/x/y/v2")
+
+    async def test_module_already_on_v2_probes_v3(self) -> None:
+        lists = {**self.LISTS, "github.com/x/y/v3": "v3.0.0\nv3.1.0\n"}
+        result = await self._go("github.com/x/y/v2", "2.0.0", lists)
+        assert (result.latest_version, result.module_path) == ("v3.1.0", "github.com/x/y/v3")
+
+    async def test_no_newer_major_keeps_module_path_empty(self) -> None:
+        result = await self._go("github.com/x/y", "1.0.0", {"github.com/x/y": "v1.0.0\nv1.5.0\n"})
+        assert (result.latest_version, result.module_path) == ("v1.5.0", None)
+
+    async def test_safe_mode_stays_on_the_declared_major(self) -> None:
+        from migratowl.models.schemas import OutdatedCheckMode
+
+        result = await self._go("github.com/x/y", "1.0.0", self.LISTS, mode=OutdatedCheckMode.SAFE)
+        assert (result.latest_version, result.module_path) == ("v1.5.0", None)
+
+    async def test_gopkg_in_is_not_probed(self) -> None:
+        result = await self._go("gopkg.in/yaml.v2", "2.4.0", {"gopkg.in/yaml.v2": "v2.4.0\nv2.4.1\n"})
+        assert (result.latest_version, result.module_path) == ("v2.4.1", None)
+
+
+# ===========================================================================
+# Mirrors and private registries
+# ===========================================================================
+
+
+class TestRegistryMirrors:
+    """Version checks follow the configured mirror and send credentials to it only."""
+
+    @staticmethod
+    def _recording_client(handler) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+        seen: list[httpx.Request] = []
+
+        def wrapped(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return handler(request)
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(wrapped)), seen
+
+    @staticmethod
+    def _options(**kwargs):
+        from migratowl.registries import Registries
+
+        return CheckOptions(mode=OutdatedCheckMode.NORMAL, registries=Registries(**kwargs))
+
+    async def test_npm_uses_the_mirror_and_bearer_token(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}, "2.0.0": {}}}))
+        options = self._options(npm="https://npm.corp/api/npm", token="tok")
+        async with client:
+            result = await query_npm(client, _dep("left-pad", "1.0.0", Ecosystem.NODEJS, "package.json"), options)
+
+        assert result is not None and result.latest_version == "2.0.0"
+        assert str(seen[0].url) == "https://npm.corp/api/npm/left-pad"
+        assert seen[0].headers["Authorization"] == "Bearer tok"
+
+    async def test_pypi_uses_the_mirror_with_basic_auth(self) -> None:
+        from migratowl.registry import query_pypi
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={
+            "info": {"version": "2.0"}, "releases": {"1.0": [{}], "2.0": [{}]}}))
+        options = self._options(pypi="https://pypi.corp", username="svc", password="pw")
+        async with client:
+            await query_pypi(client, _dep("requests", "1.0", Ecosystem.PYTHON), options)
+
+        assert str(seen[0].url) == "https://pypi.corp/pypi/requests/json"
+        assert seen[0].headers["Authorization"].startswith("Basic ")
+
+    async def test_public_registry_never_gets_the_credential(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}}}))
+        options = self._options(npm="https://npm.corp", pypi="https://pypi.corp", token="tok")
+        # npm is a mirror, but a crates request (public host) must not carry the token
+        from migratowl.registry import query_crates
+
+        async with client:
+            await query_npm(client, _dep("a", "1.0.0", Ecosystem.NODEJS, "package.json"), options)
+            try:
+                await query_crates(client, _dep("serde", "1.0.0", Ecosystem.RUST, "Cargo.toml"), options)
+            except Exception:
+                pass
+
+        assert "Authorization" in seen[0].headers
+        assert seen[1].url.host == "crates.io"
+        assert "Authorization" not in seen[1].headers
+
+    async def test_go_proxy_mirror(self) -> None:
+        from migratowl.registry import query_golang
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, text="v1.0.0\nv1.1.0\n"))
+        options = self._options(go_proxy="https://go.corp/proxy")
+        async with client:
+            result = await query_golang(client, _dep("example.com/m", "v1.0.0", Ecosystem.GO, "go.mod"), options)
+
+        assert result is not None and result.latest_version == "v1.1.0"
+        assert all(r.url.host == "go.corp" for r in seen)
+        assert str(seen[0].url).startswith("https://go.corp/proxy/example.com/m/@v/list")
+
+    async def test_maven_mirror_reads_maven_metadata(self) -> None:
+        from migratowl.registry import query_maven_central
+
+        metadata = (
+            "<metadata><groupId>org.x</groupId><artifactId>lib</artifactId><versioning>"
+            "<versions><version>1.0</version><version>2.0</version><version>2.1-SNAPSHOT</version></versions>"
+            "</versioning></metadata>"
+        )
+        client, seen = self._recording_client(lambda r: httpx.Response(200, text=metadata))
+        options = self._options(maven="https://mvn.corp/repo", username="u", password="p")
+        async with client:
+            result = await query_maven_central(client, _dep("org.x:lib", "1.0", Ecosystem.JAVA, "pom.xml"), options)
+
+        assert str(seen[0].url) == "https://mvn.corp/repo/org/x/lib/maven-metadata.xml"
+        assert result is not None and result.latest_version == "2.0"  # the SNAPSHOT is a pre-release
+        assert seen[0].headers["Authorization"].startswith("Basic ")
+
+    async def test_defaults_are_unchanged(self) -> None:
+        from migratowl.registry import query_npm
+
+        client, seen = self._recording_client(lambda r: httpx.Response(200, json={"versions": {"1.0.0": {}}}))
+        async with client:
+            await query_npm(client, _dep("a", "1.0.0", Ecosystem.NODEJS, "package.json"))
+
+        assert str(seen[0].url) == "https://registry.npmjs.org/a"
+        assert "Authorization" not in seen[0].headers
+
+
+class TestCleanGitUrl:
+    """npm repository fields come in several git spellings; changelog lookup needs the https page."""
+
+    def test_spellings_become_https(self) -> None:
+        from migratowl.registry import _clean_git_url
+
+        cases = {
+            "git://github.com/mde/ejs.git": "https://github.com/mde/ejs",
+            "git+https://github.com/expressjs/express.git": "https://github.com/expressjs/express",
+            "git+ssh://git@github.com/o/r.git": "https://github.com/o/r",
+            "ssh://git@gitlab.com/g/p.git": "https://gitlab.com/g/p",
+            "git@github.com:o/r.git": "https://github.com/o/r",
+            "github:o/r": "https://github.com/o/r",
+            "https://github.com/o/r": "https://github.com/o/r",
+        }
+        for raw, expected in cases.items():
+            assert _clean_git_url(raw) == expected, raw

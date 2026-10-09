@@ -130,13 +130,14 @@ class TestValidatePython:
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),
             ExecResult(output="", exit_code=0),              # detect → found (exit 0)
+            ExecResult(output="", exit_code=0),              # test runner present
             ExecResult(output="5 passed in 0.3s\n", exit_code=0),
         ]
         result = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"}))
 
         install_cmd = backend.execute.call_args_list[0][0][0]
         assert "pip install" in install_cmd
-        test_cmd = backend.execute.call_args_list[2][0][0]
+        test_cmd = backend.execute.call_args_list[3][0][0]
         assert "pytest" in test_cmd
         assert result["passed"] is True
 
@@ -168,11 +169,12 @@ class TestValidatePython:
         backend.execute.side_effect = [
             ExecResult(output="", exit_code=0),   # install
             ExecResult(output="", exit_code=0),   # detect → found
+            ExecResult(output="", exit_code=0),   # test runner present
             ExecResult(output="5 passed\n", exit_code=0),
         ]
         _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"})
 
-        test_cmd = backend.execute.call_args_list[2][0][0]
+        test_cmd = backend.execute.call_args_list[3][0][0]
         assert "python3 -m pytest" in test_cmd  # must use python3, not python
 
     def test_install_tries_test_extras_first(self) -> None:
@@ -375,3 +377,88 @@ class TestStepTruncation:
 
         assert step["truncated"] is False
         assert step["output"] == "ok"
+
+
+class TestValidatePythonVenv:
+    def _commands(self, folder: str = "main") -> list[str]:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),           # install
+            ExecResult(output="", exit_code=0),           # detect → found
+            ExecResult(output="", exit_code=0),           # test runner present
+            ExecResult(output="1 passed\n", exit_code=0),  # pytest
+        ]
+        _make_tool(backend).invoke({"folder_name": folder, "ecosystem": "python"})
+        return [c[0][0] for c in backend.execute.call_args_list]
+
+    def test_install_and_tests_run_in_folder_venv(self) -> None:
+        install_cmd, _, _, test_cmd = self._commands("requests")
+        activate = f". {DEFAULT_WORKSPACE}/.venvs/requests/bin/activate"
+        assert activate in install_cmd
+        assert activate in test_cmd
+
+    def test_reapplies_pins_after_project_install(self) -> None:
+        install_cmd = self._commands()[0]
+        pins = f"{DEFAULT_WORKSPACE}/.venvs/main/pins"
+        assert f"cat {pins}/* | pip install -r /dev/stdin" in install_cmd
+        assert install_cmd.index("pip install -r requirements.txt") < install_cmd.index(f"cat {pins}")
+
+
+class TestValidatePythonTestRunner:
+    """A missing pytest is an environment gap, never a test failure caused by the bump."""
+
+    def _run(self, *results: ExecResult) -> tuple[dict, list[str]]:
+        backend = MagicMock()
+        backend.execute.side_effect = list(results)
+        out = json.loads(_make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"}))
+        return out, [c[0][0] for c in backend.execute.call_args_list]
+
+    def test_installs_pytest_when_missing_before_running_tests(self) -> None:
+        out, cmds = self._run(
+            ExecResult(output="", exit_code=0),                    # install
+            ExecResult(output="", exit_code=0),                    # detect → found
+            ExecResult(output="Successfully installed pytest", exit_code=0),  # test runner
+            ExecResult(output="3 passed\n", exit_code=0),          # pytest
+        )
+        runner = cmds[2]
+        assert f". {DEFAULT_WORKSPACE}/.venvs/main/bin/activate" in runner
+        assert "python3 -m pytest --version" in runner and "pip install pytest" in runner
+        assert "python3 -m pytest -x" in cmds[3]
+        assert out["passed"] is True
+
+    def test_unavailable_runner_skips_tests_instead_of_failing(self) -> None:
+        out, cmds = self._run(
+            ExecResult(output="", exit_code=0),                    # install
+            ExecResult(output="", exit_code=0),                    # detect → found
+            ExecResult(output="ERROR: No matching distribution found for pytest", exit_code=1),
+        )
+        assert len(cmds) == 3  # pytest itself never ran
+        assert out["passed"] is True
+        test_step = next(s for s in out["steps"] if s["name"] == "test")
+        assert test_step["skipped"] is True
+        assert "pytest" in test_step["reason"]
+
+
+class TestValidatePythonDependencyGroups:
+    """PEP 735 groups hold many projects' test deps; extras alone miss them."""
+
+    def _install_cmd(self) -> str:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # install
+            ExecResult(output="", exit_code=1),  # detect → no tests
+        ]
+        _make_tool(backend).invoke({"folder_name": "main", "ecosystem": "python"})
+        return backend.execute.call_args_list[0][0][0]
+
+    def test_installs_test_and_dev_groups_best_effort(self) -> None:
+        cmd = self._install_cmd()
+        for group in ("test", "tests", "dev"):
+            assert f"pip install --group {group}" in cmd
+        assert cmd.count("|| true") >= 3  # a missing group or an older pip is not a failure
+
+    def test_groups_install_after_project_and_before_pins(self) -> None:
+        cmd = self._install_cmd()
+        pins = f"{DEFAULT_WORKSPACE}/.venvs/main/pins"
+        assert cmd.index("pip install -r requirements.txt") < cmd.index("pip install --group test")
+        assert cmd.index("pip install --group dev") < cmd.index(f"cat {pins}")

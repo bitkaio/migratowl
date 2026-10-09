@@ -6,6 +6,8 @@
 #   - Set MIGRATOWL_URL as a repository Actions variable
 #     (Settings → Secrets and variables → Actions → Variables)
 #     e.g. https://migratowl.internal.yourcompany.com
+#   - If the server sets MIGRATOWL_API_TOKEN, store the same value as the
+#     repository secret MIGRATOWL_API_TOKEN (it is sent as a Bearer token)
 #   - Migratowl must be configured with a GitHub token that has:
 #       repo:status  — to set commit statuses
 #       public_repo  — to post PR comments (or full "repo" for private repos)
@@ -38,6 +40,7 @@ jobs:
       - name: Trigger Migratowl scan
         env:
           MIGRATOWL_URL: ${{ vars.MIGRATOWL_URL }}
+          MIGRATOWL_API_TOKEN: ${{ secrets.MIGRATOWL_API_TOKEN }}
           REPO_URL: ${{ github.event.repository.clone_url }}
           BASE_BRANCH: ${{ github.base_ref }}
           HEAD_BRANCH: ${{ github.head_ref }}
@@ -74,6 +77,9 @@ jobs:
               commit_sha:   $commit_sha,
               check_deps:   $check_deps
             }')
+          auth=()
+          if [ -n "$MIGRATOWL_API_TOKEN" ]; then auth=(-H "Authorization: Bearer $MIGRATOWL_API_TOKEN"); fi
           curl --fail-with-body -X POST "$MIGRATOWL_URL/webhook" \
             -H "Content-Type: application/json" \
+            "${auth[@]}" \
             -d "$payload"

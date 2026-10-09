@@ -21,6 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.update import q
 from migratowl.models.schemas import Ecosystem, LanguageDetection
 
 # Ordered by priority — first match for (project_root, ecosystem) wins.
@@ -32,6 +33,7 @@ _MARKER_MAP: list[tuple[str, Ecosystem, str, str]] = [
     ("Cargo.toml", Ecosystem.RUST, "cargo test", "cargo build"),
     ("pom.xml", Ecosystem.JAVA, "mvn test", "mvn install -DskipTests -q"),
     ("build.gradle", Ecosystem.JAVA, "gradle test", "gradle build -x test"),
+    ("build.gradle.kts", Ecosystem.JAVA, "gradle test", "gradle build -x test"),
 ]
 
 _NOISE_DIRS = ["node_modules", ".venv", ".git", "__pycache__", ".tox", ".mypy_cache"]
@@ -50,7 +52,7 @@ def create_detect_languages_tool(
     )
 
     find_cmd = (
-        f"find {workspace_path} -maxdepth 5 "
+        f"find {q(workspace_path)} -maxdepth 5 "
         f"{exclude_clauses} "
         f"\\( {name_clauses} \\) -type f"
     )

@@ -7,7 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-08
+
+### Security
+
+- **Release jobs used the shared uv cache** — every workflow passed `enable-caching` to `astral-sh/setup-uv`, which
+  has no such input (it is `enable-cache`), so the setting was ignored and the default (`auto`, on) applied. The
+  release workflow, which meant to disable the cache against cache poisoning, ran with it. The input is now spelled
+  correctly, and all workflows pin the same `setup-uv` v7 commit; `migratowl-scan.yml` pinned the v7 tag object
+  instead of its commit, which GitHub cannot resolve.
+
+- **PR comments rendered LLM text unescaped** — fix suggestions (partly derived from untrusted changelogs) and
+  package names went into the PR/MR comment as raw Markdown, so a `|` broke the table and the text could
+  ping people with `@mentions`, embed tracking images or inject HTML. Table cells are now escaped and kept
+  on one line, HTML is escaped, mentions and image embeds are neutralised, package names are restricted to
+  normal name characters, and each field is capped at 1000 characters.
+
+- **agent-sandbox pods were not hardened** — `k8s/sandbox-template.yaml` set no security context, so
+  sandbox pods ran untrusted repository code with the image defaults and a mounted service account token,
+  while the README claimed otherwise. The template now sets `automountServiceAccountToken: false`,
+  `runAsNonRoot` with UID/GID 1000, seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false` and drops
+  all capabilities (matching raw mode). gVisor/Kata is documented as an opt-in `runtimeClassName`. The
+  README now describes the security settings of each mode accurately. Re-apply the template.
+
+- **Optional API authentication and callback SSRF protection** — new `MIGRATOWL_API_TOKEN`: when set,
+  `POST /webhook` and all `/jobs` endpoints require `Authorization: Bearer <token>` (`/healthz` stays
+  open); when unset, the server logs a startup warning. `callback_url` must be an http(s) URL and may not
+  target private, loopback or link-local addresses (`422`); hostnames are resolved again before the
+  callback is sent and redirects are not followed. `MIGRATOWL_CALLBACK_ALLOW_PRIVATE=true` lifts the
+  address check for local development. `docs/examples/with-migratowl-server.yml` sends the token from the
+  `MIGRATOWL_API_TOKEN` repository secret.
+
 ### Changed
+
+- **Removed settings and models nothing used** — `MIGRATOWL_API_HOST` / `MIGRATOWL_API_PORT` were documented but
+  never read (the bind address comes from uvicorn's `--host` / `--port`; the server image uses `0.0.0.0:8000`), so
+  they are gone from the settings and docs. The unused `ExecutionResult`, `PackageConfidence` and
+  `MainExecutionAnalysis` models and the never-set job lease fields (`owner_pid`, `heartbeat_at`) are removed too;
+  existing SQLite job databases keep working.
+
+- **Dependencies refreshed within their current majors** — FastAPI 0.141, pydantic 2.14, pydantic-settings 2.15,
+  langchain-core 1.6, langchain 1.4, langgraph 1.2.13, langfuse 4.15, plus pytest, ruff and langgraph-cli in the dev
+  group. The dev group now requires `langgraph-api>=0.11.1`; without it the resolver picked an older `langgraph dev`
+  server in exchange for a newer OpenTelemetry.
+
+- **LLM SDK majors** — `anthropic` 1.12 (built on `httpx2`), `openai` 3.26, `langchain-anthropic` 1.7 and `langchain-openai`
+  1.7. A new test runs the real Anthropic SDK against a local stub server and checks that the agent still asks for
+  native structured output (`output_config.format`, no forced `tool_choice`), parses the reply and counts cache
+  tokens; an OpenAI-compatible endpoint was exercised live.
+
+- **README brought up to date** — documents `GET /jobs?state=`, `POST /jobs/{id}/resume` and the `interrupted`
+  state, the crash-recovery and concurrency settings (`MIGRATOWL_PERSISTENCE_BACKEND`, `*_DB_PATH`,
+  `MAX_SCAN_RETRIES`, `MAX_CONCURRENT_SCANS`, `SANDBOX_TTL_*`), every field of the report, and the current module
+  layout. `.env.example` lists the same settings, and a test now fails when a setting is missing from either.
+
+- **`langchain-kubernetes` now comes from the maintained fork** — the dependency is installed from
+  `github.com/barnakun/langchain-kubernetes` at tag `py-0.4.1` (MIT, forked from `bitkaio/langchain-kubernetes`
+  0.4.0) instead of PyPI. 0.4.1 deletes a raw-mode sandbox's NetworkPolicy together with its Pod (previously one
+  policy leaked per scan) and reopens the sandbox-router tunnel when reconnecting, so
+  `POST /jobs/{id}/resume` reuses the surviving sandbox instead of starting over. Installing now needs `git`.
+
+- **Default model is now `claude-sonnet-5-5`** (was `claude-sonnet-5`; same price, $2/$10 per 1M tokens).
+  With the Anthropic provider the agent now requests native structured output (`output_config.format`)
+  instead of letting LangChain fall back to a forced tool call: Claude Sonnet 5.5, Opus 5.5 and Fable 5.1
+  reject `tool_choice: any` with a 400, and the installed LangChain does not recognise them as
+  structured-output models. OpenAI-compatible providers (`openai`, `litellm`) keep the automatic
+  choice. Pin `MIGRATOWL_MODEL_NAME=claude-sonnet-5` to keep the previous model.
 
 - **Scans run their mechanical phases in code** — cloning, dependency scanning, the outdated
   check, updating `main/` and validation now run as a fixed pipeline (`migratowl/pipeline.py`)
@@ -22,6 +87,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   print last is no longer cut off.
 
 ### Added
+
+- **Package mirrors and private registries** — `MIGRATOWL_PYPI_URL`, `MIGRATOWL_NPM_REGISTRY_URL`,
+  `MIGRATOWL_GO_PROXY_URL`, `MIGRATOWL_CRATES_API_URL`, `MIGRATOWL_CARGO_REGISTRY_URL` and `MIGRATOWL_MAVEN_URL`
+  point Migratowl at an Artifactory, Nexus, devpi, Verdaccio or Go-proxy mirror. The same setting drives the
+  version checks and the sandbox: a new `configure_registries` step writes `pip.conf`, `.npmrc`, Go's env file,
+  Cargo's `config.toml` and Maven's `settings.xml` before anything installs. Maven checks against a mirror read
+  `maven-metadata.xml`. `MIGRATOWL_REGISTRY_USERNAME`/`_PASSWORD` (and `_TOKEN`) are sent only to the mirror hosts
+  and reach the sandbox as uploaded file content, not command arguments; URLs may not embed credentials and
+  credentials require `https`. The sandbox runs the scanned code and can read them, so use a read-only account.
+  Gradle and Cargo credentials are not covered.
+
+- **Server container image and Helm chart** — `Dockerfile` builds `ghcr.io/bitkaio/migratowl-server` (non-root,
+  works with a read-only root filesystem and no capabilities, job history in the `/data` volume, one uvicorn
+  process), and `deploy/helm/migratowl` deploys it: a single-replica Deployment, a ServiceAccount with a Role
+  scoped to the sandbox namespace (SandboxClaims in agent-sandbox mode; pods, exec and the NetworkPolicy in raw
+  mode), a PVC that survives `helm uninstall`, and credentials read from an existing Secret. The release workflow
+  pushes the image (amd64 and arm64) and the chart (`oci://ghcr.io/bitkaio/charts`); CI lints the Dockerfile and
+  the chart. Like the LangGraph image, the server image and the chart are signed with cosign (keyless) and the
+  image gets an SBOM attestation, a Trivy report and SLSA provenance.
+
+- **Private repositories** — `GITHUB_TOKEN` / `GITLAB_TOKEN` are now also used to clone private repositories on their
+  host, so `repo_url` stays free of credentials. The token is sent to `git clone` as a request header scoped to that
+  host, not in the URL: it is not written to the clone's `.git/config` (readable by the repository's own test code
+  in the sandbox), not sent to other hosts, and not echoed in clone errors. Credentials embedded in `repo_url`
+  get the same treatment; before, they were stored in `.git/config` and repeated in the clone failure message. If
+  the host rejects the token, the clone is retried without it, so a public repository still works. A configured
+  token is only ever sent over `https://`.
+
+- **Lockfile-aware version checks** — `package-lock.json`, `yarn.lock` (classic and Berry), `pnpm-lock.yaml`,
+  `uv.lock`, `poetry.lock` and `Cargo.lock` are read next to (or above) each manifest, and the installed version —
+  not the declared range — decides whether a dependency is outdated, how large the upgrade is, and what the LLM
+  brief shows. yarn and pnpm can lock several versions of one package; the entry for the range declared in
+  `package.json` is used. `Dependency` and `OutdatedDependency` gain an `installed_version` field. The new parsers
+  are fuzzed.
 
 - **Coverage-guided fuzzing for untrusted-input parsers** ([#12](https://github.com/bitkaio/migratowl/issues/12)) —
   Atheris harnesses (`fuzz/fuzz_parsers.py`, `fuzz/fuzz_changelog.py`) fuzz the manifest and changelog
@@ -55,11 +154,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (e.g. `anthropic--claude-sonnet-latest` instead of `claude-sonnet-5`)
   See [`docs/proxy-setup.md`](docs/proxy-setup.md) for configuration examples.
 
-- **Local E2E test skill** — Claude Code users can now run `test it locally` to execute a full
-  production-like scan using a Kind cluster and HAI/LiteLLM proxy. Automatically sets up the cluster,
-  starts the server, triggers a scan, and reports results. See `.claude/skills/local-e2e-test.md`.
-
 ### Fixed
+
+- **Changelogs were missed for packages with `git://` or SSH repository URLs** — npm metadata such as ejs's
+  `git://github.com/mde/ejs.git` was kept as is, so no GitHub changelog or release notes were looked up. `git://`,
+  `git+ssh://`, `ssh://`, `git@host:owner/repo` and `github:owner/repo` now all become `https://host/owner/repo`.
+
+- **A production install could not start the server** — `uvicorn` was not a dependency; it only arrived through
+  the dev group (`langgraph-cli`), so `uv sync --no-dev` produced an environment with no way to run
+  `uvicorn migratowl.api.main:app`. It is now a runtime dependency.
+
+- **`MIGRATOWL_SANDBOX_CONNECTION_MODE=direct` could not work** — the sandbox-router URL it needs was never passed
+  to the library, so the mode failed at the first scan. New `MIGRATOWL_SANDBOX_API_URL` carries it (for a server
+  running inside the cluster, where there is no `kubectl` to tunnel with), and `direct` without it is now rejected
+  at startup with a clear message.
+
+- **Java versions set through a pom property or a Gradle version catalog were ignored** — `<version>${spring.version}</version>`
+  is now resolved from the pom's `<properties>` (following chained properties), and `gradle/libs.versions.toml` is scanned
+  (`"group:artifact:version"`, inline `version` and `version.ref`; rich versions, BOM-managed entries and plugins are
+  skipped). Updates patch the place that defines the version — the property or the `[versions]` key, shared by every
+  library that uses it — instead of the dependency line, so validation tests the new version.
+
+- **Go major versions were never reported** — a Go module's next major release lives at a new module path
+  (`github.com/x/y` → `github.com/x/y/v2`), so the registry only ever saw versions of the current major. It now
+  probes `/v{N+1}` onwards (up to five majors, skipping `gopkg.in/`) and reports the newest stable major as
+  the latest version. Updating to it runs `go get` on the new path and rewrites the code's imports (including
+  subpackages, skipping `vendor/`) before `go mod tidy`, so the requirement is not dropped again.
+
+- **Changelogs were not found or not understood for many packages** — the registry now also treats a "Code"
+  link or a GitHub/GitLab homepage as the repository (Sphinx, psutil); a "changelog" link that is just the
+  repository page (aiofiles' `github.com/Tinche/aiofiles#history`) is used as a repository hint instead of
+  being parsed as HTML; a short changelog file that only points elsewhere ("History has moved to: …") is
+  followed; version ranges given as constraints (`>=5.9`, `^4.21.2`) filter correctly instead of keeping every
+  release; and breaking changes written as `**Backward incompatible changes**`, `* breaking: …` or indented
+  `#123, [Platform]: …` items are recognised.
+
+- **Major bumps came back without a changelog citation** — the citation depended on the model calling the
+  changelog tool, which small models often skip. The pipeline now fetches a breaking-change excerpt for each
+  pending major bump itself, puts it in the LLM brief, and uses it as the citation when the model leaves it
+  empty. The changelog tool also keeps major-release notes (`X.0.0`) ahead of newer minor releases, so the
+  context budget no longer cuts off the release where the breaking changes are.
+
+- **Migratowl's own log lines never appeared** — uvicorn configures only its own loggers, so `migratowl.*` INFO
+  messages (pipeline candidates, validation results, sandbox lifecycle) were dropped and only warnings showed.
+  New setting `MIGRATOWL_LOG_LEVEL` (default `INFO`); each line is printed once whether or not the root logger
+  is configured. The pipeline summary now also counts update failures.
+
+- **Python test runs missed test dependencies kept in PEP 735 groups** — validation only installed the
+  `tests`/`test` extras, so projects that declare their test stack in `[dependency-groups]` (e.g. datasette)
+  failed at collection and nothing was actually tested. Validation now also installs the `test`, `tests` and
+  `dev` dependency groups when present (best effort, pip ≥ 25.1), before re-applying the bumped versions.
+
+- **Releases the sandbox's Python cannot install were reported as breaking** — the runtime image ran Debian's
+  Python 3.11, and the PyPI check ignored `requires_python`, so e.g. Sphinx 9.1 (Python ≥3.12) failed to
+  install and was flagged as a breaking upgrade. The runtime image is now based on the official
+  `python:3.13-slim-bookworm` image, and the PyPI check skips releases whose `requires_python` excludes the
+  sandbox's Python (new setting `MIGRATOWL_SANDBOX_PYTHON_VERSION`, default `3.13`). Rebuild the runtime image.
+
+- **A missing pytest made a dependency bump look breaking** — when a project declares pytest only in a dev
+  group or tool config, the install step left it out of the venv and validation failed with
+  `No module named pytest`. Validation now installs pytest when it is missing; if that fails, the test step is
+  reported as skipped instead of failed.
+
+- **`deepagents` had no upper bound** — `deepagents>=0.6` allowed 0.7, which removes the callable-backend
+  API the agent factory and the package-analyzer subagent use, so a fresh `pip install` could pull a version
+  Migratowl cannot run on. The range is now `>=0.6,<0.7` until the migration to the new backend API.
+
+- **Resume leaked the old sandbox when it restarted a job** — when the surviving sandbox failed the
+  liveness probe, `POST /jobs/{id}/resume` provisioned a new one and left the old SandboxClaim running
+  until the idle-TTL sweep. The abandoned sandbox is now deleted (best effort).
+
+- **Raw-mode sandboxes had no network on clusters that enforce NetworkPolicy** — with
+  `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true` (the default, and what the GitHub Action and GitLab
+  component use with Calico), each sandbox pod gets a deny-all policy that also blocks DNS, so
+  `git clone` and package installs failed. New `k8s/sandbox-egress-raw.yaml` re-opens DNS to kube-dns
+  and HTTP/HTTPS to public addresses only; ingress, pod/service CIDRs, node networks and cloud metadata
+  stay blocked. Apply it next to `k8s/rbac-raw.yaml`.
+- **Sandbox commands broke on quotes and untrusted values** — `execute_project` and every
+  `sh -c '…'` wrapper put the inner command inside single quotes, so an agent command such as
+  `pip install -e '.[tests]'` (which the system prompt itself suggests) lost its quoting. Package
+  names, versions, paths, the repo URL and the branch were also interpolated unquoted; several of these
+  come from untrusted manifests. Every value is now passed as one shell argument, the `sh -c` script is
+  quoted as a whole, and `git clone` takes the URL after `--`.
+
+- **Python per-package runs were not isolated** — every working folder installed into the same
+  site-packages, so the package-analyzer's single-package run tested against whatever `main/` had
+  already upgraded. Each folder now gets its own venv (`<workspace>/.venvs/<folder>`), used by
+  `update_dependencies`, `validate_project` and `execute_project`. Bumped versions are also re-applied
+  after `pip install -e .`, which could otherwise downgrade them back inside the project's declared
+  range (e.g. `requests<3`) and test the old version.
+- **Raw mode's default image could not clone** — `MIGRATOWL_SANDBOX_IMAGE` defaulted to
+  `python:3.12-slim`, which has no `git`, so a default raw-mode scan failed at `clone_repo`. The default
+  is now `ghcr.io/bitkaio/migratowl-runtime:latest`, the image the GitHub Action and GitLab component
+  already use.
+- **Registry checks did not retry, and `Retry-After` had no limit** — `check_outdated` built its own
+  HTTP client without the retry transport, so a 429 or 503 from PyPI, npm, crates.io, the Go proxy or
+  Maven Central marked the package as a registry failure on the first try. It now uses the shared client
+  (retries with backoff, `MIGRATOWL_HTTP_RETRY_*` settings). Each retry wait is capped at 60s, even when a
+  server's `Retry-After` asks for longer. Outbound requests send `migratowl/<version>` as their
+  User-Agent (registry calls said `migratowl/0.1.0`; everything else sent httpx's default).
+  `migratowl.__version__` now exists and a test keeps it equal to `pyproject.toml`'s version.
+
+- **Yanked PyPI releases could be reported as the latest version** — the PyPI check read every key in
+  `releases` without looking at each file's `yanked` flag, so a withdrawn release could become the
+  upgrade target. Releases whose files are all yanked are now skipped (crates.io already did this).
+
+- **npm/crates prereleases picked as "latest" and rewritten** — every registry's versions were compared
+  with Python's PEP 440 rules and returned in normalized form. npm's `rollup` `5.0.0-0` (a semver
+  prerelease) was read as a post-release, chosen as latest and returned as `5.0.0.post0`, so
+  `npm install` failed with `ETARGET` and the package was reported as breaking. npm, crates.io and Go
+  versions are now compared as semver (`-x` is a prerelease that sorts before its release), and every
+  registry's latest version keeps the spelling the registry published.
+- **`requirements.txt` environment markers ended up in the version** — `foo==1.0; python_version < "3.8"`
+  was stored with version `1.0; python_version < "3.8"`, and `foo ; python_version >= "3.8"` had the
+  marker's `>=` read as its version operator. Markers are now stripped before parsing, as
+  `pyproject.toml` parsing already did.
+- **Dependencies outside the main sections were never scanned** — the manifest parsers now also read
+  `[project.optional-dependencies]` and PEP 735 `[dependency-groups]`, Poetry
+  `[tool.poetry.group.<name>.dependencies]`, Cargo `[build-dependencies]`, `[target.<cfg>.*]` tables
+  and `[workspace.dependencies]`, and Gradle Kotlin DSL `build.gradle.kts` files. Malformed tables
+  (a list or number where a table belongs) are skipped instead of raising.
+- **The package-analyzer subagent contradicted the main agent's tool rules** — its prompt told it to
+  use deepagents' `ls`/`read_file`/`grep`/`execute` (which the main prompt forbids and which don't work
+  against the K8s sandbox), ran `execute_project` instead of `validate_project` (so it skipped the
+  per-ecosystem build/test steps), described inputs it never receives, and allowed `null` in text
+  fields `AnalysisReport` types as strings. It now follows the same rules as the main agent.
+- **Token and cost totals were incomplete and partly wrong** — `total_input_tokens` /
+  `total_output_tokens` only counted the main agent's messages, so package-analyzer subagent runs were
+  missing. Usage is now collected from every model call (main agent and subagent). The report gains
+  `total_cache_read_tokens` and `total_cache_creation_tokens`, and the PR comment's cost estimate prices
+  cache reads and writes at their own rates. The price table now covers Claude Fable 5.1, Opus 5.5 and
+  Sonnet 5.5, and fixes `claude-sonnet-5`, which was priced at $3/$15 instead of $2/$10 per 1M tokens.
+- **PR notifications and callbacks followed different rules per outcome** — a commit status is now set
+  whenever `commit_sha` is given (previously the start and final statuses also required `pr_number`), and a
+  PR/MR comment is posted whenever `pr_number` is given — including a short failure notice with the error
+  when the scan fails (previously failures only set a status). `callback_url` is now called on failure too,
+  with `{job_id, state: "failed", error, repo_url, branch_name}`; the success body is unchanged. Both
+  carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers, and a non-2xx reply is logged as a
+  warning. A failing comment no longer prevents the commit status from being set, or vice versa. The error text
+  that reaches the PR comment, the callback and `GET /jobs` has URL credentials, GitHub/GitLab tokens
+  and the configured `GITHUB_TOKEN`/`GITLAB_TOKEN` values redacted, and so does the server log. A
+  `repo_url` with embedded credentials is masked (`https://***@host/...`) in reports, callbacks, the log and
+  `GET /jobs` responses; the stored payload keeps the real URL so resume can still clone.
+- **Shutdown left queued jobs and scan tasks behind** — on shutdown only `running` jobs were marked
+  `interrupted`; jobs still queued behind the scan semaphore stayed `pending` until the next boot, and
+  in-flight scan tasks were not cancelled. Shutdown now cancels in-flight scans (their sandbox and
+  checkpoint are kept for resume) and marks both running and queued jobs `interrupted`.
+- **Runtime image could not build Java projects** — `k8s/runtime/Dockerfile` had no JDK, Maven or
+  Gradle, so `validate_project` failed on every Java repo. The image now ships Eclipse Temurin 21,
+  Maven 3.9.16 and Gradle 9.8.0. Go moves from the end-of-life 1.23.6 to 1.27.1, and every downloaded
+  archive (Go, JDK, Maven, Gradle) is checksum-verified before it is unpacked. The image also no longer
+  builds against a stale checksum: `https://sh.rustup.rs` serves a new script on every rustup release,
+  so the image now installs a pinned `rustup-init` 1.29.1 binary instead.
 
 - **Parser crashes on malformed manifests/changelogs** (found by fuzzing, [#12](https://github.com/bitkaio/migratowl/issues/12)) —
   `parse_package_json` no longer crashes on a non-object JSON root (e.g. a bare `5` or `"str"`) or on
@@ -370,7 +616,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bitkaio/migratowl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bitkaio/migratowl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bitkaio/migratowl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bitkaio/migratowl/compare/v0.3.0...v0.4.0

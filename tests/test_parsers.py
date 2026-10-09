@@ -7,6 +7,7 @@ from migratowl.parsers import (
     parse_build_gradle,
     parse_cargo_toml,
     parse_go_mod,
+    parse_gradle_version_catalog,
     parse_package_json,
     parse_pom_xml,
     parse_pyproject_toml,
@@ -532,3 +533,372 @@ class TestParseBuildGradle:
 
     def test_empty_content(self) -> None:
         assert parse_build_gradle("", "build.gradle") == []
+
+class TestParseRequirementsTxtMarkers:
+    """PEP 508 environment markers (`; python_version < "3.8"`) are not part of the version."""
+
+    def _one(self, line: str) -> tuple[str, str]:
+        deps = parse_requirements_txt(line + "\n", MANIFEST_PATH)
+        assert len(deps) == 1
+        return deps[0].name, deps[0].current_version
+
+    def test_pinned_with_marker(self) -> None:
+        assert self._one('foo==1.0; python_version < "3.8"') == ("foo", "1.0")
+
+    def test_range_with_spaced_marker(self) -> None:
+        assert self._one('bar>=2.0 ; sys_platform == "linux"') == ("bar", ">=2.0")
+
+    def test_marker_without_version(self) -> None:
+        # The ">=" inside the marker must not be read as the version operator.
+        assert self._one('baz ; python_version >= "3.8"') == ("baz", "")
+
+    def test_marker_and_inline_comment(self) -> None:
+        assert self._one('qux==3.1 ; os_name == "nt"  # windows only') == ("qux", "3.1")
+
+
+class TestParsePyprojectExtraSections:
+    def _names(self, content: str) -> dict[str, str]:
+        return {d.name: d.current_version for d in parse_pyproject_toml(content, "pyproject.toml")}
+
+    def test_pep621_optional_dependencies(self) -> None:
+        content = """\
+[project]
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "pytest-cov==4.1.0"]
+docs = ["sphinx~=7.2"]
+"""
+        assert self._names(content) == {
+            "requests": ">=2.28", "pytest": ">=7.0", "pytest-cov": "==4.1.0", "sphinx": "~=7.2",
+        }
+
+    def test_pep735_dependency_groups_skip_includes(self) -> None:
+        content = """\
+[project]
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff==0.5.0", {include-group = "test"}]
+test = ["pytest>=8"]
+"""
+        assert self._names(content) == {"ruff": "==0.5.0", "pytest": ">=8"}
+
+    def test_dependency_groups_without_project_table(self) -> None:
+        content = """\
+[dependency-groups]
+dev = ["mypy>=1.10"]
+"""
+        assert self._names(content) == {"mypy": ">=1.10"}
+
+    def test_poetry_group_dependencies(self) -> None:
+        content = """\
+[tool.poetry.dependencies]
+python = "^3.11"
+flask = "^3.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = { version = "^8.0" }
+"""
+        assert self._names(content) == {"flask": "^3.0", "black": "^24.0", "pytest": "^8.0"}
+
+
+class TestParseCargoTomlExtraSections:
+    def _names(self, content: str) -> dict[str, str]:
+        return {d.name: d.current_version for d in parse_cargo_toml(content, "Cargo.toml")}
+
+    def test_build_dependencies(self) -> None:
+        assert self._names('[build-dependencies]\ncc = "1.0"\n') == {"cc": "1.0"}
+
+    def test_target_specific_dependencies(self) -> None:
+        content = """\
+[target.'cfg(unix)'.dependencies]
+nix = "0.27"
+
+[target.'cfg(windows)'.dev-dependencies]
+winapi = { version = "0.3" }
+"""
+        assert self._names(content) == {"nix": "0.27", "winapi": "0.3"}
+
+    def test_workspace_dependencies(self) -> None:
+        content = """\
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = "1.35"
+"""
+        assert self._names(content) == {"serde": "1.0", "tokio": "1.35"}
+
+
+class TestParseBuildGradleKts:
+    def test_kotlin_dsl_dependencies(self) -> None:
+        content = """\
+dependencies {
+    implementation("com.google.guava:guava:33.0.0-jre")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
+}
+"""
+        deps = parse_build_gradle(content, "build.gradle.kts")
+        assert {d.name: d.current_version for d in deps} == {
+            "com.google.guava:guava": "33.0.0-jre",
+            "org.junit.jupiter:junit-jupiter": "5.10.1",
+        }
+
+
+class TestLockfileParsers:
+    """Lockfiles give the version actually installed, not the declared range."""
+
+    def test_package_lock_v2_v3(self) -> None:
+        from migratowl.parsers import parse_package_lock_json
+
+        content = """{"lockfileVersion": 3, "packages": {
+            "": {"dependencies": {"express": "^4.18.0"}},
+            "node_modules/express": {"version": "4.21.2"},
+            "node_modules/@scope/pkg": {"version": "1.0.0"},
+            "node_modules/express/node_modules/debug": {"version": "2.6.9"}}}"""
+        assert parse_package_lock_json(content) == {"express": "4.21.2", "@scope/pkg": "1.0.0"}
+
+    def test_package_lock_v1(self) -> None:
+        from migratowl.parsers import parse_package_lock_json
+
+        content = '{"lockfileVersion": 1, "dependencies": {"lodash": {"version": "4.17.21"}}}'
+        assert parse_package_lock_json(content) == {"lodash": "4.17.21"}
+
+    def test_poetry_and_uv_lock(self) -> None:
+        from migratowl.parsers import parse_python_lock
+
+        content = """
+[[package]]
+name = "Requests"
+version = "2.31.0"
+
+[[package]]
+name = "flask"
+version = "3.0.3"
+"""
+        assert parse_python_lock(content) == {"requests": "2.31.0", "flask": "3.0.3"}
+
+    def test_cargo_lock_keeps_every_locked_version(self) -> None:
+        from migratowl.parsers import parse_cargo_lock
+
+        content = """
+version = 3
+
+[[package]]
+name = "syn"
+version = "1.0.109"
+
+[[package]]
+name = "syn"
+version = "2.0.48"
+"""
+        assert parse_cargo_lock(content) == {"syn": ["1.0.109", "2.0.48"]}
+
+    def test_yarn_v1_lock_by_range_and_unambiguous_name(self) -> None:
+        from migratowl.parsers import parse_yarn_lock
+
+        content = """# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.
+# yarn lockfile v1
+
+
+"@babel/core@^7.0.0", "@babel/core@^7.12.3":
+  version "7.22.0"
+  resolved "https://registry.yarnpkg.com/@babel/core/-/core-7.22.0.tgz"
+
+debug@2.6.9:
+  version "2.6.9"
+
+debug@^4.1.0:
+  version "4.3.4"
+"""
+        locked = parse_yarn_lock(content)
+        assert locked["@babel/core@^7.0.0"] == "7.22.0"
+        assert locked["@babel/core@^7.12.3"] == "7.22.0"
+        assert locked["@babel/core"] == "7.22.0"
+        assert locked["debug@^4.1.0"] == "4.3.4"
+        assert "debug" not in locked  # two versions: only the range tells which one
+
+    def test_yarn_berry_lock(self) -> None:
+        from migratowl.parsers import parse_yarn_lock
+
+        content = """__metadata:
+  version: 8
+  cacheKey: 10
+
+"lodash@npm:^4.17.21":
+  version: 4.17.21
+  resolution: "lodash@npm:4.17.21"
+
+"@types/node@npm:^20.0.0, @types/node@npm:^20.1.0":
+  version: 20.11.5
+  resolution: "@types/node@npm:20.11.5"
+
+"my-app@workspace:.":
+  version: 0.0.0-use.local
+"""
+        locked = parse_yarn_lock(content)
+        assert locked["lodash@^4.17.21"] == "4.17.21"
+        assert locked["lodash"] == "4.17.21"
+        assert locked["@types/node@^20.1.0"] == "20.11.5"
+        assert "my-app" not in locked
+
+    def test_pnpm_lock_v9_importers(self) -> None:
+        from migratowl.parsers import parse_pnpm_lock
+
+        content = """lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
+      local-lib:
+        specifier: link:../lib
+        version: link:../lib
+    devDependencies:
+      typescript:
+        specifier: ~5.3.0
+        version: 5.3.3
+  packages/a:
+    dependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.4.5
+"""
+        locked = parse_pnpm_lock(content)
+        assert locked["react-dom"] == "18.2.0"
+        assert locked["react-dom@^18.2.0"] == "18.2.0"
+        assert locked["typescript@~5.3.0"] == "5.3.3"
+        assert locked["typescript@^5.4.0"] == "5.4.5"
+        assert "typescript" not in locked
+        assert "local-lib" not in locked
+
+    def test_pnpm_lock_v5(self) -> None:
+        from migratowl.parsers import parse_pnpm_lock
+
+        content = """lockfileVersion: 5.4
+specifiers:
+  lodash: ^4.17.21
+  react-dom: ^18.0.0
+dependencies:
+  lodash: 4.17.21
+  react-dom: 18.2.0_react@18.2.0
+"""
+        locked = parse_pnpm_lock(content)
+        assert locked["lodash@^4.17.21"] == "4.17.21"
+        assert locked["react-dom"] == "18.2.0"
+
+    def test_node_lock_parsers_swallow_garbage(self) -> None:
+        from migratowl.parsers import parse_pnpm_lock, parse_yarn_lock
+
+        for bad in ("", ":\n  - [", "a: &x [*x]", "- 1\n- 2", "lockfileVersion: 9\nimporters: 3"):
+            assert isinstance(parse_pnpm_lock(bad), dict)
+            assert isinstance(parse_yarn_lock(bad), dict)
+
+    def test_cargo_pick_matches_the_declared_requirement(self) -> None:
+        # syn 1 is the direct dependency; syn 2 is only there for another crate.
+        from migratowl.parsers import pick_cargo_locked
+
+        assert pick_cargo_locked("1.0", ["1.0.109", "2.0.48"]) == "1.0.109"
+        assert pick_cargo_locked("^2", ["1.0.109", "2.0.48"]) == "2.0.48"
+        assert pick_cargo_locked("0.27", ["0.26.4", "0.27.1"]) == "0.27.1"  # 0.x: minor is breaking
+        assert pick_cargo_locked("", ["1.0.0"]) == "1.0.0"
+        assert pick_cargo_locked("3", ["1.0.0"]) is None
+
+    def test_malformed_lockfiles_return_empty(self) -> None:
+        from migratowl.parsers import parse_cargo_lock, parse_package_lock_json, parse_python_lock
+
+        assert parse_package_lock_json("[]") == {}
+        assert parse_package_lock_json('{"packages": 5}') == {}
+        assert parse_python_lock("package = 3") == {}
+        assert parse_cargo_lock('[[package]]\nname = 1\nversion = "x"') == {}
+
+
+class TestPomPropertyVersions:
+    POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <properties>
+    <spring.version>6.1.0</spring.version>
+    <jackson.base>2.15.0</jackson.base>
+    <jackson.version>${jackson.base}</jackson.version>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.springframework</groupId><artifactId>spring-core</artifactId>
+      <version>${spring.version}</version></dependency>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version></dependency>
+    <dependency><groupId>a</groupId><artifactId>self</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>a</groupId><artifactId>plain</artifactId><version>1.0</version></dependency>
+  </dependencies>
+</project>"""
+
+    def test_property_version_is_resolved_and_key_recorded(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        spring = deps["org.springframework:spring-core"]
+        assert spring.current_version == "6.1.0"
+        assert spring.version_key == "spring.version"
+
+    def test_chained_property_records_the_literal_one(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        jackson = deps["com.fasterxml.jackson.core:jackson-databind"]
+        assert jackson.current_version == "2.15.0"
+        assert jackson.version_key == "jackson.base"
+
+    def test_unknown_property_is_skipped_and_literal_has_no_key(self) -> None:
+        deps = {d.name: d for d in parse_pom_xml(self.POM, "pom.xml")}
+        assert "a:self" not in deps
+        assert deps["a:plain"].version_key is None
+
+
+class TestParseGradleVersionCatalog:
+    CATALOG = """
+[versions]
+spring = "6.1.0"
+rich = { strictly = "1.0" }
+
+[libraries]
+spring-core = { module = "org.springframework:spring-core", version.ref = "spring" }
+guava = "com.google.guava:guava:32.0.0-jre"
+junit = { group = "junit", name = "junit", version = "4.13" }
+okio = { module = "com.squareup.okio:okio", version = "3.5.0" }
+no-version = { module = "a:bom-managed" }
+also-no-version = "a:b"
+pinned = { module = "a:rich", version.ref = "rich" }
+ranged = { module = "a:ranged", version = { require = "1.0" } }
+
+[plugins]
+kotlin = { id = "org.jetbrains.kotlin.jvm", version = "1.9.0" }
+"""
+
+    def _deps(self) -> dict:
+        deps = parse_gradle_version_catalog(self.CATALOG, "gradle/libs.versions.toml")
+        assert all(d.ecosystem == Ecosystem.JAVA for d in deps)
+        assert all(d.manifest_path == "gradle/libs.versions.toml" for d in deps)
+        return {d.name: d for d in deps}
+
+    def test_version_ref(self) -> None:
+        dep = self._deps()["org.springframework:spring-core"]
+        assert (dep.current_version, dep.version_key) == ("6.1.0", "spring")
+
+    def test_inline_forms(self) -> None:
+        deps = self._deps()
+        assert deps["com.google.guava:guava"].current_version == "32.0.0-jre"
+        assert deps["junit:junit"].current_version == "4.13"
+        assert deps["com.squareup.okio:okio"].current_version == "3.5.0"
+        assert all(deps[n].version_key is None for n in ("com.google.guava:guava", "junit:junit"))
+
+    def test_unversioned_rich_and_plugins_are_skipped(self) -> None:
+        assert set(self._deps()) == {
+            "org.springframework:spring-core", "com.google.guava:guava", "junit:junit", "com.squareup.okio:okio",
+        }
+
+    def test_empty_and_invalid(self) -> None:
+        assert parse_gradle_version_catalog("", "libs.versions.toml") == []
+        assert parse_gradle_version_catalog("[libraries\n", "libs.versions.toml") == []
+        assert parse_gradle_version_catalog("libraries = 3\n", "libs.versions.toml") == []
+        bad_versions = 'versions = 3\n[libraries]\na = { module = "a:b", version.ref = "x" }\n'
+        assert parse_gradle_version_catalog(bad_versions, "libs.versions.toml") == []

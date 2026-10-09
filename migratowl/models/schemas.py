@@ -77,9 +77,13 @@ class Dependency(BaseModel):
     """Single dependency from manifest scanning."""
 
     name: str
-    current_version: str
+    current_version: str  # as declared in the manifest (may be a range)
     ecosystem: Ecosystem
     manifest_path: str
+    installed_version: str | None = None  # from a lockfile, when one exists
+    # Where the version is defined when not on the dependency line:
+    # a pom.xml <properties> name or a Gradle catalog [versions] key.
+    version_key: str | None = None
 
 
 class OutdatedDependency(BaseModel):
@@ -90,6 +94,11 @@ class OutdatedDependency(BaseModel):
     latest_version: str
     ecosystem: Ecosystem
     manifest_path: str
+    installed_version: str | None = None
+    # Go only: the new module path when the latest version is a new major
+    # (github.com/x/y → github.com/x/y/v2); None when the path does not change.
+    module_path: str | None = None
+    version_key: str | None = None  # see Dependency.version_key
     homepage_url: str | None = None
     repository_url: str | None = None
     changelog_url: str | None = None
@@ -112,16 +121,6 @@ class ScanResult(BaseModel):
     registry_failures: list[RegistryFailure] = []
 
 
-class ExecutionResult(BaseModel):
-    """Sandbox command execution result."""
-
-    command_run: str
-    exit_code: int
-    stdout: str
-    stderr: str
-    truncated: bool = False
-
-
 class ChangelogResult(TypedDict):
     """Return envelope for fetch_changelog tool."""
 
@@ -130,23 +129,6 @@ class ChangelogResult(TypedDict):
     strategy_used: int
     truncated: bool
     format_warning: bool
-
-
-class PackageConfidence(BaseModel):
-    """Per-package confidence that this package caused a failure."""
-
-    name: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str
-
-
-class MainExecutionAnalysis(BaseModel):
-    """Agent's analysis after running main/ with all deps updated."""
-
-    packages_likely_breaking: list[PackageConfidence]
-    packages_likely_safe: list[str]
-    overall_test_passed: bool
-    raw_error_summary: str
 
 
 class AnalysisReport(BaseModel):
@@ -175,8 +157,11 @@ class ScanAnalysisReport(BaseModel):
     reports: list[AnalysisReport]
     skipped: list[str] = []
     total_duration_seconds: float
+    # total_input_tokens includes cache reads and writes (also counted below)
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
     model_name: str = ""
 
 
@@ -205,10 +190,6 @@ class JobStatus(BaseModel):
     retry_count: int = 0
     # Guards duplicate PR comments / callbacks when a job is resumed.
     side_effects_done: bool = False
-    # Lease — identifies the process that owns a RUNNING job, so a restarted
-    # process only reconciles jobs whose owner is gone (stale lease).
-    owner_pid: int | None = None
-    heartbeat_at: datetime | None = None
 
 
 class WebhookAcceptedResponse(BaseModel):

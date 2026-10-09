@@ -1,0 +1,9 @@
+apiVersion: v2
+name: migratowl
+description: Migratowl server - AI dependency migration analyzer (webhook API) that runs untrusted code in Kubernetes sandboxes
+type: application
+version: 0.1.0
+appVersion: "0.7.0"
+home: https://github.com/bitkaio/migratowl
+sources:
+  - https://github.com/bitkaio/migratowl

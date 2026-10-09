@@ -119,3 +119,54 @@ class TestGetHttpClient:
             client2 = get_http_client()
             assert client1 is not client2
             await close_http_client()
+
+class TestRetryAfterCap:
+    async def test_retry_after_is_capped(self) -> None:
+        # A server asking for an hour must not stall a scan for an hour.
+        mock_transport = AsyncMock(spec=httpx.AsyncBaseTransport)
+        mock_transport.handle_async_request.side_effect = [
+            httpx.Response(429, headers={"Retry-After": "3600"}),
+            httpx.Response(200),
+        ]
+        transport = RetryTransport(mock_transport, max_retries=3, backoff_base=0.5)
+
+        with patch("migratowl.http.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await transport.handle_async_request(httpx.Request("GET", "https://example.com"))
+
+        (delay,), _ = mock_sleep.call_args
+        assert delay <= 60.0
+
+    async def test_negative_retry_after_does_not_sleep_negative(self) -> None:
+        mock_transport = AsyncMock(spec=httpx.AsyncBaseTransport)
+        mock_transport.handle_async_request.side_effect = [
+            httpx.Response(503, headers={"Retry-After": "-5"}),
+            httpx.Response(200),
+        ]
+        transport = RetryTransport(mock_transport, max_retries=3, backoff_base=0.5)
+
+        with patch("migratowl.http.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await transport.handle_async_request(httpx.Request("GET", "https://example.com"))
+
+        (delay,), _ = mock_sleep.call_args
+        assert delay >= 0.0
+
+
+class TestUserAgent:
+    async def test_shared_client_sends_versioned_user_agent(self) -> None:
+        import migratowl
+
+        try:
+            client = get_http_client()
+            assert client.headers["User-Agent"].startswith(f"migratowl/{migratowl.__version__} ")
+        finally:
+            await close_http_client()
+
+
+def test_package_version_matches_pyproject() -> None:
+    import tomllib
+    from pathlib import Path
+
+    import migratowl
+
+    pyproject = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    assert migratowl.__version__ == pyproject["project"]["version"]

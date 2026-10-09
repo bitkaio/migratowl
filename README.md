@@ -85,16 +85,21 @@ planned.
 - [API Reference](#api-reference)
   - [POST /webhook](#post-webhook)
   - [GET /jobs/{job\_id}](#get-jobsjob_id)
+  - [GET /jobs?state={state}](#get-jobsstatestate)
+  - [POST /jobs/{job\_id}/resume](#post-jobsjob_idresume)
   - [GET /healthz](#get-healthz)
 - [Response Schema](#response-schema)
 - [Configuration](#configuration)
   - [LLM](#llm)
   - [Kubernetes Sandbox](#kubernetes-sandbox)
   - [Analysis](#analysis)
+  - [Jobs and Crash Recovery](#jobs-and-crash-recovery)
+  - [Package Registries and Mirrors](#package-registries-and-mirrors)
   - [HTTP Client](#http-client)
   - [API Server](#api-server)
   - [Git Providers](#git-providers)
   - [Observability](#observability)
+- [Running the Server in a Cluster](#running-the-server-in-a-cluster)
 - [Kubernetes Setup](#kubernetes-setup)
 - [Observability](#observability-1)
 - [GitHub Actions](#github-actions)
@@ -162,13 +167,15 @@ For teams that already operate a Kubernetes cluster and want a persistent Migrat
 
 ## Supported Ecosystems
 
-| Language | Manifest files | Registry |
-|----------|----------------|----------|
-| Python | `pyproject.toml`, `requirements.txt` | PyPI |
-| Node.js | `package.json` | npm |
-| Go | `go.mod` | proxy.golang.org |
-| Rust | `Cargo.toml` | crates.io |
-| Java | `pom.xml` (Maven), `build.gradle` (Gradle) | Maven Central |
+| Language | Manifest files | Lockfiles (installed versions) | Registry |
+|----------|----------------|--------------------------------|----------|
+| Python | `pyproject.toml` (PEP 621 incl. optional deps, PEP 735 groups, Poetry incl. groups), `requirements.txt` | `uv.lock`, `poetry.lock` | PyPI |
+| Node.js | `package.json` | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` | npm |
+| Go | `go.mod` | — (`go.mod` pins exact versions) | proxy.golang.org |
+| Rust | `Cargo.toml` | `Cargo.lock` | crates.io |
+| Java | `pom.xml` (Maven, including `${property}` versions), `build.gradle` / `build.gradle.kts`, `gradle/libs.versions.toml` (Gradle) | — | Maven Central |
+
+When a lockfile sits next to a manifest (or in a parent directory, as in Cargo and uv workspaces), the installed version is compared with the latest release instead of the declared range: `>=2.0` with `2.31.0` installed is only outdated if something newer than `2.31.0` exists. Reports show it as `installed_version`.
 
 ---
 
@@ -227,7 +234,8 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 /home/user/workspace/
 ├── source/          # Immutable clone — never executed
 ├── main/            # All deps bumped, executed in Phase 2
-└── <package-name>/  # Per-package isolation (created on demand by subagent)
+├── <package-name>/  # Per-package isolation (created on demand by subagent)
+└── .venvs/<folder>/ # One Python venv per working folder (Python projects only)
 ```
 
 ---
@@ -281,7 +289,7 @@ curl -X POST http://localhost:8000/webhook \
 
 ### POST /webhook
 
-Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the background and POSTs the result to `callback_url` when done.
+Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the background and POSTs the outcome (report or failure) to `callback_url` when done. When `MIGRATOWL_API_TOKEN` is set, send `Authorization: Bearer <token>` with this and every `/jobs` request.
 
 **Request body** (`ScanWebhookPayload`):
 
@@ -290,9 +298,9 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `repo_url` | `string` | **required** | Git repository URL to scan |
 | `branch_name` | `string` | `"main"` | Branch to clone and analyze |
 | `git_provider` | `"github" \| "gitlab"` | `"github"` | Git provider — determines which API is used for PR/MR comments and commit statuses |
-| `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result |
-| `commit_sha` | `string \| null` | `null` | Full commit SHA — when set, Migratowl posts a pending status at scan start and a success/failure status on completion |
-| `callback_url` | `string \| null` | `null` | URL to POST `ScanAnalysisReport` on completion |
+| `pr_number` | `integer \| null` | `null` | PR (GitHub) or MR IID (GitLab) — when set, Migratowl posts a comment with the analysis result, or a short failure notice if the scan fails |
+| `commit_sha` | `string \| null` | `null` | Full commit SHA — when set (with or without `pr_number`), Migratowl posts a pending status at scan start and a success/failure/error status at the end |
+| `callback_url` | `string \| null` | `null` | URL to POST the outcome to: the `ScanAnalysisReport` when the scan completes, or `{job_id, state: "failed", error, repo_url, branch_name}` when it fails. Both requests carry `X-Migratowl-Job-Id` and `X-Migratowl-Job-State` headers |
 | `exclude_deps` | `string[]` | `[]` | Dependency names to skip entirely |
 | `check_deps` | `string[]` | `[]` | When non-empty, only these dependencies are checked (all others are ignored) |
 | `max_deps` | `integer` | `50` | Maximum outdated deps to analyze (must be > 0) |
@@ -352,6 +360,9 @@ Poll the status of a scan job.
 | `payload` | `ScanWebhookPayload` | Original request payload |
 | `result` | `ScanAnalysisReport \| null` | Set when `state = "completed"` |
 | `error` | `string \| null` | Set when `state = "failed"` |
+| `retry_count` | `integer` | How many times the job was resumed |
+
+Credentials embedded in `payload.repo_url` are masked in every response.
 
 **Job lifecycle:**
 
@@ -361,18 +372,38 @@ stateDiagram-v2
     pending --> running
     running --> completed
     running --> failed
+    pending --> interrupted: restart
+    running --> interrupted: restart
+    interrupted --> running: POST /resume
     completed --> [*]
     failed --> [*]
 ```
 
 | State | Meaning |
 |-------|---------|
-| `pending` | Queued, not yet started (v1 runs one scan at a time) |
+| `pending` | Queued, not yet started (at most `MIGRATOWL_MAX_CONCURRENT_SCANS` scans run at once) |
 | `running` | Agent is actively analyzing the repository |
 | `completed` | Analysis finished; `result` is populated |
 | `failed` | Unrecoverable error; `error` describes what went wrong |
+| `interrupted` | The server stopped or crashed while the job was pending or running. Resume it with `POST /jobs/{job_id}/resume` |
 
 **404** when `job_id` is not found.
+
+---
+
+### GET /jobs?state={state}
+
+List jobs in one state, for example `?state=interrupted` to find work a restart left behind. Returns `{"jobs": [JobStatus, ...]}`.
+
+**400** when `state` is missing; **422** when it is not a valid state.
+
+---
+
+### POST /jobs/{job_id}/resume
+
+Resume an `interrupted` job. Returns `202` with the same body as `POST /webhook`. With the default `sqlite` persistence the scan reconnects to its surviving sandbox and continues from the last LangGraph checkpoint; if the sandbox is gone, it starts over from the clone. PR comments and callbacks are not sent twice.
+
+**404** when `job_id` is not found; **409** when the job is not `interrupted` (or another resume already claimed it) or has been resumed more than `MIGRATOWL_MAX_SCAN_RETRIES` times.
 
 ---
 
@@ -393,28 +424,42 @@ ScanAnalysisReport
 ├── scan_result               ScanResult
 │   ├── all_deps              Dependency[]   — every declared dependency found
 │   │   ├── name              string
-│   │   ├── current_version   string
+│   │   ├── current_version   string         — as declared (may be a range)
+│   │   ├── installed_version string | null  — from a lockfile, when one exists
 │   │   ├── ecosystem         string
-│   │   └── manifest_path     string
+│   │   ├── manifest_path     string
+│   │   └── version_key       string | null  — pom property / Gradle catalog key holding the version
 │   ├── outdated              OutdatedDependency[]  — deps with newer versions
 │   │   ├── name              string
 │   │   ├── current_version   string
+│   │   ├── installed_version string | null
 │   │   ├── latest_version    string
 │   │   ├── ecosystem         string
 │   │   ├── manifest_path     string
+│   │   ├── module_path       string | null  — Go: new module path of a new major (…/v2)
+│   │   ├── version_key       string | null
 │   │   ├── homepage_url      string | null
 │   │   ├── repository_url    string | null
 │   │   └── changelog_url     string | null
 │   ├── manifests_found       string[]  — manifest file paths discovered
-│   └── scan_duration_seconds float
+│   ├── scan_duration_seconds float
+│   └── registry_failures     RegistryFailure[]  — deps whose registry lookup failed
+│       ├── name              string
+│       └── ecosystem         string
 ├── reports                   AnalysisReport[]  — one per analyzed package
 │   ├── dependency_name       string
 │   ├── is_breaking           bool
 │   ├── error_summary         string    — what failed (empty if not breaking)
 │   ├── changelog_citation    string    — verbatim excerpt from changelog
-│   └── suggested_human_fix   string    — plain-English remediation step
+│   ├── suggested_human_fix   string    — plain-English remediation step
+│   └── confidence            float     — 0.0–1.0, how sure the verdict is
 ├── skipped                   string[]  — package names not analyzed
-└── total_duration_seconds    float
+├── total_duration_seconds    float
+├── total_input_tokens        int       — includes cache reads and writes
+├── total_output_tokens       int
+├── total_cache_read_tokens   int
+├── total_cache_creation_tokens int
+└── model_name                string    — model that produced the analysis
 ```
 
 **Example report entry:**
@@ -425,7 +470,8 @@ ScanAnalysisReport
   "is_breaking": true,
   "error_summary": "ImportError: cannot import name 'PreparedRequest'",
   "changelog_citation": "## 3.0.0 — Removed PreparedRequest from the public API.",
-  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`."
+  "suggested_human_fix": "Replace `from requests import PreparedRequest` with `requests.models.PreparedRequest`.",
+  "confidence": 0.9
 }
 ```
 
@@ -442,12 +488,12 @@ All `MIGRATOWL_*` variables are optional (defaults shown). Third-party SDK keys 
 | `ANTHROPIC_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=anthropic` (default) |
 | `OPENAI_API_KEY` | — | Required when `MIGRATOWL_MODEL_PROVIDER=openai` or `litellm` |
 | `MIGRATOWL_MODEL_PROVIDER` | `anthropic` | LLM provider: `anthropic`, `openai`, or `litellm` |
-| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5` | Model name (must match provider) |
+| `MIGRATOWL_MODEL_NAME` | `claude-sonnet-5-5` | Model name (must match provider) |
 | `MIGRATOWL_MODEL_ALIAS` | — | Override model name sent to provider (for proxies with different naming) |
 | `MIGRATOWL_MODEL_RATE_LIMIT_RPS` | `0.1` | Max LLM requests/second (0.1 = 6 req/min) |
-| `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API |
-| `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API |
-| `LITELLM_BASE_URL` | — | LiteLLM unified proxy endpoint (use with `MIGRATOWL_MODEL_PROVIDER=litellm`) |
+| `ANTHROPIC_BASE_URL` | — | Custom base URL for Anthropic API (`MIGRATOWL_ANTHROPIC_BASE_URL` also works) |
+| `OPENAI_BASE_URL` | — | Custom base URL for OpenAI API (`MIGRATOWL_OPENAI_BASE_URL` also works) |
+| `LITELLM_BASE_URL` | — | LiteLLM unified proxy endpoint (use with `MIGRATOWL_MODEL_PROVIDER=litellm`; `MIGRATOWL_LITELLM_BASE_URL` also works) |
 
 #### Using an LLM Proxy
 
@@ -479,11 +525,13 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SANDBOX_MODE` | `agent-sandbox` | `agent-sandbox` (requires controller + CRDs) or `raw` (any cluster, no CRDs) |
 | `MIGRATOWL_SANDBOX_TEMPLATE` | `migratowl-sandbox-template` | agent-sandbox `AgentSandboxTemplate` name (agent-sandbox mode only) |
 | `MIGRATOWL_SANDBOX_NAMESPACE` | `default` | Kubernetes namespace for sandbox pods |
-| `MIGRATOWL_SANDBOX_CONNECTION_MODE` | `tunnel` | Connection mode: `tunnel` or `direct` (agent-sandbox mode only) |
+| `MIGRATOWL_SANDBOX_CONNECTION_MODE` | `tunnel` | Connection mode: `tunnel` (needs `kubectl` on the server's host) or `direct` (agent-sandbox mode only; use it when the server runs inside the cluster) |
+| `MIGRATOWL_SANDBOX_API_URL` | — | Sandbox-router URL, required with `direct`: `http://sandbox-router-svc.<namespace>.svc.cluster.local:8080` |
 | `MIGRATOWL_SANDBOX_KUBE_API_URL` | in-cluster URL | Kubernetes API used to list and delete SandboxClaims (agent-sandbox mode only). Off-cluster, run `kubectl proxy` and set `http://localhost:8001`; otherwise TTL sweep and shutdown cleanup can't run |
 | `MIGRATOWL_SANDBOX_KUBE_TOKEN` | — | Bearer token for `MIGRATOWL_SANDBOX_KUBE_API_URL` (not needed with `kubectl proxy` or in-cluster) |
-| `MIGRATOWL_SANDBOX_IMAGE` | `python:3.12-slim` | Container image for sandbox pods (raw mode only). Must include the runtime for the target ecosystem — e.g. `python:3.13-slim`, `node:22-slim`, `golang:1.24-bookworm`, `rust:1.86-slim`, `maven:3.9-eclipse-temurin-21-alpine`. For mixed-ecosystem repos use a fat image that bundles all runtimes (see `k8s/runtime/`). |
-| `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it) |
+| `MIGRATOWL_SANDBOX_IMAGE` | `ghcr.io/bitkaio/migratowl-runtime:latest` | Container image for sandbox pods (raw mode only). The default bundles git and every supported toolchain (built from `k8s/runtime/`). A custom image must include `git`, `python3` and the toolchains for the ecosystems you scan — slim language images such as `python:3.13-slim` have no `git`, so the clone fails. |
+| `MIGRATOWL_SANDBOX_PYTHON_VERSION` | `3.13` | Python version in the sandbox image. PyPI releases whose `requires_python` excludes it are not suggested as upgrades (they could not be installed). Change it if you use a custom image with another Python |
+| `MIGRATOWL_SANDBOX_BLOCK_NETWORK` | `true` | Attach deny-all `NetworkPolicy` to sandbox pods (raw mode only; requires Calico/Cilium — kindnet ignores it). Apply `k8s/sandbox-egress-raw.yaml` so scans can still reach DNS, git hosts and registries |
 | `MIGRATOWL_WORKSPACE_PATH` | `/home/user/workspace` | Workspace root inside the sandbox |
 
 ### Analysis
@@ -497,6 +545,39 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
 
+### Jobs and Crash Recovery
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIGRATOWL_PERSISTENCE_BACKEND` | `sqlite` | `sqlite` keeps jobs and agent checkpoints on disk so scans survive a restart and can be resumed; `memory` keeps nothing (CI, one-shot runs) |
+| `MIGRATOWL_JOBS_DB_PATH` | `./migratowl_jobs.db` | SQLite job store (`sqlite` backend only) |
+| `MIGRATOWL_CHECKPOINT_DB_PATH` | `./migratowl_checkpoints.db` | SQLite LangGraph checkpoints (`sqlite` backend only) |
+| `MIGRATOWL_MAX_SCAN_RETRIES` | `3` | How often a job may be resumed; past it, an interrupted job is marked `failed` |
+| `MIGRATOWL_MAX_CONCURRENT_SCANS` | `1` | Scans that run at once; the rest wait as `pending`. Each scan has its own sandbox pod, so this bounds cluster and LLM load |
+| `MIGRATOWL_SANDBOX_TTL_IDLE_SECONDS` | `1800` | Sandboxes idle for longer are deleted by the startup sweep (leaked by a crash) |
+| `MIGRATOWL_SANDBOX_TTL_SECONDS` | — | Absolute sandbox lifetime. Unset by default so long builds are not killed mid-scan |
+
+Run a single server process per database: on startup it marks every `pending` or `running` job it finds as `interrupted`.
+
+### Package Registries and Mirrors
+
+By default Migratowl reads PyPI, npm, crates.io, the Go proxy and Maven Central. Behind a proxy or with private packages, point it at your own mirror (Artifactory, Nexus, devpi, Verdaccio, a Go proxy). The same setting drives the version checks and the sandbox's `pip`, `npm`, `go`, `cargo` and `mvn`, which Migratowl configures before anything installs. Each variable is optional; unset means the public registry.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIGRATOWL_PYPI_URL` | `https://pypi.org` | Base of the PyPI JSON API; checks read `<url>/pypi/<name>/json`, pip uses `<url>/simple` |
+| `MIGRATOWL_NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry (checks and installs) |
+| `MIGRATOWL_GO_PROXY_URL` | `https://proxy.golang.org` | `GOPROXY` for checks and installs. Set only the mirror: there is no `direct` fallback |
+| `MIGRATOWL_CRATES_API_URL` | `https://crates.io` | crates.io web API (version checks) |
+| `MIGRATOWL_CARGO_REGISTRY_URL` | — | Cargo index for installs, e.g. `sparse+https://crates.corp/index/`. Replaces crates.io for `cargo`; Cargo credentials are not supported |
+| `MIGRATOWL_MAVEN_URL` | — | Maven repository. Checks read `maven-metadata.xml` instead of Central's search API, and `mvn` mirrors everything (`*`) to it. Gradle ignores this |
+| `MIGRATOWL_REGISTRY_USERNAME`, `MIGRATOWL_REGISTRY_PASSWORD` | — | Basic credentials (the password may be an access token) for pip, Go, Maven and npm |
+| `MIGRATOWL_REGISTRY_TOKEN` | — | Bearer token for the version checks and npm's `_authToken` (pip, Go and Maven need the username and password) |
+
+Credentials are sent only to the mirror hosts, never to the public registries or to changelog sources, and reach the sandbox as uploaded config files rather than command arguments. Registry URLs must not embed credentials, and credentials require `https`.
+
+> **The sandbox can read them.** pip, npm and the others need the credential in a file inside the pod, and the scanned repository's own code runs there. Use a read-only account that can see only what a scan needs.
+
 ### HTTP Client
 
 | Variable | Default | Description |
@@ -509,17 +590,20 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIGRATOWL_API_HOST` | `0.0.0.0` | Bind address |
-| `MIGRATOWL_API_PORT` | `8000` | Bind port |
+| `MIGRATOWL_LOG_LEVEL` | `INFO` | Log level for Migratowl's own messages (`DEBUG`, `INFO`, `WARNING`, `ERROR`); at `INFO` each scan logs its candidates, update failures and validation result per ecosystem |
+| `MIGRATOWL_API_TOKEN` | — | When set, `POST /webhook` and all `/jobs` endpoints require `Authorization: Bearer <token>` (`/healthz` stays open). Set it whenever the server is reachable from anything but localhost; the server logs a warning at startup when it is unset |
+| `MIGRATOWL_CALLBACK_ALLOW_PRIVATE` | `false` | Allow `callback_url` to target private, loopback or link-local addresses. By default such URLs are rejected with `422`, hostnames are resolved again before the callback is sent, and redirects are not followed |
 
 ### Git Providers
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_TOKEN` | — | GitHub personal access token; needs `repo:status` and `public_repo` (or `repo` for private repos) scopes to post PR comments and commit statuses |
+| `GITHUB_TOKEN` | — | GitHub personal access token; needs `repo:status` and `public_repo` (or `repo` for private repos) scopes to post PR comments and commit statuses. Also used to clone private repositories on `github.com` (or the host of `GITHUB_API_URL`) |
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server (e.g. `https://github.corp.com/api/v3`) |
-| `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses |
+| `GITLAB_TOKEN` | — | GitLab personal access token with `api` scope; needed to post MR comments and commit statuses. Also used to clone private repositories on the host of `GITLAB_API_URL` |
 | `GITLAB_API_URL` | `https://gitlab.com/api/v4` | Override for self-hosted GitLab |
+
+Private repositories: with the token for the repository's host set, `repo_url` needs no credentials. The token goes to `git clone` as a request header for that host only. It is not written to the clone's `.git/config`, which code in the sandbox could read, and it is not echoed in errors. Credentials embedded in `repo_url` (`https://user:token@host/…`) are handled the same way. If the host rejects the token, the clone is retried without it, so a public repository still works.
 
 ### Observability
 
@@ -531,9 +615,31 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 
 ---
 
+## Running the Server in a Cluster
+
+The server image is `ghcr.io/bitkaio/migratowl-server` (non-root, read-only root filesystem, one process; job history in `/data`). The Helm chart in [`deploy/helm/migratowl`](deploy/helm/migratowl) runs it in the cluster it scans from, with a ServiceAccount whose Role is limited to the sandbox namespace and a volume for the SQLite job history.
+
+Set up the sandbox prerequisites first ([Kubernetes Setup](#kubernetes-setup): the agent-sandbox controller, `k8s/sandbox-template.yaml` and `k8s/sandbox-router.yaml`, or use `sandbox.mode=raw`), then:
+
+```bash
+kubectl create secret generic migratowl-env \
+  --from-literal=ANTHROPIC_API_KEY=... \
+  --from-literal=MIGRATOWL_API_TOKEN="$(openssl rand -hex 32)" \
+  --from-literal=GITHUB_TOKEN=...
+
+helm install migratowl oci://ghcr.io/bitkaio/charts/migratowl --set existingSecret=migratowl-env
+kubectl port-forward svc/migratowl 8000:8000
+```
+
+In the cluster there is no `kubectl` to tunnel with, so agent-sandbox mode connects to the sandbox-router Service directly (`MIGRATOWL_SANDBOX_CONNECTION_MODE=direct`, `MIGRATOWL_SANDBOX_API_URL`); the chart sets both. Options (`sandbox.mode`, `sandbox.namespace`, `persistence.*`, `env`, `resources`) are in [`values.yaml`](deploy/helm/migratowl/values.yaml). Keep the Deployment at one replica: jobs live in a SQLite file and startup reconciliation assumes a single process.
+
+To build the image yourself: `docker build -t migratowl-server .`
+
+---
+
 ## Kubernetes Setup
 
-Migratowl uses [langchain-kubernetes](https://github.com/bitkaio/langchain-kubernetes) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and gVisor/Kata isolation.
+Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.1` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
 
 ```bash
 # Install controller + CRDs (one-time)
@@ -559,22 +665,28 @@ kubectl apply -f k8s/warm-pool.yaml
 
 ```bash
 MIGRATOWL_SANDBOX_MODE=raw          # set in .env
-MIGRATOWL_SANDBOX_IMAGE=python:3.12-slim
+MIGRATOWL_SANDBOX_IMAGE=ghcr.io/bitkaio/migratowl-runtime:latest  # default; needs git + toolchains
 MIGRATOWL_SANDBOX_BLOCK_NETWORK=true  # requires Calico/Cilium; set false for kind (kindnet ignores NetworkPolicy)
 ```
 
-Apply the raw-mode RBAC instead of the default one:
+Apply the raw-mode RBAC instead of the default one, plus the sandbox egress policy:
 
 ```bash
 kubectl apply -f k8s/rbac-raw.yaml
+kubectl apply -f k8s/sandbox-egress-raw.yaml
 ```
 
-**Security defaults applied to every pod:**
+With `MIGRATOWL_SANDBOX_BLOCK_NETWORK=true`, every sandbox pod gets a deny-all `NetworkPolicy`. On a CNI that enforces it, that also blocks DNS, `git clone` and package installs, so the scan can't fetch anything. `k8s/sandbox-egress-raw.yaml` re-opens DNS and HTTP/HTTPS to public addresses only. Apply it in every namespace that runs sandboxes.
 
-- `runAsNonRoot: true`, `runAsUser: 1000`
-- `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
-- `automountServiceAccountToken: false`
-- Deny-all `NetworkPolicy` (ingress + egress)
+**Sandbox pod security:**
+
+| | agent-sandbox mode (`k8s/sandbox-template.yaml`) | raw mode (set by langchain-kubernetes) |
+|---|---|---|
+| User | `runAsNonRoot`, UID/GID 1000 | `runAsNonRoot`, UID 1000 |
+| Privileges | `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, seccomp `RuntimeDefault` | same |
+| Service account token | not mounted | not mounted |
+| Network | agent-sandbox's managed policy: cluster IPs, VPC subnets and node metadata blocked; external egress open | deny-all per pod; with `k8s/sandbox-egress-raw.yaml`, DNS plus ports 80/443 to public addresses only |
+| Kernel isolation | opt-in: install gVisor or Kata and set `runtimeClassName` in the template | not available |
 
 ---
 
@@ -658,7 +770,7 @@ flowchart TB
     end
 
     subgraph Sandbox["Kubernetes Sandbox<br/>(langchain-kubernetes)"]
-        Pod["Ephemeral Pod<br/>• Non-root, no caps<br/>• Deny-all NetworkPolicy<br/>• gVisor / Kata isolation"]
+        Pod["Ephemeral Pod<br/>• Non-root, no caps, no SA token<br/>• Internal network blocked<br/>• Optional gVisor / Kata"]
     end
 
     Client["HTTP Client"] --> W
@@ -675,42 +787,58 @@ flowchart TB
 ```text
 migratowl/
 ├── api/
-│   ├── main.py          # FastAPI app, /webhook + /jobs endpoints, lifespan
-│   ├── jobs.py          # In-memory JobStore (PENDING→RUNNING→COMPLETED|FAILED)
+│   ├── main.py          # FastAPI app: /webhook, /jobs, /healthz, lifespan, auth, scan runner
+│   ├── jobs.py          # JobStore interface + in-memory store
+│   ├── sqlite_jobs.py   # Durable SQLite JobStore (crash recovery)
+│   ├── checkpoint.py    # LangGraph checkpointer (SQLite or memory)
+│   ├── reconcile.py     # On startup: orphaned pending/running jobs → interrupted
+│   ├── resume.py        # Resume: reconnect to the surviving sandbox or start over
 │   └── helpers.py       # extract_verdicts, assemble_report
 ├── agent/
 │   ├── graph.py         # graph singleton + sandbox lifecycle (langgraph.json entrypoint)
 │   ├── factory.py       # build_tools(), create_migratowl_agent() — builds the LangGraph
-│   ├── sandbox.py       # KubernetesProvider init/teardown helpers
+│   ├── sandbox.py       # KubernetesSandboxManager construction
 │   ├── subagents.py     # package-analyzer subagent definition
 │   ├── session_graph.py # Patches ainvoke/astream to inject LangFuse session IDs
 │   └── tools/
 │       ├── clone.py     # clone_repo, copy_source
 │       ├── detect.py    # detect_languages
-│       ├── scan.py      # scan_dependencies
+│       ├── scan.py      # scan_dependencies (manifests + lockfiles)
 │       ├── registry.py  # check_outdated_deps
 │       ├── update.py    # update_dependencies
+│       ├── validate.py  # validate_project (install, build, test per ecosystem)
 │       ├── execute.py   # execute_project (runs install + test in sandbox)
 │       ├── changelog.py # fetch_changelog (PyPI / npm / GitHub / raw HTTP)
 │       ├── manifest.py  # read_manifest, patch_manifest (sandbox file I/O)
 │       └── prepare.py   # prepare_scan (pipeline as an agent tool, for deep-agents-ui)
+├── git/
+│   ├── formatter.py     # ScanAnalysisReport → PR/MR comment (escaped Markdown)
+│   ├── github.py        # GitHub PR comments and commit statuses
+│   ├── gitlab.py        # GitLab MR comments and commit statuses
+│   └── notify.py        # Picks the provider and posts after a scan
 ├── models/
 │   └── schemas.py       # All Pydantic models (ScanWebhookPayload, ScanAnalysisReport, …)
 ├── pipeline.py          # Deterministic Phases 1–2, presolve, LLM brief
 ├── config.py            # pydantic-settings Settings class (MIGRATOWL_ prefix)
+├── logging_setup.py     # MIGRATOWL_LOG_LEVEL and the fallback log handler
 ├── observability.py     # LangFuse CallbackHandler setup + session ID injection
-├── registry.py          # Registry query logic (PyPI, npm, crates.io, Go proxy)
-├── parsers.py           # Manifest parsers per ecosystem
+├── registry.py          # Registry queries (PyPI, npm, crates.io, Go proxy, Maven Central)
+├── parsers.py           # Manifest and lockfile parsers per ecosystem
 ├── changelog.py         # Changelog fetch strategies (multi-strategy fallback)
-├── patches.py           # Dependency version patching helpers
+├── patches.py           # Monkey-patches for third-party library bugs
 └── http.py              # Shared HTTPX async client with retry logic
+
+Dockerfile               # Server image (ghcr.io/bitkaio/migratowl-server)
+deploy/helm/migratowl/   # Helm chart for the server
 
 k8s/
 ├── rbac.yaml            # RBAC for agent-sandbox mode (manages Sandbox CRs)
 ├── rbac-raw.yaml        # RBAC for raw mode (manages Pods + NetworkPolicies directly)
+├── sandbox-egress-raw.yaml # Raw mode: allow DNS + public HTTP(S) egress from sandbox pods
 ├── sandbox-template.yaml# AgentSandboxTemplate CRD for the runner pod
 ├── warm-pool.yaml       # Optional warm pool for faster pod startup
 ├── sandbox-router.yaml  # Optional sandbox router service
+├── sandbox-router/      # Sandbox router image source
 └── runtime/             # Dockerfile + entrypoint for the sandbox runner image
 
 tests/                   # Mirrors migratowl/ package structure
@@ -727,7 +855,7 @@ tests/                   # Mirrors migratowl/ package structure
 | Test | `uv run pytest tests/ -v` |
 | Lint | `uv run ruff check migratowl/` |
 
-**TDD is mandatory** for all production code in `migratowl/`. The Red-Green-Refactor cycle is enforced: write a failing test first, confirm RED, write minimal code to pass, confirm GREEN, then refactor. No production code without a corresponding test in `tests/`. See `CLAUDE.md` for details.
+**TDD is mandatory** for all production code in `migratowl/`. The Red-Green-Refactor cycle is enforced: write a failing test first, confirm RED, write minimal code to pass, confirm GREEN, then refactor. No production code without a corresponding test in `tests/`.
 
 ---
 

@@ -20,6 +20,8 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.update import _sh, q, venv_path
+
 
 def create_execute_project_tool(
     get_backend: Callable[[], Any],
@@ -49,13 +51,13 @@ def create_execute_project_tool(
         """
         backend = get_backend()
         folder_path = f"{workspace_path}/{folder_name}"
+        # Use the folder's Python venv when update/validate created one.
+        venv = venv_path(workspace_path, folder_name)
+        activate = q(f"{venv}/bin/activate")
+        prefix = f"if [ -f {activate} ]; then . {activate}; fi && cd {q(folder_path)}"
 
-        install_result = backend.execute(
-            f"sh -c 'export PIP_BREAK_SYSTEM_PACKAGES=1 && cd {folder_path} && {install_command}'"
-        )
-        test_result = backend.execute(
-            f"sh -c 'export PIP_BREAK_SYSTEM_PACKAGES=1 && cd {folder_path} && {test_command}'"
-        )
+        install_result = backend.execute(_sh(f"{prefix} && {install_command}"))
+        test_result = backend.execute(_sh(f"{prefix} && {test_command}"))
 
         return json.dumps({
             "install": _format_result(install_result, install_command, max_output_chars),

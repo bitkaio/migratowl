@@ -17,31 +17,37 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import ipaddress
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 load_dotenv()  # inject .env into os.environ so third-party SDKs (anthropic, etc.) can read it
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
 from migratowl.api.helpers import (  # noqa: E402
     ReportExtractionError,
-    _accumulate_tokens,
+    TokenUsage,
     assemble_report,
     extract_verdicts,
+    sum_usage,
 )
 from migratowl.api.jobs import JobStore, create_job_store  # noqa: E402
 from migratowl.config import Settings, get_settings  # noqa: E402
 from migratowl.git.notify import notify_pr_done, notify_pr_failed, notify_pr_start  # noqa: E402
 from migratowl.http import close_http_client  # noqa: E402
+from migratowl.logging_setup import configure_logging  # noqa: E402
 from migratowl.models.schemas import (  # noqa: E402
     JobState,
     JobStatus,
@@ -65,6 +71,7 @@ def create_app(
     """
     if settings is None:
         settings = get_settings()
+    configure_logging(settings.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -73,6 +80,12 @@ def create_app(
         # Ensure third-party monkey-patches are applied on the webhook path too
         # (previously only applied when agent/graph.py was imported).
         apply_patches()
+
+        if not settings.api_token:
+            logger.warning(
+                "MIGRATOWL_API_TOKEN is not set: /webhook and /jobs accept unauthenticated requests. "
+                "Set a token unless the server is only reachable from localhost."
+            )
 
         # Resource throttle: one scan at a time by default. Each job runs in its
         # own sandbox pod (keyed by thread_id == job_id), so this bounds sandbox
@@ -128,23 +141,47 @@ def create_app(
 
             yield
 
-            # Shutdown: proactively mark in-flight scans INTERRUPTED so a rolling
-            # deploy leaves them resumable rather than relying on next-boot
-            # reconcile (stack closes the checkpointer connection on exit).
-            for job in app.state.job_store.list_by_state(JobState.RUNNING):
-                app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+            # Shutdown: cancel in-flight scan tasks (a cancelled scan keeps its
+            # sandbox and checkpoint), then mark every running or queued job
+            # INTERRUPTED so a rolling deploy leaves them resumable rather than
+            # relying on next-boot reconcile (stack closes the checkpointer on exit).
+            tasks = list(app.state.tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for state in (JobState.RUNNING, JobState.PENDING):
+                for job in app.state.job_store.list_by_state(state):
+                    app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
             await close_http_client()
             if hasattr(app.state, "manager"):
                 await app.state.manager.ashutdown()
 
     app = FastAPI(title="Migratowl", lifespan=lifespan)
 
+    async def require_token(authorization: str | None = Header(default=None)) -> None:
+        """Enforce ``Authorization: Bearer <MIGRATOWL_API_TOKEN>`` when a token is configured."""
+        if not settings.api_token:
+            return
+        expected = f"Bearer {settings.api_token}".encode()
+        if authorization is None or not hmac.compare_digest(authorization.encode(), expected):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing API token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    authenticated = [Depends(require_token)]
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/webhook", status_code=202)
+    @app.post("/webhook", status_code=202, dependencies=authenticated)
     async def webhook(payload: ScanWebhookPayload) -> WebhookAcceptedResponse:
+        if payload.callback_url:
+            problem = callback_url_problem(payload.callback_url, allow_private=settings.callback_allow_private)
+            if problem:
+                raise HTTPException(status_code=422, detail=problem)
         store: JobStore = app.state.job_store
         job = store.create(payload)
         task = asyncio.create_task(_run_scan(app, job.job_id))
@@ -155,7 +192,7 @@ def create_app(
             status_url=f"/jobs/{job.job_id}",
         )
 
-    @app.get("/jobs", response_model=None)
+    @app.get("/jobs", response_model=None, dependencies=authenticated)
     async def list_jobs(state: str | None = None) -> dict | JSONResponse:
         """List jobs, optionally filtered by state — lets operators see interrupted work."""
         store: JobStore = app.state.job_store
@@ -171,17 +208,17 @@ def create_app(
                 status_code=422, content={"detail": f"Invalid state '{state}'"}
             )
         jobs = store.list_by_state(job_state)
-        return {"jobs": [j.model_dump(mode="json") for j in jobs]}
+        return {"jobs": [_public_view(j).model_dump(mode="json") for j in jobs]}
 
-    @app.get("/jobs/{job_id}", response_model=None)
+    @app.get("/jobs/{job_id}", response_model=None, dependencies=authenticated)
     async def get_job(job_id: str) -> JobStatus | JSONResponse:
         store: JobStore = app.state.job_store
         job = store.get(job_id)
         if job is None:
             return JSONResponse(status_code=404, content={"detail": "Job not found"})
-        return job
+        return _public_view(job)
 
-    @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None)
+    @app.post("/jobs/{job_id}/resume", status_code=202, response_model=None, dependencies=authenticated)
     async def resume_job(job_id: str) -> WebhookAcceptedResponse | JSONResponse:
         store: JobStore = app.state.job_store
         settings_: Settings = app.state.settings
@@ -269,7 +306,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 )
 
             from migratowl.agent.factory import build_tools, create_migratowl_agent
-            from migratowl.pipeline import build_analysis_brief, prepare_scan, presolve
+            from migratowl.pipeline import build_analysis_brief, fetch_major_changelogs, prepare_scan, presolve
 
             settings = app.state.settings
             config: RunnableConfig = {"configurable": {"thread_id": job_id}}
@@ -283,10 +320,15 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             )
             prepared = await prepare_scan(tools, job.payload, config, tail_chars=settings.analysis_tail_chars)
             resolved, pending = presolve(prepared)
+            if pending:
+                prepared.changelog_excerpts = await fetch_major_changelogs(tools, pending, config)
 
             verdicts: list = []
-            tokens = (0, 0)
+            tokens = TokenUsage()
             if pending:
+                from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+                usage = UsageMetadataCallbackHandler()
                 graph = create_migratowl_agent(
                     app.state.manager,
                     tools=tools,
@@ -296,18 +338,20 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     include_prerelease=job.payload.include_prerelease,
                     rate_limiter=getattr(app.state, "rate_limiter", None),
                     checkpointer=getattr(app.state, "checkpointer", None),
+                    usage_callback=usage,
                 )
                 result = await graph.ainvoke(
                     {"messages": [("user", build_analysis_brief(job.payload, prepared, pending))]},
                     config=config,
                 )
                 verdicts = extract_verdicts(result)
-                tokens = _accumulate_tokens(result.get("messages", []))
+                tokens = sum_usage(usage.usage_metadata.values())
 
             report = assemble_report(
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
             )
             report.model_name = settings.model_name
+            report.repo_url = redact_secrets(report.repo_url)
             store.set_result(job_id, report)
 
             # Terminal side effects fire at most once across the original run and
@@ -315,25 +359,81 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             # comment or re-fires the callback.
             if not job.side_effects_done:
                 if job.payload.callback_url:
-                    await _post_callback(job.payload.callback_url, report)
+                    await _post_callback(
+                        job.payload.callback_url,
+                        job_id,
+                        report.model_dump(mode="json"),
+                        state="completed",
+                        allow_private=app.state.settings.callback_allow_private,
+                    )
                 await notify_pr_done(job.payload, report, app.state.settings)
                 store.mark_side_effects_done(job_id)
 
         except (PipelineError, ReportExtractionError) as exc:
-            logger.error("Scan for job %s produced no report: %s", job_id, exc)
-            store.set_error(job_id, str(exc))
-            if not job.side_effects_done:
-                await notify_pr_failed(job.payload, app.state.settings)
+            logger.error("Scan for job %s produced no report: %s", job_id, redact_secrets(str(exc)))
+            await _fail_job(app, job, str(exc))
         except Exception:
             logger.exception("Scan failed for job %s", job_id)
-            store.set_error(job_id, "Internal scan error")
-            if not job.side_effects_done:
-                await notify_pr_failed(job.payload, app.state.settings)
+            await _fail_job(app, job, "Internal scan error")
 
         # Terminal outcome: free the sandbox now instead of leaving the pod running
         # until shutdown or the TTL sweep. Not reached on cancellation (shutdown),
         # so interrupted jobs keep their sandbox for resume.
         await _release_sandbox(app.state.manager, job_id)
+
+
+# Credentials that can surface in error text (e.g. a clone URL echoed by git).
+_URL_USERINFO = re.compile(r"(?<=://)[^/\s@'\"]+@")
+_TOKENS = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})")
+
+
+def redact_secrets(text: str, known_secrets: tuple[str, ...] = ()) -> str:
+    """Strip URL credentials, known token formats and ``known_secrets`` (by value)."""
+    text = _TOKENS.sub("***", _URL_USERINFO.sub("***@", text))
+    for secret in known_secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+def _public_view(job: JobStatus) -> JobStatus:
+    """Copy of ``job`` safe to return over the API: no credentials in the repo URL.
+
+    The stored payload keeps the real URL, because resume needs it to clone.
+    """
+    payload = job.payload.model_copy(update={"repo_url": redact_secrets(job.payload.repo_url)})
+    return job.model_copy(update={"payload": payload})
+
+
+async def _fail_job(app: FastAPI, job: JobStatus, error: str) -> None:
+    """Mark the job failed and fire the failure side effects (at most once).
+
+    ``error`` goes to the job store, the PR comment and the callback, so it is
+    redacted first; the raw text stays in the server log only.
+    """
+    settings_: Settings = app.state.settings
+    error = redact_secrets(error, (settings_.github_token, settings_.gitlab_token))
+    store: JobStore = app.state.job_store
+    store.set_error(job.job_id, error)
+    if job.side_effects_done:
+        return
+    if job.payload.callback_url:
+        body = {
+            "job_id": job.job_id,
+            "state": JobState.FAILED.value,
+            "error": error,
+            "repo_url": redact_secrets(job.payload.repo_url),
+            "branch_name": job.payload.branch_name,
+        }
+        await _post_callback(
+            job.payload.callback_url,
+            job.job_id,
+            body,
+            state=JobState.FAILED.value,
+            allow_private=app.state.settings.callback_allow_private,
+        )
+    await notify_pr_failed(job.payload, app.state.settings, error=error)
+    store.mark_side_effects_done(job.job_id)
 
 
 async def _release_sandbox(manager: Any, job_id: str) -> None:
@@ -350,18 +450,75 @@ async def _release_sandbox(manager: Any, job_id: str) -> None:
         logger.warning("Failed to delete sandbox %s for job %s", sandbox.id, job_id, exc_info=True)
 
 
-async def _post_callback(callback_url: str, report: Any) -> None:
-    """POST result to the caller's callback URL."""
+def callback_url_problem(url: str, *, allow_private: bool) -> str | None:
+    """Why ``url`` is not an acceptable callback target, or None if it is.
+
+    Literal internal IPs and ``localhost`` are rejected here; hostnames are
+    resolved and checked again right before the callback is sent.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return "callback_url must be an http(s) URL"
+    if allow_private:
+        return None
+    host = parts.hostname.lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return "callback_url must not point to localhost"
     try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not ip.is_global:
+        return "callback_url must not point to a private, loopback or link-local address"
+    return None
+
+
+async def _resolve_host(host: str) -> list[str]:
+    """IP addresses ``host`` resolves to."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    return [str(info[4][0]) for info in infos]
+
+
+async def _post_callback(
+    callback_url: str,
+    job_id: str,
+    body: dict[str, Any],
+    *,
+    state: str,
+    allow_private: bool = False,
+) -> None:
+    """POST the outcome to the caller's callback URL.
+
+    A completed job sends the ``ScanAnalysisReport``; a failed one sends
+    ``{job_id, state, error, repo_url, branch_name}``. Both carry the job id and
+    state in ``X-Migratowl-Job-Id`` / ``X-Migratowl-Job-State`` headers.
+
+    Unless ``allow_private`` is set, the host is resolved first and the call is
+    skipped if any address is not public (DNS can point a public-looking name at
+    an internal service). Redirects are never followed.
+    """
+    try:
+        if not allow_private:
+            host = urlsplit(callback_url).hostname or ""
+            addresses = await _resolve_host(host)
+            if not addresses or any(not ipaddress.ip_address(a.split("%")[0]).is_global for a in addresses):
+                logger.warning("Callback to %s skipped: host resolves to a non-public address", callback_url)
+                return
+
         from migratowl.http import get_http_client
 
         client = get_http_client()
         resp = await client.post(
             callback_url,
-            json=report.model_dump(mode="json"),
+            json=body,
+            headers={"X-Migratowl-Job-Id": job_id, "X-Migratowl-Job-State": state},
             timeout=30.0,
+            follow_redirects=False,
         )
-        logger.info("Callback POST to %s returned %s", callback_url, resp.status_code)
+        if resp.is_success:
+            logger.info("Callback POST to %s returned %s", callback_url, resp.status_code)
+        else:
+            logger.warning("Callback POST to %s returned %s", callback_url, resp.status_code)
     except Exception:
         logger.warning("Failed to POST callback to %s", callback_url, exc_info=True)
 

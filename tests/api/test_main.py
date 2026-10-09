@@ -504,6 +504,35 @@ class TestGracefulShutdown:
         # After lifespan exit (shutdown), the running job is INTERRUPTED.
         assert application.state.job_store.get(job_id).state == JobState.INTERRUPTED
 
+    @pytest.mark.asyncio
+    async def test_queued_jobs_marked_interrupted_on_shutdown(self, mock_manager: MagicMock) -> None:
+        # PENDING jobs are waiting on the scan semaphore; they are just as orphaned.
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        async with application.router.lifespan_context(application):
+            job = application.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+        assert application.state.job_store.get(job.job_id).state == JobState.INTERRUPTED
+
+    @pytest.mark.asyncio
+    async def test_in_flight_scan_tasks_are_cancelled_on_shutdown(self, mock_manager: MagicMock) -> None:
+        import asyncio
+
+        settings = Settings(_env_file=None, persistence_backend="memory")
+        application = main_mod.create_app(settings=settings, manager=mock_manager)
+        started = asyncio.Event()
+
+        async def never_finishes() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async with application.router.lifespan_context(application):
+            task = asyncio.create_task(never_finishes())
+            application.state.tasks.add(task)
+            await started.wait()
+        assert task.cancelled()
+
 class TestSandboxReleaseOnTerminalState:
     """A finished job's sandbox must be deleted, not left running until shutdown."""
 
@@ -617,3 +646,225 @@ class TestRunScanPipeline:
         assert failed.state == "failed"
         assert failed.error == "Failed to clone https://github.com/x/y"
         mock_failed.assert_awaited_once()
+
+
+
+class TestRunScanTokenUsage:
+    @pytest.mark.asyncio
+    async def test_counts_every_model_call_including_subagent_and_cache(self, app) -> None:
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        def llm_end(cb, inp: int, out: int, cache_read: int = 0, cache_creation: int = 0) -> None:
+            usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out,
+                     "input_token_details": {"cache_read": cache_read, "cache_creation": cache_creation}}
+            msg = AIMessage(content="", usage_metadata=usage, response_metadata={"model_name": "m"})
+            cb.on_llm_end(LLMResult(generations=[[ChatGeneration(message=msg)]]))
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+
+            async def ainvoke(*args, **kwargs):
+                cb = mock_factory.call_args[1]["usage_callback"]
+                llm_end(cb, 1000, 100, cache_read=600)          # main agent
+                llm_end(cb, 500, 50, cache_creation=200)        # package-analyzer subagent
+                return _ok_result()                             # its messages carry no usage
+
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.side_effect = ainvoke
+            mock_factory.return_value = mock_graph
+
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        result = app.state.job_store.get(job.job_id).result
+        assert (result.total_input_tokens, result.total_output_tokens) == (1500, 150)
+        assert (result.total_cache_read_tokens, result.total_cache_creation_tokens) == (600, 200)
+
+
+class TestCallbackOnEveryOutcome:
+    @pytest.mark.asyncio
+    async def test_failed_scan_posts_failure_callback(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError("Failed to clone https://x/y")
+        with patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url="https://github.com/x/y", callback_url="https://cb.example/r", pr_number=1)
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        cb.assert_awaited_once()
+        url, job_id, body = cb.call_args.args
+        assert (url, job_id) == ("https://cb.example/r", job.job_id)
+        assert body == {
+            "job_id": job.job_id, "state": "failed", "error": "Failed to clone https://x/y",
+            "repo_url": "https://github.com/x/y", "branch_name": "main",
+        }
+        assert failed.call_args.kwargs["error"] == "Failed to clone https://x/y"
+        assert app.state.job_store.get(job.job_id).side_effects_done is True
+
+    @pytest.mark.asyncio
+    async def test_callback_sends_job_headers_and_logs_non_2xx(self, caplog, monkeypatch) -> None:
+        import httpx
+
+        async def public(host: str) -> list[str]:
+            return ["93.184.216.34"]
+
+        monkeypatch.setattr(main_mod, "_resolve_host", public)
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.update(request.headers)
+            return httpx.Response(500)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with patch("migratowl.http.get_http_client", return_value=client), caplog.at_level("WARNING"):
+            await main_mod._post_callback("https://cb.example/r", "job-1", {"state": "failed"}, state="failed")
+        await client.aclose()
+
+        assert seen["x-migratowl-job-id"] == "job-1"
+        assert seen["x-migratowl-job-state"] == "failed"
+        assert any("returned 500" in r.getMessage() for r in caplog.records)
+
+
+class TestFailureErrorsAreRedacted:
+    def test_redact_strips_url_credentials_and_tokens(self) -> None:
+        from migratowl.api.main import redact_secrets
+
+        raw = (
+            "fatal: unable to access 'https://oauth2:glpat-abcdefghij1234567890@gitlab.com/g/r.git/': 403\n"
+            "remote: https://x-access-token:ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/o/r\n"
+            "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 and github_pat_11ABCDEFG0123456789_abcdefghijklmnop"
+        )
+        out = redact_secrets(raw)
+        for secret in ("glpat-abcdefghij1234567890", "oauth2:", "x-access-token:", "ghs_ABCDEF", "ghp_ABCDEF",
+                       "github_pat_11ABCDEFG"):
+            assert secret not in out
+        assert "https://***@gitlab.com/g/r.git/" in out
+        assert "unable to access" in out  # the useful part survives
+
+    @pytest.mark.asyncio
+    async def test_failure_sinks_get_the_redacted_error(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError(
+            "Failed to clone https://bob:ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/x/y"
+        )
+        with patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url="https://github.com/x/y", callback_url="https://cb.example/r", pr_number=1)
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        for sink in (cb.call_args.args[2]["error"], failed.call_args.kwargs["error"],
+                     app.state.job_store.get(job.job_id).error):
+            assert "ghp_" not in sink and "bob:" not in sink
+            assert sink == "Failed to clone https://***@github.com/x/y"
+
+
+class TestConfiguredTokensAreRedacted:
+    @pytest.mark.asyncio
+    async def test_configured_git_tokens_are_redacted_whatever_their_format(self, app, fake_pipeline) -> None:
+        # Tokens with no recognisable prefix (fine-grained, GHES, self-hosted GitLab) are
+        # caught by value.
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        app.state.settings = app.state.settings.model_copy(
+            update={"github_token": "plainGithubToken123", "gitlab_token": "selfhostedLabToken456"}
+        )
+        fake_pipeline.prepare_scan.side_effect = PipelineError(
+            "auth failed for plainGithubToken123 and selfhostedLabToken456"
+        )
+        with patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock) as failed:
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y", pr_number=1))
+            await main_mod._run_scan(app, job.job_id)
+
+        error = failed.call_args.kwargs["error"]
+        assert "plainGithubToken123" not in error and "selfhostedLabToken456" not in error
+        assert app.state.job_store.get(job.job_id).error == error
+
+
+class TestRepoUrlCredentialsNeverEchoed:
+    """A repo_url with embedded credentials must not leave the server in any output."""
+
+    CRED_URL = "https://bob:ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/x/y"
+    SAFE_URL = "https://***@github.com/x/y"
+
+    @pytest.mark.asyncio
+    async def test_failure_callback_and_log(self, app, fake_pipeline, caplog) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import PipelineError
+
+        fake_pipeline.prepare_scan.side_effect = PipelineError(f"Failed to clone {self.CRED_URL}")
+        with patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_failed", new_callable=AsyncMock), caplog.at_level("ERROR"):
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url=self.CRED_URL, callback_url="https://cb.example/r")
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        assert cb.call_args.args[2]["repo_url"] == self.SAFE_URL
+        assert all("ghp_" not in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_completed_report_and_callback(self, app) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = _ok_result()
+            mock_factory.return_value = mock_graph
+            job = app.state.job_store.create(
+                ScanWebhookPayload(repo_url=self.CRED_URL, callback_url="https://cb.example/r")
+            )
+            await main_mod._run_scan(app, job.job_id)
+
+        assert app.state.job_store.get(job.job_id).result.repo_url == self.SAFE_URL
+        assert cb.call_args.args[2]["repo_url"] == self.SAFE_URL
+
+    @pytest.mark.asyncio
+    async def test_job_endpoints_mask_the_payload(self, app, client) -> None:
+        from migratowl.models.schemas import JobState, ScanWebhookPayload
+
+        job = app.state.job_store.create(ScanWebhookPayload(repo_url=self.CRED_URL))
+        app.state.job_store.update_state(job.job_id, JobState.INTERRUPTED)
+
+        one = (await client.get(f"/jobs/{job.job_id}")).json()
+        listed = (await client.get("/jobs?state=interrupted")).json()["jobs"][0]
+        assert one["payload"]["repo_url"] == self.SAFE_URL
+        assert listed["payload"]["repo_url"] == self.SAFE_URL
+        # The stored payload keeps the real URL: resume needs it to clone.
+        assert app.state.job_store.get(job.job_id).payload.repo_url == self.CRED_URL
+
+
+class TestRunScanFetchesChangelogs:
+    @pytest.mark.asyncio
+    async def test_major_bump_changelog_reaches_the_report(self, app) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.pipeline.fetch_major_changelogs",
+                   AsyncMock(return_value={"flask": "3.0.0\nRemoved flask.ext"})), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = _ok_result()  # verdict with empty citation
+            mock_factory.return_value = mock_graph
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        brief = mock_graph.ainvoke.call_args.args[0]["messages"][0][1]
+        assert "Removed flask.ext" in brief
+        assert app.state.job_store.get(job.job_id).result.reports[0].changelog_citation == "3.0.0\nRemoved flask.ext"

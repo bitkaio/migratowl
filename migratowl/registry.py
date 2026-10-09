@@ -21,16 +21,17 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+import defusedxml.ElementTree as ET
 import httpx
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-from migratowl.config import get_settings
+from migratowl.http import get_http_client
 from migratowl.models.schemas import Dependency, Ecosystem, OutdatedCheckMode, OutdatedDependency, RegistryFailure
+from migratowl.registries import Registries
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "migratowl/0.1.0 (https://github.com/bitkaio/migratowl)"
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +53,11 @@ class CheckOptions:
 
     mode: OutdatedCheckMode = field(default=OutdatedCheckMode.NORMAL)
     include_prerelease: bool = False
+    # Python version the sandbox installs with; PyPI releases whose
+    # requires_python excludes it are skipped. None = no filtering.
+    python_version: str | None = None
+    # Where the registries are: the public ones unless a mirror is configured.
+    registries: Registries = field(default_factory=Registries)
 
 
 # ---------------------------------------------------------------------------
@@ -125,31 +131,76 @@ def _constraint_to_specifier(raw: str) -> SpecifierSet | None:
     return None
 
 
-def _max_version(versions: list[str], include_prerelease: bool) -> str | None:
-    """Return the maximum version string from a list, optionally excluding pre-releases.
+# Semver as used by npm, crates.io and Go: MAJOR.MINOR.PATCH[-prerelease][+build]
+_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
-    Strips leading 'v' before parsing. Invalid version strings are silently skipped.
-    Returns the normalized PEP 440 string of the maximum version, or None if the
-    list is empty or all entries are invalid/excluded.
+# Release sorts after all its prereleases: (1,) > (0, ...)
+_RELEASE = (1,)
+
+
+def _semver_key(raw: str) -> tuple | None:
+    """Semver precedence key, or None when ``raw`` is not strict semver.
+
+    Prerelease identifiers compare per the semver spec: numeric ones
+    numerically and below alphanumeric ones (``beta.2 < beta.10 < beta.x``).
     """
-    parsed: list[Version] = []
-    for raw in versions:
-        try:
-            ver = Version(raw.lstrip("v"))
-        except InvalidVersion:
-            continue
-        if not include_prerelease and ver.is_prerelease:
-            continue
-        parsed.append(ver)
-    if not parsed:
+    m = _SEMVER_RE.match(raw.strip())
+    if not m:
         return None
-    return str(max(parsed))
+    pre = m[4]
+    pre_key = _RELEASE if pre is None else (
+        0, tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in pre.split("."))
+    )
+    return (int(m[1]), int(m[2]), int(m[3])), pre_key
+
+
+def _sort_key(raw: str, semver: bool) -> tuple[object, bool] | None:
+    """``(sort key, is_prerelease)`` for a version string, or None if unparseable.
+
+    ``semver=True`` reads ``-x`` suffixes as prereleases (``5.0.0-0`` is before
+    5.0.0); PEP 440 would read them as post-releases. Non-semver strings in a
+    semver ecosystem (e.g. ``2.1``) fall back to PEP 440 in the same key shape.
+    """
+    if semver:
+        key = _semver_key(raw)
+        if key is not None:
+            return key, key[1] != _RELEASE
+    try:
+        ver = Version(raw.strip().lstrip("v"))
+    except InvalidVersion:
+        return None
+    if not semver:
+        return ver, ver.is_prerelease
+    release = tuple(ver.release) + (0,) * max(0, 3 - len(ver.release))
+    return (release, (0, ()) if ver.is_prerelease else _RELEASE), ver.is_prerelease
+
+
+def _max_version(versions: list[str], include_prerelease: bool, *, semver: bool = False) -> str | None:
+    """Return the highest version from a list, optionally excluding pre-releases.
+
+    Returns the version as the registry spells it (only a leading 'v' is
+    stripped), so it can be passed back to npm/cargo/go/pip unchanged. Invalid
+    version strings are skipped; returns None if nothing is left.
+    """
+    best: tuple[object, str] | None = None
+    for raw in versions:
+        parsed = _sort_key(raw, semver)
+        if parsed is None:
+            continue
+        key, is_pre = parsed
+        if is_pre and not include_prerelease:
+            continue
+        if best is None or key > best[0]:  # type: ignore[operator]
+            best = (key, raw)
+    return best[1].strip().lstrip("v") if best else None
 
 
 def _resolve_latest(
     current_version: str,
     all_versions: list[str],
     options: CheckOptions,
+    *,
+    semver: bool = False,
 ) -> str | None:
     """Return the target version to compare against given the mode and options.
 
@@ -170,21 +221,36 @@ def _resolve_latest(
                         candidates.append(v)
                 except InvalidVersion:
                     continue
-            return _max_version(candidates, options.include_prerelease)
+            return _max_version(candidates, options.include_prerelease, semver=semver)
         # Bare/exact version: fall through to global max (nothing to constrain)
-        return _max_version(all_versions, options.include_prerelease)
+        return _max_version(all_versions, options.include_prerelease, semver=semver)
     # NORMAL: global max, ignore constraint
-    return _max_version(all_versions, options.include_prerelease)
+    return _max_version(all_versions, options.include_prerelease, semver=semver)
 
 
-def _is_outdated(current: str, latest: str) -> bool:
+def _is_outdated(current: str, latest: str, *, semver: bool = False) -> bool:
     """Return True if latest is strictly newer than current."""
-    try:
-        cur = Version(_clean_version(current))
-        lat = Version(_clean_version(latest))
-    except InvalidVersion:
+    cur = _sort_key(_clean_version(current), semver)
+    lat = _sort_key(_clean_version(latest), semver)
+    if cur is None or lat is None:
         return False
-    return lat > cur
+    return lat[0] > cur[0]  # type: ignore[operator]
+
+
+def _supports_python(files: list[dict[str, Any]], python_version: str | None) -> bool:
+    """False only when every file's ``requires_python`` excludes ``python_version``."""
+    if python_version is None or not files:
+        return True
+    for f in files:
+        requires = f.get("requires_python")
+        if not requires:
+            return True
+        try:
+            if Version(python_version) in SpecifierSet(requires):
+                return True
+        except (InvalidSpecifier, InvalidVersion):
+            return True
+    return False
 
 
 def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) -> str | None:
@@ -198,13 +264,40 @@ def _extract_url_by_key(project_urls: dict[str, str] | None, keys: list[str]) ->
     return None
 
 
+# github.com/<owner>/<repo> (optionally .git, a trailing slash or #fragment) — a
+# repository root, not an issues page or a file inside it.
+_FORGE_REPO_RE = re.compile(
+    r"^https?://(?:www\.)?(github\.com|gitlab\.com)/([^/#?\s]+)/([^/#?\s]+?)(?:\.git)?/?(?:[#?].*)?$"
+)
+
+
+def forge_repo_url(url: str | None) -> str | None:
+    """``https://<forge>/<owner>/<repo>`` when ``url`` is a GitHub/GitLab repository page, else None."""
+    m = _FORGE_REPO_RE.match((url or "").strip())
+    return f"https://{m[1]}/{m[2]}/{m[3]}" if m else None
+
+
+_SCP_GIT_URL = re.compile(r"^[\w.-]+@([\w.-]+):(.+)$")  # git@github.com:owner/repo
+_SHORTHAND = {"github:": "https://github.com/", "gitlab:": "https://gitlab.com/", "bitbucket:": "https://bitbucket.org/"}
+
+
 def _clean_git_url(url: str) -> str:
-    """Strip ``git+`` prefix and ``.git`` suffix from a repository URL."""
-    if url.startswith("git+"):
-        url = url[4:]
-    if url.endswith(".git"):
-        url = url[:-4]
-    return url
+    """The https page of a repository URL in any spelling npm and PyPI use.
+
+    ``git+https://…``, ``git://…``, ``git+ssh://git@host/…``, ``git@host:owner/repo`` and
+    ``github:owner/repo`` all become ``https://host/owner/repo``; ``.git`` is dropped.
+    """
+    url = url.strip().removeprefix("git+")
+    for prefix, base in _SHORTHAND.items():
+        if url.startswith(prefix):
+            url = base + url[len(prefix):]
+    if m := _SCP_GIT_URL.match(url):
+        url = f"https://{m[1]}/{m[2]}"
+    for scheme in ("git://", "ssh://"):
+        if url.startswith(scheme):
+            host, _, path = url[len(scheme):].partition("/")
+            url = f"https://{host.rpartition('@')[2]}/{path}"  # drop a git@ user
+    return url.removesuffix(".git")
 
 
 def _extract_npm_repo_url(repository: dict[str, Any] | str | None) -> str | None:
@@ -252,6 +345,7 @@ def _go_module_to_repo_url(module_path: str) -> str | None:
 
 
 _DEFAULT_OPTIONS = CheckOptions()
+_DEFAULT_REGISTRIES = Registries()
 
 
 async def query_pypi(
@@ -261,15 +355,23 @@ async def query_pypi(
 ) -> OutdatedDependency | None:
     """Query PyPI for latest version of a Python package."""
     name = dep.name.split("[")[0]  # strip extras
-    resp = await client.get(f"https://pypi.org/pypi/{name}/json")
+    url = options.registries.pypi_json_url(name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
     info = data["info"]
 
-    all_versions = list(data.get("releases", {}).keys())
+    # PEP 592: a release whose files are all yanked was withdrawn — never suggest it.
+    # A release the sandbox's Python cannot install would only fail the install step.
+    all_versions = [
+        version
+        for version, files in data.get("releases", {}).items()
+        if (not files or not all(f.get("yanked", False) for f in files))
+        and _supports_python(files, options.python_version)
+    ]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
         return None
 
     project_urls = info.get("project_urls")
@@ -279,8 +381,16 @@ async def query_pypi(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=info.get("home_page") or None,
-        repository_url=_extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub"]),
+        repository_url=(
+            _extract_url_by_key(project_urls, ["Repository", "Source", "Source Code", "GitHub", "Code"])
+            # Many projects only publish a GitHub homepage (e.g. psutil).
+            or next(
+                filter(None, (forge_repo_url(u) for u in [info.get("home_page"), *(project_urls or {}).values()])),
+                None,
+            )
+        ),
         changelog_url=_extract_url_by_key(project_urls, ["Changelog", "Changes", "Release Notes", "History"]),
     )
 
@@ -291,14 +401,15 @@ async def query_npm(
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
     """Query npm registry for latest version of a Node.js package."""
-    resp = await client.get(f"https://registry.npmjs.org/{dep.name}")
+    url = options.registries.npm_url(dep.name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
 
     all_versions = list(data.get("versions", {}).keys())
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -307,8 +418,9 @@ async def query_npm(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=data.get("homepage") or None,
-        repository_url=_extract_npm_repo_url(data.get("repository")),
+        repository_url=_extract_npm_repo_url(data.get("repository")) or forge_repo_url(data.get("homepage")),
     )
 
 
@@ -318,15 +430,16 @@ async def query_crates(
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
     """Query crates.io for latest version of a Rust crate."""
-    resp = await client.get(f"https://crates.io/api/v1/crates/{dep.name}")
+    url = options.registries.crates_url(dep.name)
+    resp = await client.get(url, **options.registries.request_kwargs(url))
     resp.raise_for_status()
     data = resp.json()
     crate = data["crate"]
 
     all_versions = [v["num"] for v in data.get("versions", []) if not v.get("yanked", False)]
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     return OutdatedDependency(
@@ -335,10 +448,49 @@ async def query_crates(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
         homepage_url=crate.get("homepage") or None,
-        repository_url=crate.get("repository") or None,
+        repository_url=crate.get("repository") or forge_repo_url(crate.get("homepage")),
         changelog_url=crate.get("documentation") or None,
     )
+
+
+_GO_MAJOR_SUFFIX = re.compile(r"^(?P<base>.+?)/v(?P<major>\d+)$")
+_GO_MAX_MAJOR_PROBES = 5
+
+
+async def _go_version_list(
+    client: httpx.AsyncClient, module: str, registries: Registries = _DEFAULT_REGISTRIES
+) -> list[str]:
+    url = registries.go_list_url(_go_proxy_encode(module))
+    resp = await client.get(url, **registries.request_kwargs(url))
+    resp.raise_for_status()
+    return [v for v in resp.text.splitlines() if v.strip()]
+
+
+async def _newest_go_major(
+    client: httpx.AsyncClient, module: str, include_prerelease: bool, registries: Registries = _DEFAULT_REGISTRIES
+) -> tuple[str, list[str]] | None:
+    """``(module_path, versions)`` of the highest released major above ``module``, if any.
+
+    Probes ``<base>/v{N+1}``, ``/v{N+2}``, ... until a path has no release.
+    ``gopkg.in`` modules encode the major as ``.vN`` and are left alone.
+    """
+    if module.startswith("gopkg.in/"):
+        return None
+    m = _GO_MAJOR_SUFFIX.match(module)
+    base, major = (m["base"], int(m["major"])) if m else (module, 1)
+    found: tuple[str, list[str]] | None = None
+    for candidate in range(major + 1, major + 1 + _GO_MAX_MAJOR_PROBES):
+        path = f"{base}/v{candidate}"
+        try:
+            versions = await _go_version_list(client, path, registries)
+        except httpx.HTTPStatusError:
+            break  # 404/410: no such major
+        if _max_version(versions, include_prerelease, semver=True) is None:
+            break  # only prereleases (or nothing) at this major
+        found = (path, versions)
+    return found
 
 
 async def query_golang(
@@ -346,15 +498,21 @@ async def query_golang(
     dep: Dependency,
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
-    """Query Go module proxy for latest version."""
-    encoded = _go_proxy_encode(dep.name)
-    resp = await client.get(f"https://proxy.golang.org/{encoded}/@v/list")
-    resp.raise_for_status()
-    all_versions = [v for v in resp.text.splitlines() if v.strip()]
+    """Query Go module proxy for latest version.
 
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    Majors >= 2 live at a different module path (``<module>/v2``); in NORMAL mode
+    the next major paths are probed too, and ``module_path`` names the new path.
+    """
+    all_versions = await _go_version_list(client, dep.name, options.registries)
+    module_path: str | None = None
+    if options.mode == OutdatedCheckMode.NORMAL:
+        newer = await _newest_go_major(client, dep.name, options.include_prerelease, options.registries)
+        if newer is not None:
+            module_path, all_versions = newer
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
+
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
 
     # Re-attach 'v' prefix that packaging normalizes away.
@@ -371,6 +529,8 @@ async def query_golang(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
+        module_path=module_path,
         repository_url=_go_module_to_repo_url(dep.name),
     )
 
@@ -388,20 +548,32 @@ async def query_maven_central(
     if ":" not in dep.name:
         return None
     group_id, artifact_id = dep.name.split(":", 1)
-    url = (
-        f"https://search.maven.org/solrsearch/select"
-        f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
-    )
-    resp = await client.get(url)
-    resp.raise_for_status()
-    docs = resp.json()["response"]["docs"]
-    if not docs:
-        return None
-
-    all_versions = [d["v"] for d in docs if "v" in d]
+    registries = options.registries
+    metadata_url = registries.maven_metadata_url(group_id, artifact_id)
+    if metadata_url is not None:
+        # A configured repository: any Maven repository serves maven-metadata.xml, few offer Central's search.
+        resp = await client.get(metadata_url, **registries.request_kwargs(metadata_url))
+        resp.raise_for_status()
+        all_versions = [
+            (v.text or "").strip() for v in ET.fromstring(resp.text).iter("version")
+            if (v.text or "").strip() and "SNAPSHOT" not in (v.text or "")
+        ]
+        if not all_versions:
+            return None
+    else:
+        url = (
+            f"https://search.maven.org/solrsearch/select"
+            f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
+        )
+        resp = await client.get(url)
+        resp.raise_for_status()
+        docs = resp.json()["response"]["docs"]
+        if not docs:
+            return None
+        all_versions = [d["v"] for d in docs if "v" in d]
     target = _resolve_latest(dep.current_version, all_versions, options)
 
-    if target is None or not _is_outdated(dep.current_version, target):
+    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
         return None
 
     return OutdatedDependency(
@@ -410,6 +582,8 @@ async def query_maven_central(
         latest_version=target,
         ecosystem=dep.ecosystem,
         manifest_path=dep.manifest_path,
+        installed_version=dep.installed_version,
+        version_key=dep.version_key,
     )
 
 
@@ -467,22 +641,11 @@ async def check_outdated(
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)
                 return None, RegistryFailure(name=dep.name, ecosystem=dep.ecosystem)
 
-    owns_client = client is None
-    if owns_client:
-        settings = get_settings()
-        client = httpx.AsyncClient(
-            timeout=settings.http_timeout,
-            headers={"User-Agent": _USER_AGENT},
-        )
-
-    assert client is not None  # always assigned: either passed in or created above
-    try:
-        pairs: list[tuple[OutdatedDependency | None, RegistryFailure | None]] = list(
-            await asyncio.gather(*[_query_one(client, dep) for dep in deps])
-        )
-    finally:
-        if owns_client:
-            await client.aclose()
+    # The shared client retries 429/5xx with backoff and sends Migratowl's User-Agent.
+    http = client if client is not None else get_http_client()
+    pairs: list[tuple[OutdatedDependency | None, RegistryFailure | None]] = list(
+        await asyncio.gather(*[_query_one(http, dep) for dep in deps])
+    )
 
     outdated = [o for o, _ in pairs if o is not None]
     failures = [f for _, f in pairs if f is not None]

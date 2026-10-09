@@ -161,9 +161,32 @@ class TestCreateMigratowlAgent:
             create_migratowl_agent(mock_manager, settings=settings)
 
         call_kwargs = mock_manager.create_agent.call_args[1]
+        from langchain.agents.structured_output import ProviderStrategy
+
         from migratowl.models.schemas import PackageVerdicts
 
-        assert call_kwargs.get("response_format") is PackageVerdicts
+        # Anthropic: native structured output. The auto-selected ToolStrategy forces
+        # tool_choice="any", which Claude Sonnet 5.5 / Opus 5.5 / Fable 5.1 reject with a 400.
+        response_format = call_kwargs.get("response_format")
+        assert isinstance(response_format, ProviderStrategy)
+        assert response_format.schema is PackageVerdicts
+
+    @pytest.mark.parametrize("provider", ["openai", "litellm"])
+    def test_openai_compatible_providers_keep_automatic_strategy(
+        self, provider: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from migratowl.models.schemas import PackageVerdicts
+
+        monkeypatch.setenv("MIGRATOWL_MODEL_PROVIDER", provider)
+        mock_manager = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent"),
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None))
+
+        assert mock_manager.create_agent.call_args[1].get("response_format") is PackageVerdicts
 
     def test_system_prompt_directs_zero_confidence_packages_to_direct_report(self) -> None:
         """Packages with confidence=0 must be directly reported as non-breaking.
@@ -449,6 +472,17 @@ class TestOnSandboxAcquired:
 
 
 class TestBuildTools:
+    def test_clone_tool_gets_the_configured_tokens(self) -> None:
+        from unittest.mock import patch
+
+        from migratowl.agent.factory import build_tools
+
+        settings = Settings(_env_file=None, github_token="ghp_" + "b" * 36)
+        with patch("migratowl.agent.factory.create_clone_repo_tool") as create:
+            build_tools(_make_mock_manager(), settings=settings)
+
+        assert create.call_args.kwargs["tokens"] == {"github.com": ("x-access-token", settings.github_token)}
+
     def test_returns_every_tool_by_name(self) -> None:
         from migratowl.agent.factory import build_tools
 
@@ -531,3 +565,33 @@ class TestWebhookAgentVariant:
         failed_rule = prompt.index("Validation FAILED")
         threshold_rule = prompt.index("confidence ≥ 0.7")
         assert update_rule < passed_rule < failed_rule < threshold_rule
+
+
+
+class TestUsageCallback:
+    def test_usage_callback_is_attached_to_the_model(self) -> None:
+        # The subagent reuses this model instance, so its calls are counted too.
+        mock_manager = _make_mock_manager()
+        usage_cb = MagicMock()
+        langfuse = MagicMock()
+
+        with (
+            patch("migratowl.agent.factory.init_chat_model") as mock_init,
+            patch("migratowl.agent.factory.create_package_analyzer_subagent") as mock_sub,
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+            patch("migratowl.agent.factory._langfuse_handler", langfuse),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None), usage_callback=usage_cb)
+
+        assert mock_init.call_args[1]["callbacks"] == [langfuse, usage_cb]
+        assert mock_sub.call_args[1]["model"] is mock_init.return_value
+
+
+class TestBuildToolsPythonVersion:
+    def test_outdated_check_uses_the_sandbox_python_version(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        with patch("migratowl.agent.factory.create_check_outdated_tool") as mock_check:
+            build_tools(_make_mock_manager(), settings=Settings(_env_file=None, sandbox_python_version="3.12"))
+
+        assert mock_check.call_args.kwargs["options"].python_version == "3.12"

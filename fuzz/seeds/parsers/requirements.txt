@@ -2,3 +2,5 @@ requests==2.33.0
 flask>=2.0
 # comment
 django~=4.2
+uvloop==0.19.0; sys_platform != "win32"
+colorama ; os_name == "nt"

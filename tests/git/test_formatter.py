@@ -151,10 +151,10 @@ class TestEstimateCost:
 
     def test_claude_sonnet_5_pricing(self) -> None:
         from migratowl.git.formatter import _estimate_cost
-        # claude-sonnet-5: $3/1M input, $15/1M output
+        # claude-sonnet-5: $2/1M input, $10/1M output
         # 1M input = $3.00, 0.5M output = $7.50 → $10.50
         result = _estimate_cost("claude-sonnet-5", 1_000_000, 500_000)
-        assert result == "~$10.50"
+        assert result == "~$7.00"
 
     def test_claude_opus_4_8_pricing(self) -> None:
         from migratowl.git.formatter import _estimate_cost
@@ -290,3 +290,85 @@ class TestFixDetails:
         table_line = [ln for ln in comment.splitlines() if "`pkg`" in ln][0]
         fix_cell = table_line.split("|")[-2].strip()
         assert fix_cell == "Update imports…"
+
+
+
+class TestCurrentModelPricing:
+    """Prices from Anthropic's model table (2026-09-25)."""
+
+    def test_current_models_are_priced(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+
+        assert _estimate_cost("claude-opus-5-5", 1_000_000, 0) == "~$4.00"
+        assert _estimate_cost("claude-sonnet-5-5", 1_000_000, 0) == "~$2.00"
+        assert _estimate_cost("claude-fable-5-1", 0, 1_000_000) == "~$50.00"
+
+    def test_cache_reads_priced_at_the_cache_rate(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+
+        # input_tokens includes cached tokens (langchain-anthropic folds them in)
+        assert _estimate_cost("claude-sonnet-5-5", 1_000_000, 0, cache_read=1_000_000) == "~$0.20"
+
+    def test_cache_writes_priced_at_one_and_a_quarter_input(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+
+        assert _estimate_cost("claude-sonnet-5-5", 1_000_000, 0, cache_creation=1_000_000) == "~$2.50"
+
+    def test_comment_footer_uses_cache_counts(self) -> None:
+        from migratowl.git.formatter import format_pr_comment
+        from migratowl.models.schemas import ScanAnalysisReport, ScanResult
+
+        report = ScanAnalysisReport(
+            repo_url="r", branch_name="main",
+            scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0),
+            reports=[], total_duration_seconds=1.0, total_input_tokens=1_000_000, total_output_tokens=0,
+            total_cache_read_tokens=1_000_000, model_name="claude-sonnet-5-5",
+        )
+        assert "~$0.20" in format_pr_comment(report)
+
+
+class TestCommentEscaping:
+    """LLM text (partly from untrusted changelogs) must not break or abuse the PR comment."""
+
+    def _comment(self, **report_fields) -> str:
+        from migratowl.git.formatter import format_pr_comment
+        from migratowl.models.schemas import AnalysisReport, ScanAnalysisReport, ScanResult
+
+        fields = {"dependency_name": "pkg", "is_breaking": True, "error_summary": "e",
+                  "changelog_citation": "", "suggested_human_fix": "fix", "confidence": 0.9}
+        fields.update(report_fields)
+        return format_pr_comment(ScanAnalysisReport(
+            repo_url="r", branch_name="main",
+            scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0),
+            reports=[AnalysisReport(**fields)], total_duration_seconds=1.0,
+        ))
+
+    def _table_row(self, comment: str) -> str:
+        return next(line for line in comment.splitlines() if line.startswith("| `"))
+
+    def test_pipes_and_newlines_cannot_break_the_table(self) -> None:
+        row = self._table_row(self._comment(suggested_human_fix="Use a | b.\nThen | c"))
+        assert row.count(" | ") == 2  # still exactly three cells
+        assert "\\|" in row
+
+    def test_mentions_do_not_ping_anyone(self) -> None:
+        comment = self._comment(suggested_human_fix="Ask @octocat or @org/team. Mail a@b.com.")
+        assert "@octocat" not in comment and "@org/team" not in comment
+        assert "a@b.com" in comment  # email addresses stay readable
+
+    def test_raw_html_is_escaped(self) -> None:
+        comment = self._comment(suggested_human_fix='</details><img src="https://evil.example/x.png">')
+        assert "<img" not in comment
+        assert comment.count("</details>") == comment.count("<details>")
+
+    def test_markdown_images_are_neutralised(self) -> None:
+        comment = self._comment(suggested_human_fix="See ![pixel](https://evil.example/t.gif)")
+        assert "![pixel](" not in comment
+
+    def test_long_text_is_capped(self) -> None:
+        comment = self._comment(suggested_human_fix="x" * 20_000)
+        assert len(comment) < 5_000
+
+    def test_backticks_in_names_cannot_escape_code_span(self) -> None:
+        row = self._table_row(self._comment(dependency_name="evil`<b>x</b>`"))
+        assert "<b>" not in row

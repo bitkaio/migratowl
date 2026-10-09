@@ -30,9 +30,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-caching: true
+          enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
@@ -105,6 +105,15 @@ jobs:
         with:
           dockerfile: k8s/sandbox-router/Dockerfile
           failure-threshold: error
+
+      - name: Lint server Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5  # v3
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+      - name: Lint Helm chart
+        run: helm lint deploy/helm/migratowl
 
   # ── Workflow static analysis (zizmor) ────────────────────────────────────
   workflow-security:
@@ -277,9 +286,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-caching: true
+          enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
@@ -290,9 +299,12 @@ jobs:
       - name: Install pip-audit
         run: pip install --require-hashes -r .github/requirements/pip-audit.txt
 
+      # langchain-kubernetes is pinned by git tag (our fork): pip cannot hash a VCS requirement and the
+      # vulnerability databases do not know it, so it is left out here. Its own dependencies are still
+      # exported and audited.
       - name: Run pip-audit against lockfile
         run: |
-          uv export --frozen --no-dev --format requirements-txt > /tmp/reqs.txt
+          uv export --frozen --no-dev --format requirements-txt --no-emit-package langchain-kubernetes > /tmp/reqs.txt
           pip-audit --requirement /tmp/reqs.txt --strict
 
       # The sandbox runtime image pins its own dependency set, separate from
@@ -330,9 +342,9 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-caching: true
+          enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies (includes langgraph-cli)
@@ -412,9 +424,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
-          enable-caching: true
+          enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python

@@ -88,14 +88,15 @@ class TestNotifyPrStart:
         assert args.args[2] == "running"
 
     @pytest.mark.asyncio
-    async def test_no_op_when_pr_number_missing(self) -> None:
+    async def test_sets_status_without_pr_number(self) -> None:
+        # A commit status needs only the SHA; scans of a branch (no PR) get one too.
         mock_gh = AsyncMock()
         payload = ScanWebhookPayload(
             repo_url="https://github.com/o/r", commit_sha="abc"
         )
         with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
             await notify_pr_start(payload, _settings())
-        mock_gh.set_commit_status.assert_not_awaited()
+        mock_gh.set_commit_status.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_no_op_when_commit_sha_missing(self) -> None:
@@ -212,3 +213,52 @@ class TestNotifyPrFailed:
         mock_gh.set_commit_status.side_effect = ConnectionError("timeout")
         with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
             await notify_pr_failed(_gh_payload(), _settings())
+
+
+class TestConsistentNotificationRules:
+    """Commit status whenever commit_sha is set; PR/MR comment whenever pr_number is set."""
+
+    @pytest.mark.asyncio
+    async def test_done_sets_status_without_pr_number(self) -> None:
+        mock_gh = AsyncMock()
+        payload = ScanWebhookPayload(repo_url="https://github.com/o/r", commit_sha="abc")
+        with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+            await notify_pr_done(payload, _report(breaking=1), _settings())
+        mock_gh.post_pr_comment.assert_not_awaited()
+        mock_gh.set_commit_status.assert_awaited_once()
+        assert mock_gh.set_commit_status.call_args.args[3] == "failure"
+
+    @pytest.mark.asyncio
+    async def test_done_sets_gitlab_status_without_mr_number(self) -> None:
+        mock_gl = AsyncMock()
+        payload = ScanWebhookPayload(repo_url="https://gitlab.com/g/r", git_provider="gitlab", commit_sha="abc")
+        with patch("migratowl.git.notify.GitLabClient", return_value=mock_gl):
+            await notify_pr_done(payload, _report(), _settings())
+        mock_gl.post_mr_comment.assert_not_awaited()
+        assert mock_gl.set_commit_status.call_args.args[2] == "success"
+
+    @pytest.mark.asyncio
+    async def test_failed_comments_on_pr_with_the_error(self) -> None:
+        mock_gh = AsyncMock()
+        with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+            await notify_pr_failed(_gh_payload(), _settings(), error="Failed to clone repo")
+        mock_gh.post_pr_comment.assert_awaited_once()
+        body = mock_gh.post_pr_comment.call_args.args[3]
+        assert "could not finish" in body.lower()
+        assert "Failed to clone repo" in body
+
+    @pytest.mark.asyncio
+    async def test_failed_comments_on_gitlab_mr_without_sha(self) -> None:
+        mock_gl = AsyncMock()
+        payload = ScanWebhookPayload(repo_url="https://gitlab.com/g/r", git_provider="gitlab", pr_number=3)
+        with patch("migratowl.git.notify.GitLabClient", return_value=mock_gl):
+            await notify_pr_failed(payload, _settings(), error="boom")
+        mock_gl.post_mr_comment.assert_awaited_once()
+        mock_gl.set_commit_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failure_comment_caps_long_errors(self) -> None:
+        mock_gh = AsyncMock()
+        with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+            await notify_pr_failed(_gh_payload(), _settings(), error="x" * 10_000)
+        assert len(mock_gh.post_pr_comment.call_args.args[3]) < 2_000

@@ -115,6 +115,15 @@ class _FakeTool:
         return self.output(args) if callable(self.output) else self.output
 
 
+class _RecordingTool:
+    def __init__(self, result: str, order: list[str], label: str) -> None:
+        self.result, self.order, self.label = result, order, label
+
+    async def ainvoke(self, args: dict, config: dict | None = None) -> str:
+        self.order.append(self.label)
+        return self.result
+
+
 def _fake_tools(*, clone="Successfully cloned", deps=None, outdated=None, update="Updated 1 package(s) in main/",
                 validate=None):
     from types import SimpleNamespace
@@ -129,6 +138,7 @@ def _fake_tools(*, clone="Successfully cloned", deps=None, outdated=None, update
     validate = validate or json.dumps({"steps": [{"name": "test", "exit_code": 0, "output": ""}], "passed": True})
     return SimpleNamespace(
         clone_repo=_FakeTool(clone),
+        configure_registries=_FakeTool("Package registries: public defaults."),
         scan_dependencies=_FakeTool(json.dumps(deps)),
         check_outdated_deps=_FakeTool(json.dumps({"outdated": outdated, "failures": [], "warning": None})),
         copy_source=_FakeTool("Successfully copied source to /w/main"),
@@ -141,6 +151,29 @@ CONFIG = {"configurable": {"thread_id": "job-1"}}
 
 
 class TestPrepareScan:
+    async def test_registries_are_configured_before_anything_is_installed(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        order: list[str] = []
+        tools = _fake_tools()
+        tools.configure_registries = _RecordingTool("Package registries: public defaults.", order, "configure")
+        tools.update_dependencies = _RecordingTool("Updated 1 package(s) in main/\n  flask: OK", order, "update")
+
+        await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
+        assert order == ["configure", "update"]
+
+    async def test_a_registry_config_failure_stops_the_scan(self) -> None:
+        import pytest
+
+        from migratowl.pipeline import PipelineError, prepare_scan
+
+        tools = _fake_tools()
+        tools.configure_registries = _FakeTool("Failed to configure package registries: .npmrc: permission_denied")
+
+        with pytest.raises(PipelineError, match="registries"):
+            await prepare_scan(tools, ScanWebhookPayload(repo_url="https://x/y"), CONFIG)
+
     async def test_runs_phases_in_order_with_thread_config(self) -> None:
         from migratowl.pipeline import prepare_scan
 
@@ -313,3 +346,152 @@ class TestReviewFixes:
 
         assert resolved == []
         assert [d.current_version for d in pending] == ["^4.17.0", "^3.10.0"]
+
+
+class TestInstalledVersionInPipeline:
+    def _dep(self, current: str, installed: str | None, latest: str):
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+
+        return OutdatedDependency(name="pkg", current_version=current, installed_version=installed,
+                                  latest_version=latest, ecosystem=Ecosystem.PYTHON, manifest_path="pyproject.toml")
+
+    def test_major_bump_uses_installed_version(self) -> None:
+        from migratowl.pipeline import dependency_is_major_bump
+
+        # ">=1.0" looks like 1.x, but 2.5.0 is installed: 2.5 → 2.6 is not a major bump.
+        assert dependency_is_major_bump(self._dep(">=1.0", "2.5.0", "2.6.0")) is False
+        assert dependency_is_major_bump(self._dep(">=1.0", None, "2.6.0")) is True
+
+    def test_ranking_uses_installed_version(self) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import select_candidates
+
+        near = self._dep(">=1.0", "4.0.0", "4.1.0").model_copy(update={"name": "near"})
+        far = self._dep(">=3.0", "3.0.0", "5.0.0").model_copy(update={"name": "far"})
+        chosen, _ = select_candidates([near, far], ScanWebhookPayload(repo_url="r", max_deps=1))
+        assert [d.name for d in chosen] == ["far"]
+
+    def test_brief_shows_installed_version(self) -> None:
+        from migratowl.models.schemas import ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan, build_analysis_brief
+
+        dep = self._dep(">=2.0", "2.31.0", "3.0.0")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[],
+        )
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, [dep])
+        assert "pkg 2.31.0 (declared >=2.0) -> 3.0.0" in brief
+
+
+class TestMajorBumpChangelogs:
+    def _dep(self, name: str, current: str, latest: str):
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+
+        return OutdatedDependency(name=name, current_version=current, latest_version=latest,
+                                  ecosystem=Ecosystem.NODEJS, manifest_path="package.json",
+                                  repository_url=f"https://github.com/x/{name}")
+
+    def _tools(self, responses: dict[str, object]):
+        import json as _json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        async def fetch(args: dict, config=None) -> str:
+            name = _json.loads(args["outdated_dep_json"])["name"]
+            result = responses[name]
+            if isinstance(result, Exception):
+                raise result
+            return _json.dumps(result)
+
+        return SimpleNamespace(fetch_changelog=SimpleNamespace(ainvoke=AsyncMock(side_effect=fetch)))
+
+    async def test_fetches_only_major_bumps_and_keeps_breaking_text(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({
+            "express": {"chunks": [{"version": "5.0.0", "content": "BREAKING: app.del() removed"},
+                                   {"version": "4.22.0", "content": "(no breaking changes noted)"}],
+                        "warnings": []},
+        })
+        pending = [self._dep("express", "4.21.2", "5.2.1"), self._dep("ejs-lint", "1.1.0", "1.2.0")]
+        excerpts = await fetch_major_changelogs(tools, pending, {})
+        assert excerpts == {"express": "5.0.0\nBREAKING: app.del() removed"}
+        assert tools.fetch_changelog.ainvoke.await_count == 1  # minor bump not fetched
+
+    async def test_fetch_failures_and_empty_changelogs_are_skipped(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({
+            "a": RuntimeError("github down"),
+            "b": {"chunks": [{"version": "2.0.0", "content": "(no breaking changes noted)"}], "warnings": []},
+        })
+        excerpts = await fetch_major_changelogs(tools, [self._dep("a", "1.0.0", "2.0.0"), self._dep("b", "1.0.0", "2.0.0")], {})
+        assert excerpts == {}
+
+    async def test_excerpt_is_capped(self) -> None:
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({"a": {"chunks": [{"version": "2.0.0", "content": "x" * 10_000}], "warnings": []}})
+        excerpts = await fetch_major_changelogs(tools, [self._dep("a", "1.0.0", "2.0.0")], {})
+        assert len(excerpts["a"]) <= 1500
+
+    def test_brief_includes_excerpts(self) -> None:
+        from migratowl.models.schemas import ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan, build_analysis_brief
+
+        dep = self._dep("express", "4.21.2", "5.2.1")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], changelog_excerpts={"express": "5.0.0\nBREAKING: app.del() removed"},
+        )
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, [dep])
+        assert "Changelog excerpts" in brief
+        assert "BREAKING: app.del() removed" in brief
+
+
+class TestExcerptOrdering:
+    async def test_major_release_notes_come_first(self) -> None:
+        import json as _json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from migratowl.models.schemas import Ecosystem, OutdatedDependency
+        from migratowl.pipeline import fetch_major_changelogs
+
+        chunks = [{"version": "5.2.0", "content": "bump codeql " * 200},
+                  {"version": "v5.0.0", "content": "BREAKING: app.del() removed"}]
+        tools = SimpleNamespace(fetch_changelog=SimpleNamespace(
+            ainvoke=AsyncMock(return_value=_json.dumps({"chunks": chunks, "warnings": []}))))
+        dep = OutdatedDependency(name="express", current_version="4.21.2", latest_version="5.2.1",
+                                 ecosystem=Ecosystem.NODEJS, manifest_path="package.json")
+        excerpts = await fetch_major_changelogs(tools, [dep], {})
+        assert excerpts["express"].startswith("v5.0.0\nBREAKING: app.del() removed")
+
+
+async def test_update_receives_go_module_path() -> None:
+    import json as _json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from migratowl.models.schemas import ScanWebhookPayload
+    from migratowl.pipeline import prepare_scan
+
+    deps = [{"name": "github.com/x/y", "current_version": "1.0.0", "ecosystem": "go", "manifest_path": "go.mod"}]
+    outdated = {"outdated": [{"name": "github.com/x/y", "current_version": "1.0.0", "latest_version": "v2.3.0",
+                              "ecosystem": "go", "manifest_path": "go.mod", "module_path": "github.com/x/y/v2"}],
+                "failures": [], "warning": None}
+    update = AsyncMock(return_value="Updated 1 package(s) in main/\n  github.com/x/y: OK")
+    tools = SimpleNamespace(
+        clone_repo=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully cloned")),
+        configure_registries=SimpleNamespace(ainvoke=AsyncMock(return_value="Package registries: public defaults.")),
+        scan_dependencies=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(deps))),
+        check_outdated_deps=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps(outdated))),
+        copy_source=SimpleNamespace(ainvoke=AsyncMock(return_value="Successfully copied")),
+        update_dependencies=SimpleNamespace(ainvoke=update),
+        validate_project=SimpleNamespace(ainvoke=AsyncMock(return_value=_json.dumps({"steps": [], "passed": True}))),
+    )
+    await prepare_scan(tools, ScanWebhookPayload(repo_url="https://github.com/o/r"), {})
+    sent = _json.loads(update.await_args.args[0]["packages_json"])
+    assert sent[0]["module_path"] == "github.com/x/y/v2"
+    assert "version_key" in sent[0]

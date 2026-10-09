@@ -280,3 +280,104 @@ class TestTruncateChunks:
         result, truncated = truncate_chunks([], 1000)
         assert result == []
         assert truncated is False
+
+class TestRepositoryPageAsChangelogUrl:
+    """A 'changelog' link that is only the GitHub repository page (e.g. aiofiles'
+    https://github.com/Tinche/aiofiles#history) must not be fetched as HTML: the
+    page parses to bogus versions and hides the repo's real changelog file."""
+
+    async def test_repo_page_link_goes_to_repository_strategies(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        fetch_url = _AsyncMock(return_value="## 3.3\nfrom the HTML page")
+        from_github = _AsyncMock(return_value="## 25.1.0\nreal changelog file")
+        with (
+            patch("migratowl.changelog._fetch_from_url", fetch_url),
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", _AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", from_github),
+            patch("migratowl.changelog._fetch_from_github_releases", _AsyncMock(side_effect=FileNotFoundError)),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            text, warnings = await fetch_changelog("https://github.com/Tinche/aiofiles#history", None, "aiofiles")
+
+        assert text == "## 25.1.0\nreal changelog file"
+        fetch_url.assert_not_awaited()
+        from_github.assert_awaited_once_with("https://github.com/Tinche/aiofiles")
+
+    async def test_file_links_on_github_are_still_fetched(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        fetch_url = _AsyncMock(return_value="## 2.0.0\nNew")
+        with patch("migratowl.changelog._fetch_from_url", fetch_url):
+            text, _ = await fetch_changelog("https://github.com/o/r/blob/main/CHANGES.rst", None, "pkg")
+        assert text == "## 2.0.0\nNew"
+        fetch_url.assert_awaited_once()
+
+
+class TestStubFilePointingOffGithub:
+    async def test_follows_moved_to_url_in_stub_file(self) -> None:
+        # psutil's HISTORY.rst only says "History has moved to: https://psutil.io/changelog/".
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_github
+
+        stub = "History has moved to:\n\n- https://psutil.io/changelog/\n"
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            req = httpx.Request("GET", url)
+            if url.endswith("/master/HISTORY.rst"):
+                return httpx.Response(200, text=stub, request=req)
+            return httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        followed = _AsyncMock(return_value="8.0.0\n=====\nBig changes\n")
+        with (
+            patch("migratowl.changelog.get_http_client", return_value=client),
+            patch("migratowl.changelog._fetch_from_url", followed),
+        ):
+            text = await _fetch_from_github("https://github.com/giampaolo/psutil")
+
+        assert text == "8.0.0\n=====\nBig changes\n"
+        followed.assert_awaited_once_with("https://psutil.io/changelog/")
+
+
+class TestRangeAndExtractionFormats:
+    def test_range_bounds_may_be_constraints(self) -> None:
+        from migratowl.changelog import filter_chunks_by_version_range
+
+        chunks = [{"version": v, "content": "x"} for v in ["8.0.0", "7.0.0", "6.0.0", "5.9.1", "5.9", "5.0.0"]]
+        kept = filter_chunks_by_version_range(chunks, ">=5.9", "7.2.2")
+        assert [c["version"] for c in kept] == ["7.0.0", "6.0.0", "5.9.1"]
+
+    def test_caret_bound(self) -> None:
+        from migratowl.changelog import filter_chunks_by_version_range
+
+        chunks = [{"version": v, "content": "x"} for v in ["5.0.0", "4.21.2", "4.22.0"]]
+        assert [c["version"] for c in filter_chunks_by_version_range(chunks, "^4.21.2", "5.0.0")] == ["5.0.0", "4.22.0"]
+
+    def test_breaking_label_items_are_extracted(self) -> None:
+        from migratowl.changelog import extract_breaking_changes
+
+        out = extract_breaking_changes([{"version": "7.0.0",
+                                         "content": "* fix: tidy\n* breaking: `memory_info()` tuple changed\n"}])
+        assert "memory_info()" in out[0]["content"]
+
+    def test_bold_headings_are_extracted(self) -> None:
+        from migratowl.changelog import extract_breaking_changes
+
+        out = extract_breaking_changes([{"version": "7.0.0",
+                                         "content": "**Backward incompatible changes**\n\n- dropped Python 2.7\n"}])
+        assert "Backward incompatible" in out[0]["content"]
+
+
+class TestIndentedPrefixedItems:
+    def test_indented_items_with_issue_and_platform_prefixes(self) -> None:
+        from migratowl.changelog import extract_breaking_changes
+
+        content = ("**New APIs**\n\n  * #669, [Windows]: `net_if_addrs()` also returns broadcast.\n\n"
+                   "**API changes**\n\n  * #2490, breaking: remove long deprecated `Process.memory_info_ex()`.\n")
+        out = extract_breaking_changes([{"version": "7.0.0", "content": content}])
+        assert "memory_info_ex" in out[0]["content"]
+        assert "broadcast" not in out[0]["content"]

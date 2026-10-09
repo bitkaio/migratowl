@@ -12,7 +12,7 @@ class TestSettingsDefaults:
     def test_default_model_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_MODEL_NAME", raising=False)
         settings = Settings(_env_file=None)
-        assert settings.model_name == "claude-sonnet-5"
+        assert settings.model_name == "claude-sonnet-5-5"
 
     def test_default_sandbox_template(self) -> None:
         settings = Settings(_env_file=None)
@@ -34,7 +34,8 @@ class TestSettingsDefaults:
     def test_default_sandbox_image(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_SANDBOX_IMAGE", raising=False)
         settings = Settings(_env_file=None)
-        assert settings.sandbox_image == "python:3.12-slim"
+        # Raw mode needs git plus every ecosystem toolchain; slim language images lack git.
+        assert settings.sandbox_image == "ghcr.io/bitkaio/migratowl-runtime:latest"
 
     def test_default_sandbox_block_network(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MIGRATOWL_SANDBOX_BLOCK_NETWORK", raising=False)
@@ -101,13 +102,10 @@ class TestSettingsDefaults:
         settings = Settings(_env_file=None)
         assert settings.model_provider == "anthropic"
 
-    def test_default_api_host(self) -> None:
-        settings = Settings(_env_file=None)
-        assert settings.api_host == "0.0.0.0"
-
-    def test_default_api_port(self) -> None:
-        settings = Settings(_env_file=None)
-        assert settings.api_port == 8000
+    def test_no_bind_settings(self) -> None:
+        # uvicorn's own --host/--port decide the bind address; settings for it were never read.
+        assert "api_host" not in Settings.model_fields
+        assert "api_port" not in Settings.model_fields
 
 
 class TestSettingsFromEnv:
@@ -128,8 +126,10 @@ class TestSettingsFromEnv:
 
     def test_env_override_sandbox_connection_mode(self, monkeypatch: object) -> None:
         monkeypatch.setenv("MIGRATOWL_SANDBOX_CONNECTION_MODE", "direct")
+        monkeypatch.setenv("MIGRATOWL_SANDBOX_API_URL", "http://sandbox-router-svc:8080")
         settings = Settings()
         assert settings.sandbox_connection_mode == "direct"
+        assert settings.sandbox_api_url == "http://sandbox-router-svc:8080"
 
     def test_env_override_sandbox_mode_raw(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MIGRATOWL_SANDBOX_MODE", "raw")
@@ -374,3 +374,12 @@ class TestCrashRecoverySettings:
         monkeypatch.setenv("MIGRATOWL_MAX_SCAN_RETRIES", "5")
         settings = Settings(_env_file=None)
         assert settings.max_scan_retries == 5
+
+def test_default_sandbox_python_version_matches_runtime_image() -> None:
+    import re
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parent.parent / "k8s" / "runtime" / "Dockerfile").read_text()
+    image_python = re.search(r"^FROM python:(\d+\.\d+)", dockerfile, re.M)
+    assert image_python, "runtime image must be based on an official python image"
+    assert Settings(_env_file=None).sandbox_python_version == image_python.group(1)

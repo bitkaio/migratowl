@@ -20,7 +20,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from langchain.agents.structured_output import ProviderStrategy
 from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import BaseTool
 from langchain_kubernetes import KubernetesSandboxManager
@@ -28,11 +30,12 @@ from langchain_kubernetes import KubernetesSandboxManager
 from migratowl.agent.session_graph import apply_session_injection
 from migratowl.agent.subagents import create_package_analyzer_subagent
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
-from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
+from migratowl.agent.tools.clone import clone_tokens, create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
 from migratowl.agent.tools.execute import create_execute_project_tool
 from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_read_manifest_tool
 from migratowl.agent.tools.prepare import create_prepare_scan_tool
+from migratowl.agent.tools.registries import create_configure_registries_tool
 from migratowl.agent.tools.registry import create_check_outdated_tool
 from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
@@ -40,6 +43,7 @@ from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
 from migratowl.models.schemas import OutdatedCheckMode, PackageVerdicts
 from migratowl.observability import _langfuse_handler
+from migratowl.registries import Registries
 from migratowl.registry import CheckOptions
 
 # Only for agent-driven entrypoints (deep-agents-ui); the webhook runs the pipeline itself.
@@ -105,6 +109,7 @@ class MigratowlTools:
 
     backend_factory: Callable[[Any], Any]
     clone_repo: BaseTool
+    configure_registries: BaseTool
     copy_source: BaseTool
     detect_languages: BaseTool
     scan_dependencies: BaseTool
@@ -144,15 +149,24 @@ def build_tools(
 
     workspace_path = settings.workspace_path
     source_path = f"{workspace_path}/source"
+    registries = Registries.from_settings(settings)
     return MigratowlTools(
         backend_factory=backend_factory,
-        clone_repo=create_clone_repo_tool(get_sandbox, workspace_path=workspace_path),
+        clone_repo=create_clone_repo_tool(
+            get_sandbox, workspace_path=workspace_path, tokens=clone_tokens(settings)
+        ),
+        configure_registries=create_configure_registries_tool(get_sandbox, registries),
         copy_source=create_copy_source_tool(get_sandbox, workspace_path=workspace_path),
         detect_languages=create_detect_languages_tool(get_sandbox, workspace_path=source_path),
         scan_dependencies=create_scan_dependencies_tool(get_sandbox, workspace_path=source_path),
         check_outdated_deps=create_check_outdated_tool(
             concurrency=settings.scan_registry_concurrency,
-            options=CheckOptions(mode=mode, include_prerelease=include_prerelease),
+            options=CheckOptions(
+                mode=mode,
+                include_prerelease=include_prerelease,
+                python_version=settings.sandbox_python_version,
+                registries=registries,
+            ),
         ),
         update_dependencies=create_update_dependencies_tool(get_sandbox, workspace_path=workspace_path),
         validate_project=create_validate_project_tool(
@@ -178,6 +192,7 @@ def create_migratowl_agent(
     checkpointer: Any = None,
     rate_limiter: InMemoryRateLimiter | None = None,
     on_sandbox_acquired: Callable[[str], None] | None = None,
+    usage_callback: BaseCallbackHandler | None = None,
 ) -> Any:
     """Build the Migratowl agent graph.
 
@@ -251,7 +266,9 @@ def create_migratowl_agent(
         f"{sdk_provider}:{effective_model_name}",
         rate_limiter=rate_limiter,
         max_retries=8,
-        callbacks=[_langfuse_handler] if _langfuse_handler else None,
+        # Attached to the model itself, so the package-analyzer subagent (same
+        # model instance) reports its usage to the same callback.
+        callbacks=[cb for cb in (_langfuse_handler, usage_callback) if cb] or None,
         **extra_kwargs,
     )
 
@@ -269,13 +286,22 @@ def create_migratowl_agent(
     if not include_prepare_scan:
         system_prompt = system_prompt.replace(PREPARE_SCAN_HINT, "")
 
+    # Anthropic: request native structured output (output_config.format). Left to
+    # auto-detection, LangChain falls back to ToolStrategy for models it does not
+    # know, which forces tool_choice="any" — Claude Sonnet 5.5, Opus 5.5 and
+    # Fable 5.1 reject that with a 400. OpenAI-compatible endpoints keep the
+    # automatic choice.
+    response_format: Any = (
+        ProviderStrategy(PackageVerdicts) if sdk_provider == "anthropic" else PackageVerdicts
+    )
+
     return apply_session_injection(
         manager.create_agent(
             model=model,
             system_prompt=system_prompt,
             tools=agent_tools,
             subagents=[package_analyzer],
-            response_format=PackageVerdicts,
+            response_format=response_format,
             checkpointer=checkpointer,
         )
     )

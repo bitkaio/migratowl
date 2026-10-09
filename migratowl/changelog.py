@@ -27,6 +27,7 @@ from packaging.version import InvalidVersion, Version
 
 from migratowl.config import get_settings
 from migratowl.http import get_http_client
+from migratowl.registry import forge_repo_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,13 @@ async def fetch_changelog(
     Returns (text, warnings) where warnings is a list of diagnostic messages
     explaining why the changelog could not be fetched (empty on success).
     """
+    # A "changelog" link that is only the repository page (e.g. github.com/o/r#history)
+    # renders as HTML noise; use it as the repository and look for the real file.
+    repo_page = forge_repo_url(changelog_url)
+    if repo_page:
+        repository_url = repository_url or repo_page
+        changelog_url = None
+
     if not changelog_url and not repository_url:
         return "", [f"No changelog URL or repository URL provided for {dep_name}"]
 
@@ -117,6 +125,9 @@ _CHANGELOG_HEADING_RE = re.compile(
     r"^#{1,6}\s*(?:change[\s_-]?log|changes|history|releases|news|what.?s[\s_-]?new)",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# A changelog file this short with no versions is treated as a pointer to the real one.
+_STUB_MAX_CHARS = 2000
 
 _BARE_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
 
@@ -304,6 +315,12 @@ async def _fetch_from_github(repository_url: str) -> str:
                             return r2.text
                     except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                         logger.debug("blob redirect fetch failed for %s: %s", raw_url, exc)
+                elif len(r.text) <= _STUB_MAX_CHARS and (moved := _BARE_URL_RE.search(r.text)):
+                    # Short stub pointing elsewhere ("History has moved to: https://...").
+                    try:
+                        return await _fetch_from_url(moved.group(0).rstrip(".,;"))
+                    except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+                        logger.debug("moved-to changelog fetch failed for %s: %s", moved.group(0), exc)
             except (httpx.HTTPStatusError, httpx.RequestError):
                 continue
 
@@ -517,6 +534,14 @@ def _coerce_comparable(version_str: str) -> Version | tuple[int, ...] | None:
             return None
 
 
+_BOUND_PREFIX = re.compile(r"^[\s>=<^~!v]+")
+
+
+def _bound_version(raw: str) -> str:
+    """``>=5.9,<6`` → ``5.9``: the first segment of a constraint without its operator."""
+    return _BOUND_PREFIX.sub("", (raw or "").split(",")[0]).strip()
+
+
 def filter_chunks_by_version_range(
     chunks: list[dict],
     current_version: str,
@@ -526,8 +551,9 @@ def filter_chunks_by_version_range(
     if not chunks:
         return []
 
-    current = _coerce_comparable(current_version)
-    latest = _coerce_comparable(latest_version)
+    # Bounds may be declared constraints (">=5.9", "^4.21.2"); compare their base version.
+    current = _coerce_comparable(_bound_version(current_version))
+    latest = _coerce_comparable(_bound_version(latest_version))
     # If the range bounds are unusable, don't filter — return everything.
     if current is None or latest is None or type(current) is not type(latest):
         return chunks
@@ -552,10 +578,14 @@ def filter_chunks_by_version_range(
 # ---------------------------------------------------------------------------
 
 _BREAKING_CHANGE_PATTERNS = re.compile(
-    r"(?:^|\n)"
+    r"(?:^|\n)[ \t]*"  # indented list items
     r"(?:#+\s*|[-*]\s+)?"
+    r"(?:#\d+,?\s*)?"  # issue reference prefix ("#2490, breaking: ...")
+    r"(?:\[[^\]\n]+\]:?\s*)?"  # platform/scope prefix ("[Windows]: ...")
+    r"[*_]{0,2}"  # bold/italic heading markers (**Backward incompatible changes**)
     r"(?:"
     r"break(?:ing)?[\s_-]?change"
+    r"|breaking\s*:"  # "* breaking: ..." item labels (psutil)
     r"|deprecat"
     r"|remov(?:ed?|ing|al)"
     r"|renam(?:ed?|ing)"

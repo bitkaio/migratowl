@@ -15,6 +15,7 @@
 """Tool for fetching and filtering changelogs for outdated dependencies."""
 
 import json
+import re
 from typing import Any
 
 from langchain.tools import tool
@@ -27,6 +28,8 @@ from migratowl.changelog import (
     truncate_chunks,
 )
 from migratowl.config import get_settings
+
+_MAJOR_RELEASE = re.compile(r"^v?\d+\.0\.0$")
 
 
 def create_fetch_changelog_tool() -> Any:
@@ -53,6 +56,9 @@ def create_fetch_changelog_tool() -> Any:
             dep["latest_version"],
         )
         extracted = extract_breaking_changes(filtered)
+        # Major releases (X.0.0) carry the breaking changes; keep them ahead of the
+        # newer minor/patch notes so truncation drops those first.
+        extracted.sort(key=lambda c: not _MAJOR_RELEASE.match(str(c.get("version", ""))))
         capped, truncated = truncate_chunks(extracted, settings.max_changelog_chars)
         warnings = list(warnings)
         if truncated:

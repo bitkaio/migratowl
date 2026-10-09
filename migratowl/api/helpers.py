@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
+from pydantic import BaseModel
 
 from migratowl.models.schemas import (
     AnalysisReport,
@@ -35,19 +37,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _accumulate_tokens(messages: list[object]) -> tuple[int, int]:
-    """Sum input and output token counts from AIMessage.usage_metadata."""
-    input_tokens = 0
-    output_tokens = 0
-    for msg in messages:
-        if not isinstance(msg, AIMessage):
-            continue
-        meta = msg.usage_metadata
-        if meta is None:
-            continue
-        input_tokens += meta["input_tokens"]
-        output_tokens += meta["output_tokens"]
-    return input_tokens, output_tokens
+class TokenUsage(BaseModel):
+    """Token totals for a scan; ``input`` includes cache reads and writes."""
+
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_creation: int = 0
+
+
+def sum_usage(usages: Iterable[Mapping[str, Any]]) -> TokenUsage:
+    """Sum LangChain ``UsageMetadata`` dicts (e.g. a ``UsageMetadataCallbackHandler``'s values)."""
+    total = TokenUsage()
+    for usage in usages:
+        details = usage.get("input_token_details") or {}
+        total.input += usage.get("input_tokens") or 0
+        total.output += usage.get("output_tokens") or 0
+        total.cache_read += details.get("cache_read") or 0
+        total.cache_creation += details.get("cache_creation") or 0
+    return total
 
 
 def _message_text(msg: object) -> str:
@@ -98,7 +106,7 @@ def assemble_report(
     reports: list[AnalysisReport],
     *,
     duration: float,
-    tokens: tuple[int, int],
+    tokens: TokenUsage,
 ) -> ScanAnalysisReport:
     """Build the final report in code; the LLM only contributes per-package verdicts.
 
@@ -117,7 +125,12 @@ def assemble_report(
         current = by_name.get(name)
         # Several verdicts for one name (same package in several manifests): breaking wins.
         if current is None or (report.is_breaking and not current.is_breaking):
-            by_name[name] = report.model_copy(update={"dependency_name": name})
+            update: dict[str, str] = {"dependency_name": name}
+            # Back an empty citation with the changelog excerpt fetched in code.
+            excerpt = prepared.changelog_excerpts.get(name)
+            if excerpt and not report.changelog_citation.strip():
+                update["changelog_citation"] = excerpt
+            by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
     missing = [name for name in names if name not in by_name]
     if missing:
@@ -129,6 +142,8 @@ def assemble_report(
         reports=[by_name[name] for name in names if name in by_name],
         skipped=prepared.skipped + missing,
         total_duration_seconds=round(duration, 1),
-        total_input_tokens=tokens[0],
-        total_output_tokens=tokens[1],
+        total_input_tokens=tokens.input,
+        total_output_tokens=tokens.output,
+        total_cache_read_tokens=tokens.cache_read,
+        total_cache_creation_tokens=tokens.cache_creation,
     )

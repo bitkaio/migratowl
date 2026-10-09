@@ -2,6 +2,8 @@
 
 """Tests for clone_repo and copy_source tools."""
 
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock
 
 from migratowl.agent.tools.clone import create_clone_repo_tool, create_copy_source_tool
@@ -78,7 +80,7 @@ class TestCloneRepoTool:
 
         clone_cmd = backend.execute.call_args_list[1][0][0]
         assert clone_cmd == (
-            "git clone --branch develop --depth 1 "
+            "git clone --branch develop --depth 1 -- "
             "https://github.com/psf/requests /home/user/workspace/source"
         )
 
@@ -309,3 +311,192 @@ class TestCopySourceTool:
         result = tool.invoke({"folder_name": "main"})
 
         assert "empty" in result.lower() or "failed" in result.lower() or "no files" in result.lower()
+
+class TestPrivateRepoClone:
+    """Credentials reach git as a per-host header, never in the URL, .git/config, or messages."""
+
+    SECRET = "ghp_" + "a" * 36
+
+    @staticmethod
+    def _backend(clone_exit: int = 0, clone_output: str = "") -> MagicMock:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),  # ls source/ — empty
+            ExecResult(output=clone_output, exit_code=clone_exit),  # git clone
+            ExecResult(output="README.md\n", exit_code=0),  # ls verify
+        ]
+        return backend
+
+    @staticmethod
+    def _header_value(cmd: str, host: str) -> str:
+        import base64
+        import shlex
+
+        key = f"http.https://{host}/.extraHeader=Authorization: Basic "
+        arg = next(a for a in shlex.split(cmd) if a.startswith(key))
+        return base64.b64decode(arg.removeprefix(key)).decode()
+
+    def test_configured_token_is_sent_as_scoped_header(self) -> None:
+        backend = self._backend()
+        tool = create_clone_repo_tool(
+            lambda: backend, workspace_path=DEFAULT_WORKSPACE,
+            tokens={"github.com": ("x-access-token", self.SECRET)},
+        )
+
+        tool.invoke({"repo_url": "https://github.com/o/private"})
+
+        cmd = backend.execute.call_args_list[1][0][0]
+        assert self._header_value(cmd, "github.com") == f"x-access-token:{self.SECRET}"
+        assert "-- https://github.com/o/private " in cmd  # URL stays clean
+
+    def test_token_is_not_sent_to_other_hosts(self) -> None:
+        backend = self._backend()
+        tool = create_clone_repo_tool(
+            lambda: backend, workspace_path=DEFAULT_WORKSPACE,
+            tokens={"github.com": ("x-access-token", self.SECRET)},
+        )
+
+        tool.invoke({"repo_url": "https://example.org/o/repo"})
+
+        assert self.SECRET not in backend.execute.call_args_list[1][0][0]
+
+    def test_credentials_in_url_move_into_the_header(self) -> None:
+        backend = self._backend()
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        tool.invoke({"repo_url": f"https://alice:{self.SECRET}@gitlab.com/g/p.git"})
+
+        cmd = backend.execute.call_args_list[1][0][0]
+        assert self._header_value(cmd, "gitlab.com") == f"alice:{self.SECRET}"
+        assert "-- https://gitlab.com/g/p.git " in cmd
+
+    def test_failure_message_hides_the_credentials(self) -> None:
+        backend = _fake_git(lambda cmd: ExecResult(output=f"fatal: could not read {self.SECRET}", exit_code=128))
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        result = tool.invoke({"repo_url": f"https://bob:{self.SECRET}@github.com/o/r", "branch": "dev"})
+
+        assert result.startswith("Failed")
+        assert self.SECRET not in result
+        assert "bob" not in result
+
+    def test_default_branch_retry_keeps_the_header(self) -> None:
+        backend = MagicMock()
+        backend.execute.side_effect = [
+            ExecResult(output="", exit_code=0),
+            ExecResult(output="", exit_code=128),  # --branch main fails
+            ExecResult(output="", exit_code=0),  # rm -rf
+            ExecResult(output="", exit_code=0),  # retry without --branch
+            ExecResult(output="README.md\n", exit_code=0),
+        ]
+        tool = create_clone_repo_tool(
+            lambda: backend, workspace_path=DEFAULT_WORKSPACE,
+            tokens={"github.com": ("x-access-token", self.SECRET)},
+        )
+
+        tool.invoke({"repo_url": "https://github.com/o/private"})
+
+        retry = backend.execute.call_args_list[3][0][0]
+        assert self._header_value(retry, "github.com") == f"x-access-token:{self.SECRET}"
+
+    def test_public_clone_command_is_unchanged(self) -> None:
+        backend = self._backend()
+        tool = create_clone_repo_tool(lambda: backend, workspace_path=DEFAULT_WORKSPACE)
+
+        tool.invoke({"repo_url": "https://github.com/psf/requests"})
+
+        assert backend.execute.call_args_list[1][0][0] == (
+            "git clone --branch main --depth 1 -- https://github.com/psf/requests /home/user/workspace/source"
+        )
+
+
+class TestCloneTokensFromSettings:
+    def test_github_and_gitlab_hosts(self) -> None:
+        from migratowl.agent.tools.clone import clone_tokens
+        from migratowl.config import Settings
+
+        settings = Settings(github_token="ghp_x", gitlab_token="glpat-y",
+                            github_api_url="https://api.github.com", gitlab_api_url="https://gitlab.com/api/v4")
+        assert clone_tokens(settings) == {
+            "github.com": ("x-access-token", "ghp_x"),
+            "gitlab.com": ("oauth2", "glpat-y"),
+        }
+
+    def test_enterprise_hosts_and_missing_tokens(self) -> None:
+        from migratowl.agent.tools.clone import clone_tokens
+        from migratowl.config import Settings
+
+        settings = Settings(github_token="ghp_x", gitlab_token="",
+                            github_api_url="https://github.corp.com/api/v3")
+        assert clone_tokens(settings) == {"github.corp.com": ("x-access-token", "ghp_x")}
+
+
+def _fake_git(clone: Callable[[str], ExecResult]) -> MagicMock:
+    """Backend answering by command: empty ``ls`` before a clone, ``clone`` for git, success otherwise."""
+    state = {"cloned": False}
+
+    def execute(cmd: str) -> ExecResult:
+        if "git" in cmd and "clone" in cmd:
+            result = clone(cmd)
+            state["cloned"] = result.exit_code == 0
+            return result
+        if cmd.startswith("ls"):
+            return ExecResult(output="README.md\n" if state["cloned"] else "", exit_code=0)
+        return ExecResult(output="", exit_code=0)
+
+    backend = MagicMock()
+    backend.execute.side_effect = execute
+    return backend
+
+
+class TestRejectedCredentials:
+    """A token the host rejects (e.g. a CI job token) must not break cloning a public repo."""
+
+    SECRET = "glcbt-" + "c" * 30
+
+    def _tool(self, backend: MagicMock) -> Any:
+        return create_clone_repo_tool(
+            lambda: backend, workspace_path=DEFAULT_WORKSPACE, tokens={"gitlab.com": ("oauth2", self.SECRET)}
+        )
+
+    def test_public_repo_is_cloned_anonymously_after_auth_failure(self) -> None:
+        backend = _fake_git(lambda cmd: (
+            ExecResult(output="fatal: Authentication failed", exit_code=128)
+            if "extraHeader" in cmd else ExecResult(output="", exit_code=0)
+        ))
+
+        result = self._tool(backend).invoke({"repo_url": "https://gitlab.com/g/public"})
+
+        assert result.startswith("Successfully cloned")
+        clones = [c[0][0] for c in backend.execute.call_args_list if "clone" in c[0][0]]
+        assert "extraHeader" not in clones[-1] and self.SECRET not in clones[-1]
+
+    def test_private_repo_with_bad_token_reports_the_first_failure(self) -> None:
+        backend = _fake_git(lambda cmd: ExecResult(
+            output="fatal: Authentication failed" if "extraHeader" in cmd else "fatal: could not read Username",
+            exit_code=128,
+        ))
+
+        result = self._tool(backend).invoke({"repo_url": "https://gitlab.com/g/private", "branch": "dev"})
+
+        assert result.startswith("Failed")
+        assert "Authentication failed" in result
+        assert self.SECRET not in result
+
+
+def test_configured_token_is_never_sent_over_plain_http() -> None:
+    secret = "ghp_" + "d" * 36
+    backend = MagicMock()
+    backend.execute.side_effect = [
+        ExecResult(output="", exit_code=0),
+        ExecResult(output="", exit_code=0),
+        ExecResult(output="README.md\n", exit_code=0),
+    ]
+    tool = create_clone_repo_tool(
+        lambda: backend, workspace_path=DEFAULT_WORKSPACE, tokens={"github.com": ("x-access-token", secret)}
+    )
+
+    tool.invoke({"repo_url": "http://github.com/o/private"})
+
+    cmd = backend.execute.call_args_list[1][0][0]
+    assert secret not in cmd and "extraHeader" not in cmd

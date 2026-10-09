@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "migratowl.fullname" . }}
+  labels:
+    {{- include "migratowl.labels" . | nindent 4 }}
+spec:
+  # Exactly one replica, replaced only after the old pod is gone: jobs live in a SQLite file and
+  # startup reconciliation assumes a single process owns it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "migratowl.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "migratowl.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "migratowl.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migratowl
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MIGRATOWL_SANDBOX_MODE
+              value: {{ .Values.sandbox.mode | quote }}
+            - name: MIGRATOWL_SANDBOX_NAMESPACE
+              value: {{ include "migratowl.sandboxNamespace" . | quote }}
+            {{- if eq .Values.sandbox.mode "raw" }}
+            - name: MIGRATOWL_SANDBOX_IMAGE
+              value: {{ .Values.sandbox.image | quote }}
+            {{- else }}
+            - name: MIGRATOWL_SANDBOX_TEMPLATE
+              value: {{ .Values.sandbox.template | quote }}
+            # No kubectl in the image to tunnel with: reach the sandbox-router over the cluster network.
+            - name: MIGRATOWL_SANDBOX_CONNECTION_MODE
+              value: direct
+            - name: MIGRATOWL_SANDBOX_API_URL
+              value: {{ include "migratowl.routerUrl" . | quote }}
+            {{- end }}
+            {{- if not .Values.persistence.enabled }}
+            - name: MIGRATOWL_PERSISTENCE_BACKEND
+              value: memory
+            {{- end }}
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-data" (include "migratowl.fullname" .)) .Values.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

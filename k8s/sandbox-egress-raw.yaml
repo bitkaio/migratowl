@@ -1,0 +1,56 @@
+# Egress allow policy for raw-mode sandbox pods (MIGRATOWL_SANDBOX_MODE=raw).
+#
+# With MIGRATOWL_SANDBOX_BLOCK_NETWORK=true, langchain-kubernetes attaches a
+# deny-all NetworkPolicy to every sandbox pod. On a CNI that enforces policies
+# (Calico, Cilium) that also blocks DNS, git clone and package installs, so a
+# scan cannot fetch the repository or its dependencies. NetworkPolicies are
+# additive: this policy re-opens only what a scan needs.
+#
+#   - DNS to kube-dns
+#   - HTTP/HTTPS to public addresses (git hosts, package registries)
+#
+# Ingress stays denied, and the sandbox still cannot reach pod/service CIDRs,
+# node networks, cloud metadata (169.254.169.254) or loopback.
+#
+# Apply once per namespace that runs sandboxes:
+#   kubectl apply -f k8s/sandbox-egress-raw.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migratowl-sandbox-egress
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: deepagents
+      app.kubernetes.io/component: sandbox
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
