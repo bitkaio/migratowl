@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support for Node < 18" and "Deprecated API methods removed". Long sections are now ordered hand-written lines
   about removals, renames and behaviour changes first, then matching pull-request lines, then the rest; nothing is
   dropped and short notes keep their order.
+- **A GitLab CI job token could not clone private projects** — the clone sent `GITLAB_TOKEN` with the username
+  `oauth2`, which GitLab accepts for access tokens but not for a job token (that needs `gitlab-ci-token`); public
+  projects still worked through the anonymous retry. New `MIGRATOWL_GITLAB_TOKEN_USER` (default `oauth2`) sets it.
+- **Tests read the developer's real `.env`** — importing the API module loads `.env` into the process, so a local
+  test run saw real API keys and tokens. Tests now start from an environment without them.
 - **Version headers with a link were not recognised** — `## [1.2.3](https://…/compare/…) (2024-01-01)`, written by
   release-please and common Keep a Changelog tooling, parsed to no versions, so a 200 KB changelog gave no excerpt.
 

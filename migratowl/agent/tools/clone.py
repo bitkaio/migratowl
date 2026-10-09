@@ -35,7 +35,10 @@ def clone_tokens(settings: Settings) -> dict[str, tuple[str, str]]:
         host = (urlsplit(settings.github_api_url).hostname or "github.com").removeprefix("api.")
         tokens[host] = ("x-access-token", settings.github_token)
     if settings.gitlab_token:
-        tokens[urlsplit(settings.gitlab_api_url).hostname or "gitlab.com"] = ("oauth2", settings.gitlab_token)
+        tokens[urlsplit(settings.gitlab_api_url).hostname or "gitlab.com"] = (
+            settings.gitlab_token_user,
+            settings.gitlab_token,
+        )
     return tokens
 
 

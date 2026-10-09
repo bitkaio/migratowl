@@ -104,6 +104,9 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MIGRATOWL_GITLAB_TOKEN", "GITLAB_TOKEN"),
     )
+    # Username sent with GITLAB_TOKEN when cloning over HTTPS: "oauth2" for personal, project and
+    # group access tokens, "gitlab-ci-token" for a CI job token.
+    gitlab_token_user: str = "oauth2"
     github_api_url: str = Field(
         default="https://api.github.com",
         validation_alias=AliasChoices("MIGRATOWL_GITHUB_API_URL", "GITHUB_API_URL"),

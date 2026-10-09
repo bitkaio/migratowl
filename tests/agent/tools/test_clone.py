@@ -422,6 +422,19 @@ class TestCloneTokensFromSettings:
             "gitlab.com": ("oauth2", "glpat-y"),
         }
 
+    def test_gitlab_job_token_username_is_configurable(self) -> None:
+        from migratowl.agent.tools.clone import clone_tokens
+        from migratowl.config import Settings
+
+        settings = Settings(_env_file=None, gitlab_token="job-token", gitlab_token_user="gitlab-ci-token")
+
+        assert clone_tokens(settings) == {"gitlab.com": ("gitlab-ci-token", "job-token")}
+
+    def test_gitlab_username_defaults_to_oauth2_for_access_tokens(self) -> None:
+        from migratowl.config import Settings
+
+        assert Settings(_env_file=None).gitlab_token_user == "oauth2"
+
     def test_enterprise_hosts_and_missing_tokens(self) -> None:
         from migratowl.agent.tools.clone import clone_tokens
         from migratowl.config import Settings
