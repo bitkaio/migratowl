@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from migratowl.changelog import first_releases
 from migratowl.evidence.rules import rules_for
 from migratowl.models.schemas import (
     AnalysisReport,
@@ -276,7 +277,26 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
 
 _EXCERPT_CHARS = 1500
 _NO_BREAKING = "(no breaking changes noted)"
-_MAJOR_RELEASE = re.compile(r"^v?\d+\.0\.0$")
+
+
+def _excerpt(chunks: list[dict], current_version: str, latest_version: str, limit: int) -> str:
+    """Join chunks into at most ``limit`` characters, the crossed majors' first releases first.
+
+    Those releases share the budget equally (a short one leaves its share to the next), so a
+    two-major bump shows the breaking notes of both majors; other releases fill what is left.
+    """
+    heads = first_releases(chunks, current_version, latest_version)
+    rest = [chunk for chunk in chunks if not any(chunk is head for head in heads)]
+    parts: list[str] = []
+    remaining = limit
+    for position, chunk in enumerate(heads + rest):
+        if remaining <= 0:
+            break
+        text = f"{chunk.get('version', '')}\n{chunk['content']}".strip()
+        share = remaining // (len(heads) - position) if position < len(heads) else remaining
+        parts.append(text[:share])
+        remaining -= len(parts[-1]) + 2  # the "\n\n" separator
+    return "\n\n".join(parts)[:limit]
 
 
 async def fetch_major_changelogs(
@@ -305,12 +325,9 @@ async def fetch_major_changelogs(
             logger.info("No changelog for %s", dep.name, exc_info=True)
             continue
         useful = [c for c in chunks if isinstance(c, dict) and c.get("content") and c["content"] != _NO_BREAKING]
-        # A new major's X.0.0 notes carry the breaking changes; put them first so the
-        # character cap does not cut them off behind later minor releases.
-        useful.sort(key=lambda c: not _MAJOR_RELEASE.match(str(c.get("version", ""))))
-        text = "\n\n".join(f"{c.get('version', '')}\n{c['content']}".strip() for c in useful)
+        text = _excerpt(useful, payload["current_version"] or "", dep.latest_version, _EXCERPT_CHARS)
         if text:
-            excerpts[dep.name] = text[:_EXCERPT_CHARS]
+            excerpts[dep.name] = text
     return excerpts
 
 

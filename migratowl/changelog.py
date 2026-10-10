@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable, Collection
 
 import html2text as _html2text
 import httpx
@@ -57,27 +58,25 @@ async def fetch_changelog(
     if not changelog_url and not repository_url:
         return "", [f"No changelog URL or repository URL provided for {dep_name}"]
 
+    sources: list[Callable[[], Awaitable[str]]] = []
     if changelog_url:
-        try:
-            return await _fetch_from_url(changelog_url), []
-        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-            logger.debug("changelog_url fetch failed for %s: %s", dep_name, exc)
+        url = changelog_url
 
-    # Step 2: extract changelog link from README.
-    if repository_url:
-        readme_link = await _fetch_changelog_link_from_readme(repository_url)
-        # A link to the GitHub releases page ("Latest Release") is served by the Releases API below.
-        if readme_link and readme_link != changelog_url and not _github_releases_repo(readme_link):
-            try:
-                return await _fetch_from_url(readme_link), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-                logger.debug("readme changelog link fetch failed for %s: %s", dep_name, exc)
+        async def from_changelog_url() -> str:
+            return await _fetch_from_url(url)
+
+        sources.append(from_changelog_url)
 
     if repository_url:
         settings = get_settings()
-        # With a token: API is cheap (5 000 req/hr) → try it before slow file probing.
-        # Without token: preserve quota (60 req/hr) → file probing first, API last.
         repo = repository_url
+
+        async def from_readme_link() -> str:
+            link = await _fetch_changelog_link_from_readme(repo)
+            # A link to the GitHub releases page ("Latest Release") is served by the Releases API below.
+            if not link or link == changelog_url or _github_releases_repo(link):
+                raise FileNotFoundError("no changelog link in the README")
+            return await _fetch_from_url(link)
 
         async def from_releases() -> str:
             return await _fetch_from_github_releases(repo, current_version)
@@ -85,13 +84,27 @@ async def fetch_changelog(
         async def from_files() -> str:
             return await _fetch_from_github(repo, current_version, latest_version)
 
-        ordered = [from_releases, from_files] if settings.github_token else [from_files, from_releases]
-        for strategy in ordered:
-            try:
-                return await strategy(), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-                logger.debug("strategy %s failed for %s: %s", strategy.__name__, dep_name, exc)
+        # With a token: API is cheap (5 000 req/hr) → try it before slow file probing.
+        # Without token: preserve quota (60 req/hr) → file probing first, API last.
+        sources.append(from_readme_link)
+        sources += [from_releases, from_files] if settings.github_token else [from_files, from_releases]
 
+    # A source can parse yet lack this bump's notes (docs.rs, an index page, a page or a paged
+    # Releases list that stops before the new major): keep looking, and keep the best text seen.
+    best_text, best_score = "", -1
+    for source in sources:
+        try:
+            text = await source()
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
+            logger.debug("changelog source %s failed for %s: %s", source.__name__, dep_name, exc)
+            continue
+        score = _coverage(text, current_version, latest_version)
+        if score > best_score:
+            best_text, best_score = text, score
+        if score == _FULL_COVERAGE:
+            break
+    if best_score >= 0:
+        return best_text, []
     return "", [f"Could not fetch changelog for {dep_name}"]
 
 
@@ -797,13 +810,15 @@ def merge_duplicate_versions(chunks: list[dict]) -> list[dict]:
     ]
 
 
-def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
+def extract_breaking_changes(chunks: list[dict], always_keep: Collection[str] = ()) -> list[dict]:
     """Filter chunk content to only breaking-change-related sections.
 
     For each chunk:
     - If breaking change patterns are found, extract the matching
       line + subsequent lines until a section boundary.
-    - If no patterns match, replace content with a placeholder.
+    - If no patterns match, replace content with a placeholder, unless its version is in
+      ``always_keep`` (a crossed major's first release: its notes are the break even when
+      they never say "breaking").
     - Version keys are always preserved.
     """
     if not chunks:
@@ -815,7 +830,8 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
         matches = list(_BREAKING_CHANGE_PATTERNS.finditer(content))
 
         if not matches:
-            result.append({"version": chunk["version"], "content": "(no breaking changes noted)"})
+            kept = content.strip() if chunk["version"] in always_keep else "(no breaking changes noted)"
+            result.append({"version": chunk["version"], "content": kept})
             continue
 
         # Extract paragraphs around each match.
@@ -857,6 +873,67 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
         })
 
     return result
+
+
+def _release_numbers(version: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", version or ""))
+
+
+def _major_line(numbers: tuple[int, ...]) -> tuple[int, ...]:
+    """The release line a version belongs to: its major, or for 0.x its minor too (0.9 → 0.10 is a break)."""
+    return numbers[:1] if numbers[0] > 0 else numbers[:2]
+
+
+def first_releases(chunks: list[dict], current_version: str, latest_version: str) -> list[dict]:
+    """The first release of each major crossed by (current, latest], oldest major first.
+
+    That is where a major's breaking changes are written: ``2.0``, ``v2.0`` or ``5.0.1`` when
+    there is no ``5.0.0``.
+    """
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new:
+        return []
+    low, high = _major_line(cur), _major_line(new)
+    firsts: dict[tuple[int, ...], tuple[tuple[int, ...], int]] = {}
+    for index, chunk in enumerate(chunks):
+        numbers = _release_numbers(str(chunk.get("version", "")))
+        if not numbers:
+            continue
+        line = _major_line(numbers)
+        if low < line <= high and (line not in firsts or numbers < firsts[line][0]):
+            firsts[line] = (numbers, index)
+    return [chunks[index] for _, (_, index) in sorted(firsts.items())]
+
+
+def order_for_breaking(chunks: list[dict], current_version: str, latest_version: str) -> list[dict]:
+    """``first_releases`` first, then every other chunk in its original order."""
+    heads = first_releases(chunks, current_version, latest_version)
+    return heads + [chunk for chunk in chunks if not any(chunk is head for head in heads)]
+
+
+_FULL_COVERAGE = 2
+
+
+def _coverage(text: str, current_version: str | None, latest_version: str | None) -> int:
+    """How well ``text`` covers the bump: 0 no notes in (current, latest], 1 notes but not the release
+    that starts the next major, 2 full. Without both versions any text counts as full."""
+    if not current_version or not latest_version:
+        return _FULL_COVERAGE
+    in_range = filter_chunks_by_version_range(
+        merge_duplicate_versions(chunk_changelog_by_version(text)), current_version, latest_version
+    )
+    if not in_range:
+        return 0
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new or _major_line(cur) == _major_line(new):
+        return _FULL_COVERAGE
+    line = _major_line(cur)
+    next_line = line[:-1] + (line[-1] + 1,)
+    for chunk in first_releases(in_range, current_version, latest_version):
+        numbers = _release_numbers(str(chunk.get("version", "")))
+        if _major_line(numbers) == next_line and not any(numbers[len(next_line):]):
+            return _FULL_COVERAGE
+    return 1
 
 
 def truncate_chunks(chunks: list[dict], max_chars: int) -> tuple[list[dict], bool]:

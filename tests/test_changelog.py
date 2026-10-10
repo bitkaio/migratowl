@@ -793,3 +793,122 @@ class TestHtmlMainContent:
         text = await self._fetch("<html><body><h2>2.0.0</h2><p>Removed x</p></body></html>")
 
         assert "Removed x" in text
+
+
+class TestOrderForBreaking:
+    """MO-78: the first release of each crossed major comes first, oldest major first."""
+
+    @staticmethod
+    def _versions(chunks: list[dict]) -> list[str]:
+        return [c["version"] for c in chunks]
+
+    @staticmethod
+    def _chunks(*versions: str) -> list[dict]:
+        return [{"version": v, "content": f"notes {v}"} for v in versions]
+
+    def test_short_major_heading_counts(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("2.14.0", "2.13.0", "v2.0"), "1.10.21", "2.14.0")
+
+        assert self._versions(ordered) == ["v2.0", "2.14.0", "2.13.0"]
+
+    def test_each_crossed_major_oldest_first(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("9.1.0", "9.0.0", "8.5.0", "8.0.0"), "7.6.0", "9.1.0")
+
+        assert self._versions(ordered) == ["8.0.0", "9.0.0", "9.1.0", "8.5.0"]
+
+    def test_major_without_x_0_0_uses_its_first_release(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("7.0.1", "6.0.1", "5.0.2", "5.0.1", "4.0.1"), "3.1.10", "7.0.1")
+
+        assert self._versions(ordered) == ["4.0.1", "5.0.1", "6.0.1", "7.0.1", "5.0.2"]
+
+    def test_zero_major_counts_minors_as_majors(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("0.10.3", "0.10.0", "0.9.2", "0.9.0"), "0.8.5", "0.10.3")
+
+        assert self._versions(ordered) == ["0.9.0", "0.10.0", "0.10.3", "0.9.2"]
+
+    def test_unparseable_versions_keep_their_order(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        chunks = self._chunks("Unreleased", "5.1.0", "5.0.0")
+
+        assert self._versions(order_for_breaking(chunks, "4.2.0", "5.1.0")) == ["5.0.0", "Unreleased", "5.1.0"]
+        assert self._versions(order_for_breaking(chunks, "", "5.1.0")) == ["Unreleased", "5.1.0", "5.0.0"]
+
+
+class TestSourceCoverage:
+    """MO-79: a source that lacks the bump's notes must not stop the search for one that has them."""
+
+    @staticmethod
+    def _patches(url_text, github_text, releases_text=None):
+        def strategy(value):
+            return AsyncMock(side_effect=FileNotFoundError) if value is None else AsyncMock(return_value=value)
+
+        return (
+            patch("migratowl.changelog._fetch_from_url", strategy(url_text)),
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", strategy(github_text)),
+            patch("migratowl.changelog._fetch_from_github_releases", strategy(releases_text)),
+            patch("migratowl.changelog.get_settings"),
+        )
+
+    async def _fetch(self, patches, current, latest):
+        url_p, readme_p, github_p, releases_p, settings_p = patches
+        with url_p, readme_p, github_p as github, releases_p, settings_p as settings:
+            settings.return_value.github_token = ""
+            text, _ = await fetch_changelog("https://docs.rs/rand", "https://github.com/rust-random/rand",
+                                            "rand", current, latest)
+        return text, github
+
+    async def test_no_notes_in_range_tries_the_repository(self) -> None:
+        docs = "## 0.11.0\nfuture\n## 0.7.0\nold"
+        repo = "## 0.10.0\nrng() replaces thread_rng()\n## 0.9.0\nrenamed gen_range"
+
+        text, github = await self._fetch(self._patches(docs, repo), "0.8.5", "0.10.3")
+
+        assert text == repo
+        github.assert_awaited_once()
+
+    async def test_missing_major_boundary_tries_the_repository(self) -> None:
+        recent_only = "## 2.14.0\nminor\n## 2.11.0\nminor"
+        full = "## 2.14.0\nminor\n## v2.0\nBaseSettings moved to pydantic-settings"
+
+        text, _ = await self._fetch(self._patches(recent_only, full), "1.10.21", "2.14.0")
+
+        assert "BaseSettings" in text
+
+    async def test_best_partial_source_is_kept_when_nothing_covers(self) -> None:
+        recent_only = "## 2.14.0\nminor\n## 2.11.0\nminor"
+        unrelated = "## 0.1.0\nold"
+
+        text, _ = await self._fetch(self._patches(recent_only, unrelated), "1.10.21", "2.14.0")
+
+        assert text == recent_only
+
+    async def test_unknown_versions_take_the_first_source(self) -> None:
+        text, github = await self._fetch(self._patches("## 0.11.0\nx", "## 0.9.0\ny"), None, None)
+
+        assert text == "## 0.11.0\nx"
+        github.assert_not_awaited()
+
+
+class TestCrossedMajorNotesAreKept:
+    """MO-78: a major's first release keeps its notes even without breaking-change keywords."""
+
+    def test_always_keep_versions_keep_their_notes(self) -> None:
+        from migratowl.changelog import extract_breaking_changes
+
+        chunks = [{"version": "0.9.0", "content": "- `thread_rng()` renamed to `rng()`"},
+                  {"version": "0.9.1", "content": "- doc fixes"}]
+
+        result = extract_breaking_changes(chunks, always_keep={"0.9.0"})
+
+        assert result[0]["content"] == "- `thread_rng()` renamed to `rng()`"
+        assert result[1]["content"] == "(no breaking changes noted)"

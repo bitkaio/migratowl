@@ -438,6 +438,22 @@ class TestMajorBumpChangelogs:
         excerpts = await fetch_major_changelogs(tools, [self._dep("a", "1.0.0", "2.0.0")], {})
         assert len(excerpts["a"]) <= 1500
 
+    async def test_excerpt_shares_its_budget_between_crossed_majors(self) -> None:
+        """MO-78: a two-major bump keeps the breaking notes of both majors, oldest first."""
+        from migratowl.pipeline import fetch_major_changelogs
+
+        tools = self._tools({"mongoose": {"chunks": [
+            {"version": "9.1.0", "content": "noise " * 500},
+            {"version": "9.0.0", "content": "BREAKING: callback pre middleware removed " + "x" * 3000},
+            {"version": "8.0.0", "content": "BREAKING: findOneAndRemove removed " + "y" * 3000},
+        ], "warnings": []}})
+
+        excerpts = await fetch_major_changelogs(tools, [self._dep("mongoose", "7.6.0", "9.1.0")], {})
+
+        text = excerpts["mongoose"]
+        assert len(text) <= 1500
+        assert text.index("findOneAndRemove removed") < text.index("callback pre middleware removed")
+
     def test_brief_includes_excerpts(self) -> None:
         from migratowl.models.schemas import ScanResult, ScanWebhookPayload
         from migratowl.pipeline import PreparedScan, build_analysis_brief
@@ -571,3 +587,4 @@ class TestCollectEvidence:
         assert "imported in 1 file(s) (app.js)" in brief
         assert "tests reach it: no" in brief
         assert "app.js:4" in brief and "res.json(status, body) was removed" in brief
+
