@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Per-major release notes and GitHub pages** — a README "Latest Release" link was fetched as the changelog, so
+  GitHub's HTML page became the excerpt (ejs: "7.0.1" twice, nothing for 4.x–6.x). Links to GitHub releases pages
+  now go to the Releases API, GitHub web pages are never parsed, release bodies that only restate the version
+  ("Version 7.0.1") count as empty, per-major notes files (`RELEASE_NOTES_v5.md` and similar) are read for each
+  major in the bump range, and chunks that repeat a version merge into one.
+- **Java packages: versions, speed and changelogs** — Maven Central is read from its `maven-metadata.xml` (every
+  version, fast) instead of the search API, which often timed out and returned at most 100 versions. Maven
+  qualifiers now compare: `-jre` / `-android` stay within their flavour, `.Final` / `.GA` are releases,
+  `-M1` / `.Beta1` / `.CR2` are pre-releases (guava and Hibernate were never reported before). Packages whose
+  registry names no repository (all of Maven) get one from deps.dev, with Apache's gitbox mapped to its GitHub
+  mirror; skipped when a private mirror is configured so private names never leave.
+
 - **Changelog files on branches other than `main` / `master` were never found** — the lookup guessed those two branch
   names, so repos with `develop`, `trunk` or `13.x` as default branch (Laravel) got no changelog file. It now reads
   from `HEAD`, which GitHub resolves to the default branch, and makes half as many probe requests.
