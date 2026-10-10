@@ -148,6 +148,36 @@ class PackageVerdicts(BaseModel):
     reports: list[AnalysisReport]
 
 
+class EvidenceHit(BaseModel):
+    """Where a breaking-change rule matched the code (found by static analysis, not by the model)."""
+
+    rule: str
+    note: str = ""
+    file: str
+    line: int
+    text: str = ""
+
+
+class PackageEvidence(BaseModel):
+    """How the repository uses a package, from parsing ``source/`` with ast-grep in the sandbox."""
+
+    importing_files: list[str] = []
+    importing_count: int = 0
+    test_files: list[str] = []
+    tests_reach: bool | None = None  # None = could not tell
+    hits: list[EvidenceHit] = []
+
+
+class ModelCallBudget(BaseModel):
+    """Model calls one scan may make: ``main`` for the analysis agent, ``subagent`` per package-analyzer run.
+
+    ``0`` = no limit.
+    """
+
+    main: int
+    subagent: int
+
+
 class ScanAnalysisReport(BaseModel):
     """Top-level pipeline output combining scan and analysis results."""
 
@@ -163,6 +193,13 @@ class ScanAnalysisReport(BaseModel):
     total_cache_read_tokens: int = 0
     total_cache_creation_tokens: int = 0
     model_name: str = ""
+    # Static-analysis evidence per analyzed package, and the "safe" verdicts it contradicts
+    # (package → reason). Computed in code, never by the model.
+    evidence: dict[str, PackageEvidence] = {}
+    reviews: dict[str, str] = {}
+    # The call caps this scan ran under, and whether the analysis agent ran out of them.
+    model_call_budget: ModelCallBudget | None = None
+    call_limit_reached: bool = False
 
 
 class JobState(enum.StrEnum):

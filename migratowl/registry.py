@@ -20,6 +20,7 @@ import re
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import defusedxml.ElementTree as ET
 import httpx
@@ -535,46 +536,81 @@ async def query_golang(
     )
 
 
+_MAVEN_VERSION = re.compile(r"^(?P<release>\d+(?:\.\d+)*)(?:[.-](?P<qualifier>.+))?$")
+# Qualifiers that mark a plain release, and those that name a build flavour (kept apart, never mixed).
+_MAVEN_RELEASE_QUALIFIERS = {"", "final", "ga", "release", "re"}
+_MAVEN_FLAVOURS = {"jre", "android"}
+_MAVEN_PRERELEASE = (
+    (re.compile(r"^(?:alpha|a)[.-]?(\d*)(?:[.-](?P<flavour>jre|android))?$"), "a"),
+    (re.compile(r"^(?:beta|b)[.-]?(\d*)(?:[.-](?P<flavour>jre|android))?$"), "b"),
+    (re.compile(r"^(?:rc|cr)[.-]?(\d*)(?:[.-](?P<flavour>jre|android))?$"), "rc"),
+    (re.compile(r"^(?:m|milestone)[.-]?(\d*)(?:[.-](?P<flavour>jre|android))?$"), "a"),
+)
+
+
+def _maven_pep440(version: str) -> str | None:
+    """A PEP 440 spelling of a Maven version, or None for snapshots and unparseable versions.
+
+    ``33.5.0-jre`` → ``33.5.0+jre`` (flavour as local label), ``6.6.0.Final`` → ``6.6.0``,
+    ``7.0.0.CR2`` → ``7.0.0rc2``, ``6.0.0-M1`` → ``6.0.0a1``.
+    """
+    m = _MAVEN_VERSION.match(version.strip())
+    if not m:
+        return None
+    release, qualifier = m.group("release"), (m.group("qualifier") or "").lower()
+    if "snapshot" in qualifier:
+        return None
+    if qualifier in _MAVEN_RELEASE_QUALIFIERS:
+        return release
+    if qualifier in _MAVEN_FLAVOURS:
+        return f"{release}+{qualifier}"
+    for pattern, tag in _MAVEN_PRERELEASE:
+        pre = pattern.match(qualifier)
+        if pre:
+            local = f"+{pre.group('flavour')}" if pre.group("flavour") else ""
+            return f"{release}{tag}{pre.group(1) or 0}{local}"
+    return None
+
+
+def _maven_flavour(normalized: str) -> str:
+    return normalized.partition("+")[2]
+
+
 async def query_maven_central(
     client: httpx.AsyncClient,
     dep: Dependency,
     options: CheckOptions = _DEFAULT_OPTIONS,
 ) -> OutdatedDependency | None:
-    """Query Maven Central Search API for latest version of a Java package.
+    """Query a Maven repository (Maven Central unless a mirror is set) for the latest version.
 
-    Expects dep.name in ``groupId:artifactId`` format.
-    Uses core=gav to retrieve all available versions in one request.
+    Expects dep.name in ``groupId:artifactId`` format and reads ``maven-metadata.xml``, which every
+    Maven repository serves and which lists all published versions.
     """
     if ":" not in dep.name:
         return None
     group_id, artifact_id = dep.name.split(":", 1)
     registries = options.registries
     metadata_url = registries.maven_metadata_url(group_id, artifact_id)
-    if metadata_url is not None:
-        # A configured repository: any Maven repository serves maven-metadata.xml, few offer Central's search.
-        resp = await client.get(metadata_url, **registries.request_kwargs(metadata_url))
-        resp.raise_for_status()
-        all_versions = [
-            (v.text or "").strip() for v in ET.fromstring(resp.text).iter("version")
-            if (v.text or "").strip() and "SNAPSHOT" not in (v.text or "")
-        ]
-        if not all_versions:
-            return None
-    else:
-        url = (
-            f"https://search.maven.org/solrsearch/select"
-            f"?q=g:{group_id}+AND+a:{artifact_id}&core=gav&rows=100&wt=json"
-        )
-        resp = await client.get(url)
-        resp.raise_for_status()
-        docs = resp.json()["response"]["docs"]
-        if not docs:
-            return None
-        all_versions = [d["v"] for d in docs if "v" in d]
-    target = _resolve_latest(dep.current_version, all_versions, options)
-
-    if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
+    resp = await client.get(metadata_url, **registries.request_kwargs(metadata_url))
+    resp.raise_for_status()
+    all_versions = [
+        (v.text or "").strip() for v in ET.fromstring(resp.text).iter("version")
+        if (v.text or "").strip() and "SNAPSHOT" not in (v.text or "")
+    ]
+    current = dep.installed_version or dep.current_version
+    current_norm = _maven_pep440(current) or current
+    flavour = _maven_flavour(current_norm)
+    # Compare in PEP 440 terms, but only within the current flavour (guava -jre vs -android).
+    by_norm = {
+        norm: v for v in all_versions
+        if (norm := _maven_pep440(v)) is not None and _maven_flavour(norm) == flavour
+    }
+    if not by_norm:
         return None
+    target_norm = _resolve_latest(current_norm, list(by_norm), options)
+    if target_norm is None or not _is_outdated(current_norm, target_norm):
+        return None
+    target = by_norm[target_norm]
 
     return OutdatedDependency(
         name=dep.name,
@@ -608,6 +644,57 @@ _ECOSYSTEM_QUERIES: dict[
 # ---------------------------------------------------------------------------
 
 
+_DEPS_DEV_SYSTEMS = {
+    Ecosystem.PYTHON: "pypi",
+    Ecosystem.NODEJS: "npm",
+    Ecosystem.GO: "go",
+    Ecosystem.RUST: "cargo",
+    Ecosystem.JAVA: "maven",
+}
+
+
+async def _deps_dev_repository(client: httpx.AsyncClient, dep: OutdatedDependency) -> str | None:
+    """Source repository of ``dep`` according to deps.dev (Open Source Insights), or None.
+
+    The fallback when the registry names no repository (Maven Central never does). Only called
+    with the public registries, so private package names are never sent.
+    """
+    system = _DEPS_DEV_SYSTEMS.get(dep.ecosystem)
+    if system is None:
+        return None
+    name = quote(dep.name, safe="")
+    version = quote(dep.latest_version, safe="")
+    url = f"https://api.deps.dev/v3/systems/{system}/packages/{name}/versions/{version}"
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        body = response.json()
+    except (httpx.HTTPError, ValueError):
+        logger.debug("deps.dev lookup failed for %s", dep.name, exc_info=True)
+        return None
+    for project in body.get("relatedProjects") or []:
+        project_id = (project.get("projectKey") or {}).get("id")
+        if project.get("relationType") == "SOURCE_REPO" and project_id:
+            return f"https://{project_id}"
+    for link in body.get("links") or []:
+        if link.get("label") == "SOURCE_REPO" and link.get("url"):
+            return _github_mirror(_clean_git_url(str(link["url"])))
+    return None
+
+
+_APACHE_GITBOX = re.compile(r"^https?://gitbox\.apache\.org/repos/asf/([^/?#]+?)(?:\.git)?/?$")
+
+
+def _github_mirror(url: str) -> str | None:
+    """The GitHub repository for a source URL Migratowl can read changelogs from, or None.
+
+    Apache projects live on gitbox.apache.org and are mirrored at github.com/apache/<name>.
+    """
+    if apache := _APACHE_GITBOX.match(url):
+        return f"https://github.com/apache/{apache.group(1)}"
+    return forge_repo_url(url) or url if url.startswith("https://") else None
+
+
 async def check_outdated(
     deps: list[Dependency],
     options: CheckOptions | None = None,
@@ -636,6 +723,8 @@ async def check_outdated(
         async with sem:
             try:
                 result = await query_fn(c, dep, _options)
+                if result is not None and not result.repository_url and not _options.registries.uses_mirror:
+                    result.repository_url = await _deps_dev_repository(c, result)
                 return result, None
             except Exception:
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)

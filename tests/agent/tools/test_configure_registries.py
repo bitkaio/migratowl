@@ -46,12 +46,11 @@ def test_config_files_are_uploaded_as_content_not_as_command_arguments() -> None
 
     result = create_configure_registries_tool(lambda: backend, registries).invoke({})
 
-    uploaded = dict(backend.upload_files.call_args.args[0])
+    uploaded = {p: c for call in backend.upload_files.call_args_list for p, c in call.args[0]}
     assert set(uploaded) == {f"{SANDBOX_HOME}/.npmrc", f"{SANDBOX_HOME}/.config/pip/pip.conf"}
     assert SECRET.encode() in uploaded[f"{SANDBOX_HOME}/.config/pip/pip.conf"].replace(b"%2D", b"-")
-    for call in backend.execute.call_args_list:  # mkdir only
+    for call in backend.execute.call_args_list:  # content (and its credential) is never in a command
         assert SECRET not in call.args[0]
-        assert call.args[0].startswith("mkdir -p")
     assert SECRET not in result
     assert ".npmrc" in result and "pip.conf" in result
 

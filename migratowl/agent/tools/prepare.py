@@ -26,6 +26,7 @@ from migratowl.models.schemas import ScanWebhookPayload
 from migratowl.pipeline import (
     PipelineError,
     build_analysis_brief,
+    collect_evidence,
     fetch_major_changelogs,
     prepare_scan,
     presolve,
@@ -61,6 +62,7 @@ def create_prepare_scan_tool(tools: MigratowlTools, *, tail_chars: int) -> Any:
             safe = ", ".join(r.dependency_name for r in resolved) or "none"
             return f"Repository: {repo_url}. Nothing to analyze: no outdated package needs review (safe: {safe})."
         prepared.changelog_excerpts = await fetch_major_changelogs(tools, pending, config)
+        prepared.evidence = await collect_evidence(tools, pending, prepared.changelog_excerpts, config)
         return build_analysis_brief(payload, prepared, pending)
 
     return prepare_scan_tool

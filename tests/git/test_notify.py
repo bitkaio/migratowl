@@ -262,3 +262,18 @@ class TestConsistentNotificationRules:
         with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
             await notify_pr_failed(_gh_payload(), _settings(), error="x" * 10_000)
         assert len(mock_gh.post_pr_comment.call_args.args[3]) < 2_000
+
+
+@pytest.mark.asyncio
+async def test_reviews_are_named_in_the_status_without_failing_it() -> None:
+    report = _report(breaking=0)
+    report.reports.append(AnalysisReport(dependency_name="express", is_breaking=False, error_summary="",
+                                         changelog_citation="", suggested_human_fix="", confidence=0.9))
+    report.reviews = {"express": "pattern found"}
+    mock_gh = AsyncMock()
+    with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+        await notify_pr_done(_gh_payload(), report, _settings())
+
+    status_args = mock_gh.set_commit_status.call_args.args
+    assert status_args[3] == "success"
+    assert "1 to review" in status_args[4]

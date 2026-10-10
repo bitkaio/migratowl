@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from migratowl.models.schemas import (
     AnalysisReport,
+    PackageEvidence,
     PackageVerdicts,
     ScanAnalysisReport,
     ScanWebhookPayload,
@@ -89,7 +90,8 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
             return verdicts.reports
         except Exception:
             logger.debug("structured_response present but failed validation")
-    for msg in reversed(agent_result.get("messages", [])):
+    messages = agent_result.get("messages", [])
+    for msg in reversed(messages):
         content = _message_text(msg)
         if not content:
             continue
@@ -97,7 +99,69 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
             return PackageVerdicts.model_validate(json.loads(content)).reports
         except Exception:
             continue
+    if any(_message_text(m).startswith(_CALL_LIMIT_PREFIX) for m in messages):
+        # The model-call cap ended the run: keep what the package-analyzer subagents already
+        # returned; every other package is reported as skipped (never as safe).
+        finished = _subagent_verdicts(messages)
+        logger.warning("Model-call limit reached; keeping %d finished verdict(s)", len(finished))
+        return finished
     raise ReportExtractionError("Agent finished without returning a structured report")
+
+
+# What langchain's ModelCallLimitMiddleware leaves as the last message when it ends a run.
+_CALL_LIMIT_PREFIX = "Model call limits exceeded"
+
+
+def call_limit_reached(agent_result: dict) -> bool:
+    """Whether the model-call cap ended the analysis agent's run (a subagent's cap reaches it as a tool result)."""
+    return any(
+        getattr(m, "type", "") == "ai" and _message_text(m).startswith(_CALL_LIMIT_PREFIX)
+        for m in agent_result.get("messages", [])
+    )
+
+
+def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
+    """Single-package ``AnalysisReport`` JSON objects returned by subagents (tool messages)."""
+    reports: list[AnalysisReport] = []
+    for msg in messages:
+        if getattr(msg, "type", "") != "tool":
+            continue
+        try:
+            reports.append(AnalysisReport.model_validate(json.loads(_message_text(msg))))
+        except Exception:
+            continue
+    return reports
+
+
+def _reviews(
+    prepared: PreparedScan, verdicts: dict[str, AnalysisReport], evidence: dict[str, PackageEvidence]
+) -> dict[str, str]:
+    """'Safe' verdicts the static evidence contradicts, with the reason (package → reason).
+
+    Flagged when a breaking-change rule matched the code, or when a major bump was judged safe with
+    no changelog evidence on tests that never reach the package. Missing evidence flags nothing.
+    """
+    from migratowl.pipeline import dependency_is_major_bump  # pipeline imports this module's callers
+
+    deps = {dep.name: dep for dep in prepared.candidates}
+    reviews: dict[str, str] = {}
+    for name, verdict in verdicts.items():
+        ev = evidence.get(name)
+        if verdict.is_breaking or ev is None:
+            continue
+        if ev.hits:
+            first = ev.hits[0]
+            more = f" (+{len(ev.hits) - 1} more)" if len(ev.hits) > 1 else ""
+            reviews[name] = f"{first.note} — found at {first.file}:{first.line}{more}"
+            continue
+        dep = deps.get(name)
+        has_changelog = bool(prepared.changelog_excerpts.get(name) or verdict.changelog_citation.strip())
+        if dep is not None and dependency_is_major_bump(dep) and ev.tests_reach is False and not has_changelog:
+            reviews[name] = (
+                "Major upgrade judged safe on passing tests, but no test reaches this package and no "
+                "changelog evidence was found"
+            )
+    return reviews
 
 
 def assemble_report(
@@ -132,6 +196,8 @@ def assemble_report(
                 update["changelog_citation"] = excerpt
             by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
+    evidence = {name: ev for name, ev in prepared.evidence.items() if name in by_name}
+    reviews = _reviews(prepared, by_name, evidence)
     missing = [name for name in names if name not in by_name]
     if missing:
         logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))
@@ -146,4 +212,6 @@ def assemble_report(
         total_output_tokens=tokens.output,
         total_cache_read_tokens=tokens.cache_read,
         total_cache_creation_tokens=tokens.cache_creation,
+        evidence=evidence,
+        reviews=reviews,
     )

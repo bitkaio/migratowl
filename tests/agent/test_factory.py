@@ -595,3 +595,121 @@ class TestBuildToolsPythonVersion:
             build_tools(_make_mock_manager(), settings=Settings(_env_file=None, sandbox_python_version="3.12"))
 
         assert mock_check.call_args.kwargs["options"].python_version == "3.12"
+
+
+class TestAgentBudget:
+    """MO-65.2: model calls are capped and old tool outputs are trimmed, on the agent and the subagent."""
+
+    def _build(self, **env) -> tuple[MagicMock, MagicMock]:
+        mock_manager = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent") as subagent,
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None, **env))
+        return mock_manager, subagent
+
+    @staticmethod
+    def _limits(middleware: list) -> tuple[int | None, int | None]:
+        from langchain.agents.middleware import ContextEditingMiddleware, ModelCallLimitMiddleware
+
+        calls = [m.run_limit for m in middleware if isinstance(m, ModelCallLimitMiddleware)]
+        trims = [e.trigger for m in middleware if isinstance(m, ContextEditingMiddleware) for e in m.edits]
+        return (calls[0] if calls else None), (trims[0] if trims else None)
+
+    def test_defaults_cap_the_agent_and_the_subagent(self) -> None:
+        manager, subagent = self._build()
+
+        agent_calls, agent_trim = self._limits(manager.create_agent.call_args.kwargs["middleware"])
+        sub_calls, sub_trim = self._limits(subagent.call_args.kwargs["middleware"])
+        assert (agent_calls, sub_calls) == (60, 20)
+        # The trim threshold is given in real tokens; the approximate counter over-counts about 4.6x.
+        assert agent_trim == sub_trim == int(40_000 * 4.6)
+
+    def test_settings_change_the_limits(self) -> None:
+        manager, subagent = self._build(max_model_calls=12, max_subagent_model_calls=4, context_trim_tokens=10_000)
+
+        assert self._limits(manager.create_agent.call_args.kwargs["middleware"]) == (12, int(10_000 * 4.6))
+        assert self._limits(subagent.call_args.kwargs["middleware"])[0] == 4
+
+    def test_zero_disables_each_limit(self) -> None:
+        manager, subagent = self._build(max_model_calls=0, max_subagent_model_calls=0, context_trim_tokens=0)
+
+        assert manager.create_agent.call_args.kwargs["middleware"] == []
+        assert subagent.call_args.kwargs["middleware"] == []
+
+
+class TestModelCallBudget:
+    """MO-75: the call caps scale with the scan — pending packages for the agent, importing files for the
+    subagent — and the settings are ceilings."""
+
+    @staticmethod
+    def _evidence(**counts: int) -> dict:
+        from migratowl.models.schemas import PackageEvidence
+
+        return {name: PackageEvidence(importing_count=n) for name, n in counts.items()}
+
+    def test_agent_cap_grows_with_pending_packages(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        settings = Settings(_env_file=None)
+        one = model_call_budget(settings, ["a"], self._evidence(a=0))
+        five = model_call_budget(settings, list("abcde"), self._evidence(a=0, b=0, c=0, d=0, e=0))
+
+        assert (one.main, five.main) == (9, 21)
+
+    def test_subagent_cap_grows_with_the_most_used_package(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        settings = Settings(_env_file=None)
+
+        assert model_call_budget(settings, ["a"], self._evidence(a=0)).subagent == 6
+        assert model_call_budget(settings, ["a", "b"], self._evidence(a=3, b=11)).subagent == 9
+
+    def test_settings_are_ceilings(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        settings = Settings(_env_file=None, max_model_calls=12, max_subagent_model_calls=8)
+        budget = model_call_budget(settings, list("abcdefgh"), self._evidence(a=400, b=0, c=0, d=0, e=0, f=0,
+                                                                                g=0, h=0))
+
+        assert (budget.main, budget.subagent) == (12, 8)
+
+    def test_default_ceilings(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        budget = model_call_budget(Settings(_env_file=None), [f"p{i}" for i in range(50)], {})
+
+        assert (budget.main, budget.subagent) == (60, 20)
+
+    def test_missing_evidence_falls_back_to_the_subagent_ceiling(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        settings = Settings(_env_file=None)
+
+        assert model_call_budget(settings, ["a", "b"], self._evidence(a=1)).subagent == 20
+        assert model_call_budget(settings, ["a"], None).subagent == 20
+
+    def test_zero_ceiling_stays_unlimited(self) -> None:
+        from migratowl.agent.factory import model_call_budget
+
+        settings = Settings(_env_file=None, max_model_calls=0, max_subagent_model_calls=0)
+
+        assert model_call_budget(settings, ["a"], self._evidence(a=2)).model_dump() == {"main": 0, "subagent": 0}
+
+    def test_agent_uses_a_given_budget(self) -> None:
+        from migratowl.models.schemas import ModelCallBudget
+
+        mock_manager = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent") as subagent,
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None),
+                                   budget=ModelCallBudget(main=9, subagent=7))
+
+        limits = TestAgentBudget._limits
+        assert limits(mock_manager.create_agent.call_args.kwargs["middleware"])[0] == 9
+        assert limits(subagent.call_args.kwargs["middleware"])[0] == 7

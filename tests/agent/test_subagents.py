@@ -137,3 +137,22 @@ class TestPackageAnalyzerPromptMatchesMainAgent:
     def test_text_fields_are_empty_strings_not_null(self) -> None:
         # AnalysisReport types these as str; null fails validation.
         assert "null" not in self._prompt()
+
+
+def test_middleware_reaches_the_inner_graph(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    import migratowl.agent.subagents as _subagents_mod
+
+    seen: dict = {}
+
+    def fake_create(**kwargs):
+        seen.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(_subagents_mod, "create_deep_agent", fake_create)
+    marker = object()
+    _subagents_mod.create_package_analyzer_subagent(model=MagicMock(), backend_factory=lambda _: None, tools=[],
+                                                    middleware=[marker])
+
+    assert seen["middleware"] == [marker]

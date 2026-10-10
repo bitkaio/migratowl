@@ -14,7 +14,7 @@
 
 """Subagent factories for the Migratowl agent."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from deepagents import CompiledSubAgent, create_deep_agent
@@ -58,6 +58,7 @@ def create_package_analyzer_subagent(
     model: Any,
     backend_factory: Callable,
     tools: list,
+    middleware: Sequence[Any] = (),
 ) -> CompiledSubAgent:
     """Create the package-analyzer CompiledSubAgent with K8s backend.
 
@@ -71,6 +72,7 @@ def create_package_analyzer_subagent(
         system_prompt=PACKAGE_ANALYZER_PROMPT,
         tools=tools,
         backend=backend_factory,
+        middleware=list(middleware),
     )
     return CompiledSubAgent(
         name="package-analyzer",

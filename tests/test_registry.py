@@ -877,25 +877,22 @@ class TestQueryGolangModes:
 
 
 class TestQueryMavenCentralModes:
-    def _maven_gav_response(self, versions: list[str]) -> dict:
-        return {
-            "response": {
-                "docs": [{"v": v} for v in versions],
-            },
-        }
+    def _maven_metadata(self, versions: list[str]) -> str:
+        inner = "".join(f"<version>{v}</version>" for v in versions)
+        return f"<metadata><versioning><versions>{inner}</versions></versioning></metadata>"
 
     async def test_normal_mode_uses_all_versions(self) -> None:
         from migratowl.registry import query_maven_central
 
         transport = _mock_transport({
-            "/solrsearch/select": httpx.Response(200, json=self._maven_gav_response(
-                ["3.2.0", "3.3.0", "3.3.1"],
-            )),
+            "/maven2/org/springframework/boot/spring-boot-starter/maven-metadata.xml": httpx.Response(
+                200, text=self._maven_metadata(["3.2.0", "3.3.0", "3.3.1"]),
+            ),
         })
         opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=False)
         async with httpx.AsyncClient(
             transport=transport,
-            base_url="https://search.maven.org",
+            base_url="https://repo1.maven.org",
         ) as client:
             dep = _dep("org.springframework.boot:spring-boot-starter", "3.2.0", Ecosystem.JAVA, "pom.xml")
             result = await query_maven_central(client, dep, opts)
@@ -907,10 +904,12 @@ class TestQueryMavenCentralModes:
         from migratowl.registry import query_maven_central
 
         transport = _mock_transport({
-            "/solrsearch/select": httpx.Response(200, json=self._maven_gav_response(["6.1.0", "6.2.0"])),
+            "/maven2/org/springframework/spring-core/maven-metadata.xml": httpx.Response(
+                200, text=self._maven_metadata(["6.1.0", "6.2.0"]),
+            ),
         })
         opts = CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=False)
-        async with httpx.AsyncClient(transport=transport, base_url="https://search.maven.org") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="https://repo1.maven.org") as client:
             dep = _dep("org.springframework:spring-core", "6.1.0", Ecosystem.JAVA, "pom.xml")
             dep.version_key = "spring.version"
             result = await query_maven_central(client, dep, opts)
@@ -1144,6 +1143,8 @@ class TestCheckOutdatedUsesSharedClient:
         calls = {"n": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host != "registry.npmjs.org":
+                return httpx.Response(404)  # the deps.dev repository lookup is not under test here
             calls["n"] += 1
             if calls["n"] == 1:
                 return httpx.Response(503)
@@ -1431,3 +1432,112 @@ class TestCleanGitUrl:
         }
         for raw, expected in cases.items():
             assert _clean_git_url(raw) == expected, raw
+
+
+class TestDepsDevRepositoryFallback:
+    """MO-62.5: packages whose registry names no repository get one from deps.dev."""
+
+    @staticmethod
+    def _handler(seen: list[str], deps_dev_status: int = 200):
+        def handle(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            if request.url.host == "repo1.maven.org":
+                return httpx.Response(200, text="<metadata><versioning><versions><version>32.0.0</version>"
+                                                "<version>33.3.1</version></versions></versioning></metadata>")
+            if request.url.host == "api.deps.dev":
+                return httpx.Response(deps_dev_status, json={"relatedProjects": [
+                    {"projectKey": {"id": "github.com/google/guava"}, "relationType": "ISSUE_TRACKER"},
+                    {"projectKey": {"id": "github.com/google/guava"}, "relationType": "SOURCE_REPO"},
+                ]})
+            if request.url.host == "registry.npmjs.org":
+                return httpx.Response(200, json={"versions": {"1.0.0": {}, "2.0.0": {}},
+                                                 "repository": {"url": "git+https://github.com/o/r.git"}})
+            return httpx.Response(404)
+        return handle
+
+    async def _check(self, deps, seen, options=None, deps_dev_status: int = 200):
+        from migratowl.registry import check_outdated
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(self._handler(seen, deps_dev_status))) as client:
+            outdated, failures = await check_outdated(deps, options or CheckOptions(mode=OutdatedCheckMode.NORMAL),
+                                                      client=client)
+        assert failures == []
+        return outdated
+
+    async def test_maven_package_gets_its_repository_from_deps_dev(self) -> None:
+        seen: list[str] = []
+        outdated = await self._check([_dep("com.google.guava:guava", "32.0.0", Ecosystem.JAVA, "pom.xml")], seen)
+
+        assert outdated[0].repository_url == "https://github.com/google/guava"
+        assert any(u.startswith("https://api.deps.dev/v3/systems/maven/packages/com.google.guava%3Aguava/") for u in seen)
+
+    async def test_a_known_repository_is_not_looked_up(self) -> None:
+        seen: list[str] = []
+        outdated = await self._check([_dep("left-pad", "1.0.0", Ecosystem.NODEJS, "package.json")], seen)
+
+        assert outdated[0].repository_url == "https://github.com/o/r"
+        assert not any("deps.dev" in u for u in seen)
+
+    async def test_private_mirrors_never_send_package_names_to_deps_dev(self) -> None:
+        from migratowl.registries import Registries
+
+        seen: list[str] = []
+        options = CheckOptions(mode=OutdatedCheckMode.NORMAL, registries=Registries(npm="https://npm.corp"))
+        await self._check([_dep("com.google.guava:guava", "32.0.0", Ecosystem.JAVA, "pom.xml")], seen, options)
+
+        assert not any("deps.dev" in u for u in seen)
+
+    async def test_a_deps_dev_failure_leaves_the_repository_empty(self) -> None:
+        seen: list[str] = []
+        outdated = await self._check(
+            [_dep("com.google.guava:guava", "32.0.0", Ecosystem.JAVA, "pom.xml")], seen, deps_dev_status=500
+        )
+
+        assert outdated[0].repository_url is None
+
+
+class TestMavenVersionStrings:
+    """Maven qualifiers (-jre, -android, .Final, -M1) are not PEP 440; they must still compare."""
+
+    @staticmethod
+    async def _latest(current: str, versions: list[str], include_prerelease: bool = False) -> str | None:
+        from migratowl.registry import query_maven_central
+
+        inner = "".join(f"<version>{v}</version>" for v in versions)
+        xml = f"<metadata><versioning><versions>{inner}</versions></versioning></metadata>"
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=xml))) as client:
+            result = await query_maven_central(
+                client, _dep("g:a", current, Ecosystem.JAVA, "pom.xml"),
+                CheckOptions(mode=OutdatedCheckMode.NORMAL, include_prerelease=include_prerelease),
+            )
+        return result.latest_version if result else None
+
+    async def test_guava_flavours_stay_apart(self) -> None:
+        versions = ["31.0-jre", "31.0-android", "33.5.0-jre", "33.5.0-android", "34.0.0-rc1-jre"]
+        assert await self._latest("31.0-jre", versions) == "33.5.0-jre"
+        assert await self._latest("31.0-android", versions) == "33.5.0-android"
+
+    async def test_final_and_ga_are_releases(self) -> None:
+        versions = ["5.6.15.Final", "6.6.0.Final", "7.0.0.Beta1", "7.0.0.CR2"]
+        assert await self._latest("5.6.15.Final", versions) == "6.6.0.Final"
+        assert await self._latest("5.6.15.Final", versions, include_prerelease=True) == "7.0.0.CR2"
+
+    async def test_milestones_are_prereleases(self) -> None:
+        assert await self._latest("5.3.0", ["5.3.0", "6.0.0-M1", "5.3.39"]) == "5.3.39"
+
+    async def test_snapshots_are_ignored(self) -> None:
+        assert await self._latest("1.0.0", ["1.0.0", "2.0.0-SNAPSHOT"]) is None
+
+
+class TestDepsDevLinks:
+    async def test_source_repo_link_is_used_and_apache_gitbox_maps_to_github(self) -> None:
+        from migratowl.models.schemas import OutdatedDependency
+        from migratowl.registry import _deps_dev_repository
+
+        body = {"links": [{"label": "SOURCE_REPO", "url": "https://gitbox.apache.org/repos/asf/commons-lang.git"}],
+                "relatedProjects": [{"projectKey": {"id": ""}, "relationType": "ISSUE_TRACKER"}]}
+        dep = OutdatedDependency(name="org.apache.commons:commons-lang3", current_version="3.12.0",
+                                 latest_version="3.21.0", ecosystem=Ecosystem.JAVA, manifest_path="pom.xml")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))) as client:
+            assert await _deps_dev_repository(client, dep) == "https://github.com/apache/commons-lang"

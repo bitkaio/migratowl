@@ -75,3 +75,19 @@ async def test_brief_includes_changelog_excerpts_for_major_bumps() -> None:
 
     assert [d.name for d in mock_fetch.await_args.args[1]] == ["flask"]
     assert "Removed flask.ext" in out
+
+
+async def test_brief_includes_code_evidence() -> None:
+    from migratowl.agent.tools.prepare import create_prepare_scan_tool
+    from migratowl.models.schemas import PackageEvidence
+
+    with patch("migratowl.agent.tools.prepare.prepare_scan", AsyncMock(return_value=_prepared())), \
+         patch("migratowl.agent.tools.prepare.fetch_major_changelogs", AsyncMock(return_value={})), \
+         patch("migratowl.agent.tools.prepare.collect_evidence",
+               AsyncMock(return_value={"flask": PackageEvidence(importing_files=["app.py"], importing_count=1,
+                                                                tests_reach=False)})) as mock_collect:
+        tool = create_prepare_scan_tool(MagicMock(), tail_chars=100)
+        out = await tool.ainvoke({"repo_url": "https://x/y"}, config={"configurable": {"thread_id": "t-1"}})
+
+    assert [d.name for d in mock_collect.await_args.args[1]] == ["flask"]
+    assert "imported in 1 file(s) (app.py)" in out
