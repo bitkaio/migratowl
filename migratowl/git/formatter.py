@@ -171,6 +171,11 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
 
     if report.skipped:
         skipped_str = ", ".join(_code(s) for s in report.skipped)
+        if report.call_limit_reached and report.model_call_budget:
+            skipped_str += (
+                f"\n\nThe analysis stopped at its model-call budget ({report.model_call_budget.main} calls, "
+                "sized to this scan and capped by `MIGRATOWL_MAX_MODEL_CALLS`) before reaching every package."
+            )
         lines += _details_block(f"{len(report.skipped)} package(s) skipped", skipped_str)
 
     if report.scan_result.registry_failures:

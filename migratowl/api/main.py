@@ -40,6 +40,7 @@ from migratowl.api.helpers import (  # noqa: E402
     ReportExtractionError,
     TokenUsage,
     assemble_report,
+    call_limit_reached,
     extract_verdicts,
     sum_usage,
 )
@@ -305,7 +306,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     app.state.manager, job, store, app.state.checkpointer
                 )
 
-            from migratowl.agent.factory import build_tools, create_migratowl_agent
+            from migratowl.agent.factory import build_tools, create_migratowl_agent, model_call_budget
             from migratowl.pipeline import (
                 build_analysis_brief,
                 collect_evidence,
@@ -332,7 +333,12 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
 
             verdicts: list = []
             tokens = TokenUsage()
+            budget = None
+            capped = False
             if pending:
+                budget = model_call_budget(settings, [d.name for d in pending], prepared.evidence)
+                logger.info("Job %s: %d package(s) to analyse; model-call budget %d (agent), %d (per subagent run)",
+                            job_id, len(pending), budget.main, budget.subagent)
                 from langchain_core.callbacks import UsageMetadataCallbackHandler
 
                 usage = UsageMetadataCallbackHandler()
@@ -346,18 +352,22 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     rate_limiter=getattr(app.state, "rate_limiter", None),
                     checkpointer=getattr(app.state, "checkpointer", None),
                     usage_callback=usage,
+                    budget=budget,
                 )
                 result = await graph.ainvoke(
                     {"messages": [("user", build_analysis_brief(job.payload, prepared, pending))]},
                     config=config,
                 )
                 verdicts = extract_verdicts(result)
+                capped = call_limit_reached(result)
                 tokens = sum_usage(usage.usage_metadata.values())
 
             report = assemble_report(
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
             )
             report.model_name = settings.model_name
+            report.model_call_budget = budget
+            report.call_limit_reached = capped
             report.repo_url = redact_secrets(report.repo_url)
             store.set_result(job_id, report)
 

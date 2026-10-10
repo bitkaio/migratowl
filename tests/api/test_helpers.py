@@ -191,6 +191,17 @@ class TestBudgetCappedRuns:
 
         assert [(r.dependency_name, r.is_breaking) for r in reports] == [("express", True)]
 
+    def test_call_limit_reached_only_for_the_agent_itself(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import call_limit_reached
+
+        assert call_limit_reached({"messages": [HumanMessage("brief"), AIMessage(self.LIMIT)]})
+        # A subagent hitting its own cap reaches the agent as a tool result; the agent itself went on.
+        sub = ToolMessage(content=self.LIMIT, tool_call_id="t1", name="task")
+        assert not call_limit_reached({"messages": [HumanMessage("brief"), sub, AIMessage("{}")]})
+        assert not call_limit_reached({})
+
     def test_an_uncapped_run_without_a_report_still_fails(self) -> None:
         import pytest
         from langchain_core.messages import AIMessage, HumanMessage

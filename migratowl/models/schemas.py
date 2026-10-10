@@ -168,6 +168,16 @@ class PackageEvidence(BaseModel):
     hits: list[EvidenceHit] = []
 
 
+class ModelCallBudget(BaseModel):
+    """Model calls one scan may make: ``main`` for the analysis agent, ``subagent`` per package-analyzer run.
+
+    ``0`` = no limit.
+    """
+
+    main: int
+    subagent: int
+
+
 class ScanAnalysisReport(BaseModel):
     """Top-level pipeline output combining scan and analysis results."""
 
@@ -187,6 +197,9 @@ class ScanAnalysisReport(BaseModel):
     # (package → reason). Computed in code, never by the model.
     evidence: dict[str, PackageEvidence] = {}
     reviews: dict[str, str] = {}
+    # The call caps this scan ran under, and whether the analysis agent ran out of them.
+    model_call_budget: ModelCallBudget | None = None
+    call_limit_reached: bool = False
 
 
 class JobState(enum.StrEnum):

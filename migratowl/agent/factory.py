@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,7 +43,7 @@ from migratowl.agent.tools.scan import create_scan_dependencies_tool
 from migratowl.agent.tools.update import create_update_dependencies_tool
 from migratowl.agent.tools.validate import create_validate_project_tool
 from migratowl.config import Settings, get_settings
-from migratowl.models.schemas import OutdatedCheckMode, PackageVerdicts
+from migratowl.models.schemas import ModelCallBudget, OutdatedCheckMode, PackageEvidence, PackageVerdicts
 from migratowl.observability import _langfuse_handler
 from migratowl.registries import Registries
 from migratowl.registry import CheckOptions
@@ -144,6 +144,38 @@ def _budget_middleware(max_calls: int, trim_tokens: int) -> list[Any]:
     return middleware
 
 
+# Calls the analysis agent needs besides per-package work (planning, the final report, slack),
+# and per pending package (dispatch, reading the result, one retry).
+_AGENT_BASE_CALLS = 6
+_AGENT_CALLS_PER_PACKAGE = 3
+# A subagent run's floor, plus one call for every few files that import the package.
+_SUBAGENT_BASE_CALLS = 6
+_IMPORTING_FILES_PER_CALL = 5
+
+
+def model_call_budget(
+    settings: Settings, pending: Sequence[str], evidence: Mapping[str, PackageEvidence] | None
+) -> ModelCallBudget:
+    """Size the call caps to the scan: the settings are ceilings, never exceeded.
+
+    The agent's cap grows with the pending packages; the subagent's with the files importing the most-used
+    package (how much code there is to read), not with the size of the repository. Without evidence for
+    every package the subagent gets its ceiling. A ceiling of 0 stays 0 (no limit).
+    """
+
+    def capped(wanted: int, ceiling: int) -> int:
+        return min(wanted, ceiling) if ceiling > 0 else 0
+
+    main = capped(_AGENT_BASE_CALLS + _AGENT_CALLS_PER_PACKAGE * len(pending), settings.max_model_calls)
+    if evidence and all(name in evidence for name in pending):
+        most_used = max((evidence[name].importing_count for name in pending), default=0)
+        subagent = capped(_SUBAGENT_BASE_CALLS + -(-most_used // _IMPORTING_FILES_PER_CALL),
+                          settings.max_subagent_model_calls)
+    else:
+        subagent = settings.max_subagent_model_calls
+    return ModelCallBudget(main=main, subagent=subagent)
+
+
 def build_tools(
     manager: KubernetesSandboxManager,
     *,
@@ -216,6 +248,7 @@ def create_migratowl_agent(
     rate_limiter: InMemoryRateLimiter | None = None,
     on_sandbox_acquired: Callable[[str], None] | None = None,
     usage_callback: BaseCallbackHandler | None = None,
+    budget: ModelCallBudget | None = None,
 ) -> Any:
     """Build the Migratowl agent graph.
 
@@ -239,9 +272,13 @@ def create_migratowl_agent(
         on_sandbox_acquired: Optional callback invoked once with the sandbox id
             when the sandbox is first acquired (for durable crash-recovery
             persistence). Runs on the tool's worker thread — must be thread-safe.
+        budget: Model-call caps for this scan (see ``model_call_budget``). ``None`` = the settings'
+            ceilings, for runs that do not know their packages up front (``prepare_scan`` in the chat UI).
     """
     if settings is None:
         settings = get_settings()
+    if budget is None:
+        budget = ModelCallBudget(main=settings.max_model_calls, subagent=settings.max_subagent_model_calls)
 
     if tools is None:
         tools = build_tools(
@@ -298,7 +335,7 @@ def create_migratowl_agent(
     # Subagent
     package_analyzer = create_package_analyzer_subagent(
         model=model,
-        middleware=_budget_middleware(settings.max_subagent_model_calls, settings.context_trim_tokens),
+        middleware=_budget_middleware(budget.subagent, settings.context_trim_tokens),
         backend_factory=tools.backend_factory,
         tools=[
             tools.copy_source, tools.update_dependencies, tools.validate_project,
@@ -327,6 +364,6 @@ def create_migratowl_agent(
             subagents=[package_analyzer],
             response_format=response_format,
             checkpointer=checkpointer,
-            middleware=_budget_middleware(settings.max_model_calls, settings.context_trim_tokens),
+            middleware=_budget_middleware(budget.main, settings.context_trim_tokens),
         )
     )

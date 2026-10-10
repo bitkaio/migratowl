@@ -898,3 +898,9 @@ class TestRunScanCollectsEvidence:
         assert "flask.ext was removed" in brief
         result = app.state.job_store.get(job.job_id).result
         assert "app.py:3" in result.reviews["flask"]
+        # MO-75: the call caps follow the scan — 1 pending package, imported by 1 file.
+        from migratowl.models.schemas import ModelCallBudget
+
+        assert mock_factory.call_args.kwargs["budget"] == ModelCallBudget(main=9, subagent=7)
+        assert result.model_call_budget == ModelCallBudget(main=9, subagent=7)
+        assert result.call_limit_reached is False

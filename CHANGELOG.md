@@ -18,10 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The PR comment gains a Confidence column and the review reasons; the commit status names the count. On
   `server-side-js`, express 4 → 5 is flagged at the `'/?search=:query'` route even when a model calls it safe.
 - **Bounded analysis cost** — the analysis agent and each package-analyzer subagent stop after a number of model
-  calls (`MIGRATOWL_MAX_MODEL_CALLS`, default 30; `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS`, default 15), and older tool
-  outputs are replaced with a placeholder once the context passes `MIGRATOWL_CONTEXT_TRIM_TOKENS` (default 40000).
-  A run that hits the cap keeps the verdicts it already has and reports the remaining packages as skipped instead
-  of failing the job. A free model had spent 326K tokens on 3 packages before.
+  calls, and older tool outputs are replaced with a placeholder once the context passes
+  `MIGRATOWL_CONTEXT_TRIM_TOKENS` (default 40000). The caps are sized to each scan: the agent gets 6 calls plus 3
+  per package left to analyse, a subagent run 6 plus 1 per 5 files importing the most-used package.
+  `MIGRATOWL_MAX_MODEL_CALLS` (default 60) and `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS` (default 20) are the
+  ceilings, and apply as-is when the packages are not known up front (the chat UI). A run that hits the cap
+  keeps the verdicts it already has and reports the remaining packages as skipped instead of failing the job;
+  the report records the budget (`model_call_budget`, `call_limit_reached`) and the PR comment says why packages
+  were skipped. A free model had spent 326K tokens on 3 packages before.
 
 ### Fixed
 

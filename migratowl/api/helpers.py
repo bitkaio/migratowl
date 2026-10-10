@@ -112,6 +112,14 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
 _CALL_LIMIT_PREFIX = "Model call limits exceeded"
 
 
+def call_limit_reached(agent_result: dict) -> bool:
+    """Whether the model-call cap ended the analysis agent's run (a subagent's cap reaches it as a tool result)."""
+    return any(
+        getattr(m, "type", "") == "ai" and _message_text(m).startswith(_CALL_LIMIT_PREFIX)
+        for m in agent_result.get("messages", [])
+    )
+
+
 def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
     """Single-package ``AnalysisReport`` JSON objects returned by subagents (tool messages)."""
     reports: list[AnalysisReport] = []

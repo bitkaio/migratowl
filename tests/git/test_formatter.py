@@ -79,6 +79,23 @@ class TestFormatPrComment:
         assert "httpx" in comment
         assert "Use httpx.Client() instead" in comment
 
+    def test_a_capped_run_says_why_packages_were_skipped(self) -> None:
+        from migratowl.models.schemas import ModelCallBudget
+
+        report = _make_report([], skipped=["boto3"])
+        report.model_call_budget = ModelCallBudget(main=9, subagent=7)
+        report.call_limit_reached = True
+
+        comment = format_pr_comment(report)
+
+        assert "model-call budget (9 calls," in comment
+        assert "MIGRATOWL_MAX_MODEL_CALLS" in comment
+
+    def test_an_uncapped_run_has_no_budget_note(self) -> None:
+        comment = format_pr_comment(_make_report([], skipped=["boto3"]))
+
+        assert "model-call budget" not in comment
+
     def test_skipped_packages_appear_in_details(self) -> None:
         comment = format_pr_comment(_make_report([], skipped=["boto3", "urllib3"]))
         assert "boto3" in comment

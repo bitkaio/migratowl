@@ -92,8 +92,8 @@ class Settings(BaseSettings):
     # Agent budget (0 disables each). Model calls are per run of the analysis agent and per
     # package-analyzer subagent run; once the context passes the trim size (real tokens),
     # older tool outputs are replaced with a placeholder.
-    max_model_calls: int = 30
-    max_subagent_model_calls: int = 15
+    max_model_calls: int = 60
+    max_subagent_model_calls: int = 20
     context_trim_tokens: int = 40_000
 
     # Analysis
