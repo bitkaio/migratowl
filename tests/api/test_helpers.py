@@ -280,6 +280,41 @@ class TestReviewFlags:
         assert breaking.reviews == {} and unknown.reviews == {}
 
 
+class TestReviewFlagsAfterFailedValidation:
+    """MO-83: a bare 'safe' on a major bump whose ecosystem's upgraded tests failed needs review."""
+
+    @staticmethod
+    def _prepared(passed: bool, latest: str = "2.1.4", evidence: dict | None = None):
+        from migratowl.models.schemas import OutdatedDependency, ScanResult
+        from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+        dep = OutdatedDependency(name="sqlalchemy", current_version="1.4.54", latest_version=latest,
+                                 ecosystem="python", manifest_path="requirements.txt")
+        return PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], evidence=evidence or {},
+            validations=[EcosystemValidation(ecosystem="python", passed=passed, failed_step=None if passed else "test")],
+        )
+
+    @staticmethod
+    def _verdict(citation: str = ""):
+        from migratowl.models.schemas import AnalysisReport
+
+        return AnalysisReport(dependency_name="sqlalchemy", is_breaking=False, error_summary="",
+                              changelog_citation=citation, suggested_human_fix="", confidence=0.9)
+
+    def test_uncited_safe_major_after_failed_tests_is_flagged(self) -> None:
+        report = TestReviewFlags._assemble(self._prepared(passed=False), [self._verdict()])
+
+        assert "tests failed" in report.reviews["sqlalchemy"]
+
+    def test_cited_minor_or_green_cases_are_not_flagged(self) -> None:
+        cited = TestReviewFlags._assemble(self._prepared(passed=False), [self._verdict("2.0.0: Engine.execute kept")])
+        green = TestReviewFlags._assemble(self._prepared(passed=True), [self._verdict()])
+        minor = TestReviewFlags._assemble(self._prepared(passed=False, latest="1.4.60"), [self._verdict()])
+
+        assert cited.reviews == {} and green.reviews == {} and minor.reviews == {}
+
 class TestModelCallUsage:
     """MO-77: a scan records how many model calls it made, in total and by the analysis agent itself."""
 

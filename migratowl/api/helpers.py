@@ -160,30 +160,40 @@ def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
 def _reviews(
     prepared: PreparedScan, verdicts: dict[str, AnalysisReport], evidence: dict[str, PackageEvidence]
 ) -> dict[str, str]:
-    """'Safe' verdicts the static evidence contradicts, with the reason (package → reason).
+    """'Safe' verdicts the evidence does not support, with the reason (package → reason).
 
-    Flagged when a breaking-change rule matched the code, or when a major bump was judged safe with
-    no changelog evidence on tests that never reach the package. Missing evidence flags nothing.
+    Flagged when a breaking-change rule matched the code; when a major bump was judged safe with
+    no changelog evidence on tests that never reach the package; or when a major bump was judged
+    safe without a citation although the tests failed after its ecosystem's upgrade.
     """
     from migratowl.pipeline import dependency_is_major_bump  # pipeline imports this module's callers
 
     deps = {dep.name: dep for dep in prepared.candidates}
+    failed = {v.ecosystem: v.failed_step or "validation" for v in prepared.validations if not v.passed}
     reviews: dict[str, str] = {}
     for name, verdict in verdicts.items():
-        ev = evidence.get(name)
-        if verdict.is_breaking or ev is None:
+        if verdict.is_breaking:
             continue
-        if ev.hits:
+        ev = evidence.get(name)
+        dep = deps.get(name)
+        major = dep is not None and dependency_is_major_bump(dep) is True
+        if ev is not None and ev.hits:
             first = ev.hits[0]
             more = f" (+{len(ev.hits) - 1} more)" if len(ev.hits) > 1 else ""
             reviews[name] = f"{first.note} — found at {first.file}:{first.line}{more}"
             continue
-        dep = deps.get(name)
         has_changelog = bool(prepared.changelog_excerpts.get(name) or verdict.changelog_citation.strip())
-        if dep is not None and dependency_is_major_bump(dep) and ev.tests_reach is False and not has_changelog:
+        if major and ev is not None and ev.tests_reach is False and not has_changelog:
             reviews[name] = (
                 "Major upgrade judged safe on passing tests, but no test reaches this package and no "
                 "changelog evidence was found"
+            )
+            continue
+        step = failed.get(str(dep.ecosystem)) if dep is not None else None
+        if dep is not None and major and step and not verdict.changelog_citation.strip():
+            reviews[name] = (
+                f"Major upgrade judged safe without a changelog citation, although the tests failed "
+                f"after the {dep.ecosystem} upgrade ({step} step)"
             )
     return reviews
 
