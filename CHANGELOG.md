@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   analysis agent; the rest are package-analyzer subagent calls) sit next to `model_call_budget`, and the log names
   both against the budget.
 
+### Changed
+
+- **Riskiest packages first** — the brief lists packages with breaking patterns in the code first, then major
+  bumps whose upgraded tests failed, then other majors, so a call cap drops the safest ones. A package in an
+  ecosystem whose upgraded tests failed gets 5 agent calls instead of 3. In the 0.8.0 test run a capped scan had
+  skipped the two packages that break.
+
+### Fixed
+
+- **Changelog excerpts showed the wrong release** — the excerpt led with the newest release, and notes without
+  breaking-change keywords were dropped. As a result, pydantic 1 → 2 showed 2.14.0, click 7 → 8 showed 8.5.0, and
+  a two-major bump lost its older major. The first release of each crossed major (`2.0`, `v2.0`, `5.0.1`, `0.9.0`)
+  now leads, oldest first, keeps its notes, and shares the excerpt with the other crossed majors.
+- **A changelog source without the bump's notes ended the search** — docs.rs, documentation index pages and paged
+  GitHub Releases that stop before the new major gave an empty or wrong excerpt (rand, sqlalchemy, mongoose). The
+  next source is now tried, and the best one is kept.
+- **0.x minor bumps counted as minor** — under semver `0.8` → `0.9` is breaking. Such bumps were presolved as safe
+  when the tests passed, and got no changelog excerpt or evidence rules.
+- **An uncited safe verdict passed after failed tests** — a major bump judged safe without a changelog citation,
+  when its ecosystem's upgraded tests failed, is now marked 🔍 Review.
+
 ## [0.8.0] - 2026-10-10
 
 ### Added
