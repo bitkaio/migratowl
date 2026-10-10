@@ -588,3 +588,16 @@ class TestCollectEvidence:
         assert "tests reach it: no" in brief
         assert "app.js:4" in brief and "res.json(status, body) was removed" in brief
 
+
+class TestZeroMajorBumps:
+    """MO-85: under semver a 0.x minor bump is breaking (Cargo, npm's ^)."""
+
+    def test_zero_minor_change_is_a_major_bump(self) -> None:
+        from migratowl.pipeline import is_major_bump
+
+        assert is_major_bump("0.8.5", "0.10.3") is True
+        assert is_major_bump("^0.8", "0.9.0") is True
+        assert is_major_bump("0.8.5", "0.8.9") is False
+        assert is_major_bump("0.9.0", "1.0.0") is True
+        assert is_major_bump("1.2.0", "1.9.0") is False
+        assert is_major_bump("0", "0.3.0") is None  # unknown is never treated as safe

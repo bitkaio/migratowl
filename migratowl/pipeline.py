@@ -85,11 +85,24 @@ def parse_major(version: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _zero_minor(version: str) -> int | None:
+    match = re.match(r"0\.(\d+)", _LEADING_OPERATORS.sub("", version or ""))
+    return int(match.group(1)) if match else None
+
+
 def is_major_bump(current: str, latest: str) -> bool | None:
-    """True/False when both majors parse; None when unknown (never treat unknown as safe)."""
+    """True/False when both majors parse; None when unknown (never treat unknown as safe).
+
+    Under semver a 0.x minor bump is breaking too (``0.8`` → ``0.9``, as Cargo and npm's ``^`` treat it).
+    """
     cur, new = parse_major(current), parse_major(latest)
     if cur is None or new is None:
         return None
+    if cur == new == 0:
+        cur_minor, new_minor = _zero_minor(current), _zero_minor(latest)
+        if cur_minor is None or new_minor is None:
+            return None
+        return new_minor > cur_minor
     return new > cur
 
 
