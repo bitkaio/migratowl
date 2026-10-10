@@ -339,7 +339,9 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             capped = False
             calls = agent_calls = 0
             if pending:
-                budget = model_call_budget(settings, [d.name for d in pending], prepared.evidence)
+                failed = {v.ecosystem for v in prepared.validations if not v.passed}
+                failing = [d.name for d in pending if str(d.ecosystem) in failed or d.name in prepared.update_failures]
+                budget = model_call_budget(settings, [d.name for d in pending], prepared.evidence, failing)
                 logger.info("Job %s: %d package(s) to analyse; model-call budget %d (agent), %d (per subagent run)",
                             job_id, len(pending), budget.main, budget.subagent)
                 usage = ScanUsageCallbackHandler()

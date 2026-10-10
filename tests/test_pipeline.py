@@ -601,3 +601,45 @@ class TestZeroMajorBumps:
         assert is_major_bump("0.9.0", "1.0.0") is True
         assert is_major_bump("1.2.0", "1.9.0") is False
         assert is_major_bump("0", "0.3.0") is None  # unknown is never treated as safe
+
+
+class TestRiskOrder:
+    """MO-84: the brief lists the riskiest packages first, so a call cap drops the safest ones."""
+
+    @staticmethod
+    def _prepared():
+        from migratowl.models.schemas import Ecosystem, EvidenceHit, OutdatedDependency, PackageEvidence, ScanResult
+        from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+        def dep(name, cur, new, eco=Ecosystem.PYTHON):
+            return OutdatedDependency(name=name, current_version=cur, latest_version=new, ecosystem=eco,
+                                      manifest_path="requirements.txt")
+
+        deps = [dep("requests", "2.31.0", "2.34.2"), dep("click", "7.1.2", "8.5.0"),
+                dep("sqlalchemy", "1.4.54", "2.1.4"), dep("pydantic", "1.10.21", "2.14.0"),
+                dep("ejs", "3.1.10", "7.0.1", Ecosystem.NODEJS)]
+        hit = EvidenceHit(rule="pydantic2-basesettings", note="moved", file="app/settings.py", line=1, text="x")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=deps, manifests_found=[], scan_duration_seconds=0),
+            candidates=deps, skipped=[], evidence={"pydantic": PackageEvidence(importing_count=1, hits=[hit])},
+            validations=[EcosystemValidation(ecosystem="python", passed=False, failed_step="test"),
+                         EcosystemValidation(ecosystem="nodejs", passed=True)],
+        )
+        return prepared, deps
+
+    def test_hits_then_failed_majors_then_majors_then_the_rest(self) -> None:
+        from migratowl.pipeline import risk_order
+
+        prepared, deps = self._prepared()
+
+        assert [d.name for d in risk_order(deps, prepared)] == ["pydantic", "click", "sqlalchemy", "ejs", "requests"]
+
+    def test_brief_lists_packages_in_risk_order(self) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+        from migratowl.pipeline import build_analysis_brief
+
+        prepared, deps = self._prepared()
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="r"), prepared, deps)
+
+        assert brief.index("- pydantic ") < brief.index("- click ") < brief.index("- requests ")
+        assert "most at risk first" in brief

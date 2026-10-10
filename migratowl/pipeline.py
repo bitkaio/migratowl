@@ -391,16 +391,31 @@ def _evidence_line(name: str, ev: PackageEvidence) -> list[str]:
     return lines
 
 
+def risk_order(pending: list[OutdatedDependency], prepared: PreparedScan) -> list[OutdatedDependency]:
+    """Riskiest first: breaking patterns in the code, then major bumps in an ecosystem whose upgraded
+    tests failed, then other major bumps, then the rest; ties keep their order."""
+    failed = {v.ecosystem for v in prepared.validations if not v.passed}
+
+    def key(dep: OutdatedDependency) -> tuple[bool, bool, bool]:
+        ev = prepared.evidence.get(dep.name)
+        major = dependency_is_major_bump(dep) is not False
+        broken = str(dep.ecosystem) in failed or dep.name in prepared.update_failures
+        return (not (ev is not None and ev.hits), not (major and broken), not major)
+
+    return sorted(pending, key=key)
+
+
 def build_analysis_brief(
     payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
 ) -> str:
     """Compact text the LLM analyses instead of driving Phases 1–2 itself."""
+    pending = risk_order(pending, prepared)
     lines = [
         f"Repository: {payload.repo_url} (branch {payload.branch_name}).",
         "Already done in code: the repo is cloned to source/, every package below was updated to its "
         "latest version in main/, and main/ was built and tested.",
         "",
-        f"Packages to analyze ({len(pending)}):",
+        f"Packages to analyze ({len(pending)}, most at risk first; analyse them in this order):",
     ]
     for dep in pending:
         bump = dependency_is_major_bump(dep)

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -148,17 +148,23 @@ def _budget_middleware(max_calls: int, trim_tokens: int) -> list[Any]:
 # and per pending package (dispatch, reading the result, one retry).
 _AGENT_BASE_CALLS = 6
 _AGENT_CALLS_PER_PACKAGE = 3
+# A package whose ecosystem's upgraded tests failed goes to a subagent; the agent then spends about this many.
+_AGENT_CALLS_PER_FAILING_PACKAGE = 5
 # A subagent run's floor, plus one call for every few files that import the package.
 _SUBAGENT_BASE_CALLS = 6
 _IMPORTING_FILES_PER_CALL = 5
 
 
 def model_call_budget(
-    settings: Settings, pending: Sequence[str], evidence: Mapping[str, PackageEvidence] | None
+    settings: Settings,
+    pending: Sequence[str],
+    evidence: Mapping[str, PackageEvidence] | None,
+    failing: Collection[str] = (),
 ) -> ModelCallBudget:
     """Size the call caps to the scan: the settings are ceilings, never exceeded.
 
-    The agent's cap grows with the pending packages; the subagent's with the files importing the most-used
+    The agent's cap grows with the pending packages, more for those in ``failing`` (their ecosystem's
+    upgraded tests failed, so they need a subagent); the subagent's with the files importing the most-used
     package (how much code there is to read), not with the size of the repository. Without evidence for
     every package the subagent gets its ceiling. A ceiling of 0 stays 0 (no limit).
     """
@@ -166,7 +172,10 @@ def model_call_budget(
     def capped(wanted: int, ceiling: int) -> int:
         return min(wanted, ceiling) if ceiling > 0 else 0
 
-    main = capped(_AGENT_BASE_CALLS + _AGENT_CALLS_PER_PACKAGE * len(pending), settings.max_model_calls)
+    per_package = sum(
+        _AGENT_CALLS_PER_FAILING_PACKAGE if name in failing else _AGENT_CALLS_PER_PACKAGE for name in pending
+    )
+    main = capped(_AGENT_BASE_CALLS + per_package, settings.max_model_calls)
     if evidence and all(name in evidence for name in pending):
         most_used = max((evidence[name].importing_count for name in pending), default=0)
         subagent = capped(_SUBAGENT_BASE_CALLS + -(-most_used // _IMPORTING_FILES_PER_CALL),
