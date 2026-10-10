@@ -278,3 +278,42 @@ class TestReviewFlags:
         unknown = self._assemble(self._prepared({}), [self._verdict()])
 
         assert breaking.reviews == {} and unknown.reviews == {}
+
+
+class TestModelCallUsage:
+    """MO-77: a scan records how many model calls it made, in total and by the analysis agent itself."""
+
+    @staticmethod
+    def _llm_result():
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        message = AIMessage("x", usage_metadata=usage, response_metadata={"model_name": "m"})
+        return LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    def test_handler_counts_calls_and_keeps_usage(self) -> None:
+        from migratowl.api.helpers import ScanUsageCallbackHandler
+
+        handler = ScanUsageCallbackHandler()
+        handler.on_llm_end(self._llm_result())
+        handler.on_llm_end(self._llm_result())
+
+        assert handler.model_calls == 2
+        assert handler.usage_metadata["m"]["input_tokens"] == 20
+
+    def test_agent_calls_are_its_ai_messages_without_the_limit_notice(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import agent_model_calls
+
+        state = {"messages": [
+            HumanMessage("brief"),
+            AIMessage("", tool_calls=[{"name": "task", "args": {}, "id": "t1"}]),
+            ToolMessage(content="{}", tool_call_id="t1", name="task"),
+            AIMessage("{}"),
+            AIMessage("Model call limits exceeded: run limit (9/9)"),
+        ]}
+
+        assert agent_model_calls(state) == 2
+        assert agent_model_calls({}) == 0

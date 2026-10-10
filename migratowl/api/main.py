@@ -38,7 +38,9 @@ from langchain_kubernetes import KubernetesSandboxManager  # noqa: E402
 
 from migratowl.api.helpers import (  # noqa: E402
     ReportExtractionError,
+    ScanUsageCallbackHandler,
     TokenUsage,
+    agent_model_calls,
     assemble_report,
     call_limit_reached,
     extract_verdicts,
@@ -335,13 +337,12 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             tokens = TokenUsage()
             budget = None
             capped = False
+            calls = agent_calls = 0
             if pending:
                 budget = model_call_budget(settings, [d.name for d in pending], prepared.evidence)
                 logger.info("Job %s: %d package(s) to analyse; model-call budget %d (agent), %d (per subagent run)",
                             job_id, len(pending), budget.main, budget.subagent)
-                from langchain_core.callbacks import UsageMetadataCallbackHandler
-
-                usage = UsageMetadataCallbackHandler()
+                usage = ScanUsageCallbackHandler()
                 graph = create_migratowl_agent(
                     app.state.manager,
                     tools=tools,
@@ -361,6 +362,11 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 verdicts = extract_verdicts(result)
                 capped = call_limit_reached(result)
                 tokens = sum_usage(usage.usage_metadata.values())
+                calls, agent_calls = usage.model_calls, agent_model_calls(result)
+                logger.info(
+                    "Job %s: %d model call(s): %d by the agent (budget %d), %d by subagents (budget %d per run)",
+                    job_id, calls, agent_calls, budget.main, calls - agent_calls, budget.subagent,
+                )
 
             report = assemble_report(
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
@@ -368,6 +374,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             report.model_name = settings.model_name
             report.model_call_budget = budget
             report.call_limit_reached = capped
+            report.model_calls, report.agent_model_calls = calls, agent_calls
             report.repo_url = redact_secrets(report.repo_url)
             store.set_result(job_id, report)
 

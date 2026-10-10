@@ -21,7 +21,9 @@ import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import BaseMessage
+from langchain_core.outputs import LLMResult
 from pydantic import BaseModel
 
 from migratowl.models.schemas import (
@@ -110,6 +112,28 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
 
 # What langchain's ModelCallLimitMiddleware leaves as the last message when it ends a run.
 _CALL_LIMIT_PREFIX = "Model call limits exceeded"
+
+
+class ScanUsageCallbackHandler(UsageMetadataCallbackHandler):
+    """Token usage per model plus the number of model calls (the analysis agent's and its subagents')."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model_calls = 0
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        super().on_llm_end(response, **kwargs)
+        with self._lock:
+            self.model_calls += 1
+
+
+def agent_model_calls(agent_result: dict) -> int:
+    """Model calls the analysis agent itself made: its AI messages, minus the call-limit notice."""
+    return sum(
+        1
+        for m in agent_result.get("messages", [])
+        if getattr(m, "type", "") == "ai" and not _message_text(m).startswith(_CALL_LIMIT_PREFIX)
+    )
 
 
 def call_limit_reached(agent_result: dict) -> bool:

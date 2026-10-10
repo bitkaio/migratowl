@@ -200,6 +200,9 @@ class ScanAnalysisReport(BaseModel):
     # The call caps this scan ran under, and whether the analysis agent ran out of them.
     model_call_budget: ModelCallBudget | None = None
     call_limit_reached: bool = False
+    # Model calls the scan made: all of them, and those by the analysis agent (the rest are subagent calls).
+    model_calls: int = 0
+    agent_model_calls: int = 0
 
 
 class JobState(enum.StrEnum):

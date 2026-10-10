@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Model calls in the report** — `model_calls` (all calls of the scan) and `agent_model_calls` (those by the
+  analysis agent; the rest are package-analyzer subagent calls) sit next to `model_call_budget`, and the log names
+  both against the budget.
+
 ## [0.8.0] - 2026-10-10
 
 ### Added

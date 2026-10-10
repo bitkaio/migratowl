@@ -904,3 +904,37 @@ class TestRunScanCollectsEvidence:
         assert mock_factory.call_args.kwargs["budget"] == ModelCallBudget(main=9, subagent=7)
         assert result.model_call_budget == ModelCallBudget(main=9, subagent=7)
         assert result.call_limit_reached is False
+
+
+class TestRunScanCountsModelCalls:
+    @pytest.mark.asyncio
+    async def test_report_records_calls_by_the_agent_and_the_subagents(self, app) -> None:
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        from migratowl.models.schemas import AnalysisReport, PackageVerdicts, ScanWebhookPayload
+
+        verdict = AnalysisReport(dependency_name="flask", is_breaking=False, error_summary="",
+                                 changelog_citation="", suggested_human_fix="", confidence=0.9)
+        generation = LLMResult(generations=[[ChatGeneration(message=AIMessage("x"))]])
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.pipeline.fetch_major_changelogs", AsyncMock(return_value={})), \
+             patch("migratowl.pipeline.collect_evidence", AsyncMock(return_value={})), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+
+            async def run(*_args, **_kwargs):
+                usage = mock_factory.call_args.kwargs["usage_callback"]
+                for _ in range(3):  # one agent call, two subagent calls
+                    usage.on_llm_end(generation)
+                return {"messages": [AIMessage("{}")], "structured_response": PackageVerdicts(reports=[verdict])}
+
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.side_effect = run
+            mock_factory.return_value = mock_graph
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        result = app.state.job_store.get(job.job_id).result
+        assert (result.model_calls, result.agent_model_calls) == (3, 1)
