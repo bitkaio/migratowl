@@ -25,6 +25,7 @@ from migratowl.changelog import (
     extract_breaking_changes,
     fetch_changelog,
     filter_chunks_by_version_range,
+    merge_duplicate_versions,
     truncate_chunks,
 )
 from migratowl.config import get_settings
@@ -49,8 +50,9 @@ def create_fetch_changelog_tool() -> Any:
             repository_url=dep.get("repository_url"),
             dep_name=dep["name"],
             current_version=dep.get("current_version"),
+            latest_version=dep.get("latest_version"),
         )
-        chunks = chunk_changelog_by_version(text)
+        chunks = merge_duplicate_versions(chunk_changelog_by_version(text))
         filtered = filter_chunks_by_version_range(
             chunks,
             dep["current_version"],

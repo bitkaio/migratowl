@@ -5,6 +5,7 @@
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import pytest
 
 from migratowl.changelog import (
     _extract_changelog_link,
@@ -303,7 +304,7 @@ class TestRepositoryPageAsChangelogUrl:
 
         assert text == "## 25.1.0\nreal changelog file"
         fetch_url.assert_not_awaited()
-        from_github.assert_awaited_once_with("https://github.com/Tinche/aiofiles")
+        from_github.assert_awaited_once_with("https://github.com/Tinche/aiofiles", None, None)
 
     async def test_file_links_on_github_are_still_fetched(self) -> None:
         from unittest.mock import AsyncMock as _AsyncMock
@@ -565,3 +566,193 @@ class TestExcerptPrefersEvidence:
 
         assert content.startswith("### Breaking Changes")
         assert "drop node 16" in content
+
+
+class TestGithubPagesAreNotScraped:
+    """MO-62.1: GitHub's HTML pages (releases, latest) are routed to the API, never parsed."""
+
+    async def test_releases_page_link_is_a_repository_hint(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        fetch_url = _AsyncMock(return_value="## 7.0.1\nLatest")
+        releases = _AsyncMock(return_value="## v5.0.0\n- Removed client option")
+        with (
+            patch("migratowl.changelog._fetch_from_url", fetch_url),
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", _AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", _AsyncMock(side_effect=FileNotFoundError)),
+            patch("migratowl.changelog._fetch_from_github_releases", releases),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            text, _ = await fetch_changelog("https://github.com/mde/ejs/releases/latest", None, "ejs")
+
+        fetch_url.assert_not_awaited()
+        assert releases.await_args.args[0] == "https://github.com/mde/ejs"
+        assert "Removed client option" in text
+
+    async def test_readme_link_to_github_releases_is_not_fetched_as_a_page(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        fetch_url = _AsyncMock(return_value="## 7.0.1\nLatest")
+        from_github = _AsyncMock(return_value="## 2.0.0\n- Removed x")
+        with (
+            patch("migratowl.changelog._fetch_from_url", fetch_url),
+            patch(
+                "migratowl.changelog._fetch_changelog_link_from_readme",
+                _AsyncMock(return_value="https://github.com/mde/ejs/releases/latest"),
+            ),
+            patch("migratowl.changelog._fetch_from_github", from_github),
+            patch("migratowl.changelog._fetch_from_github_releases", _AsyncMock(side_effect=FileNotFoundError)),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            text, _ = await fetch_changelog(None, "https://github.com/mde/ejs", "ejs")
+
+        fetch_url.assert_not_awaited()
+        assert "Removed x" in text
+
+    async def test_github_html_is_rejected_by_the_url_fetcher(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_url
+
+        page = "<!DOCTYPE html><html><body>Skip to content Navigation Menu <h2>v7.0.1</h2> Latest</body></html>"
+        client = _AsyncMock()
+        client.get.return_value = httpx.Response(
+            200, text=page, request=httpx.Request("GET", "https://github.com/mde/ejs/releases")
+        )
+        with patch("migratowl.changelog.get_http_client", return_value=client), pytest.raises(ValueError):
+            await _fetch_from_url("https://github.com/mde/ejs/releases")
+
+    async def test_readme_is_read_from_the_default_branch(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_changelog_link_from_readme
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            return httpx.Response(404, request=httpx.Request("GET", url))
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            await _fetch_changelog_link_from_readme("https://github.com/o/r")
+
+        assert requested and all("/HEAD/" in u for u in requested)
+
+
+class TestVersionOnlyReleaseBodies:
+    """MO-62.2: 'Version 7.0.1' is not release notes."""
+
+    @staticmethod
+    def _client(bodies: dict[str, str]):
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            body = [{"tag_name": t, "name": t, "body": b, "draft": False, "prerelease": False} for t, b in bodies.items()]
+            return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        return client
+
+    async def test_only_version_restatements_means_no_release_notes(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client = self._client({"v7.0.1": "Version 7.0.1", "v6.0.1": "v6.0.1", "v5.0.2": "Release 5.0.2\r\n", "v4.0.1": ""})
+        with patch("migratowl.changelog.get_http_client", return_value=client), pytest.raises(FileNotFoundError):
+            await _fetch_from_github_releases("https://github.com/mde/ejs")
+
+    async def test_real_notes_are_kept_and_restatements_dropped(self) -> None:
+        from migratowl.changelog import _fetch_from_github_releases
+
+        client = self._client({"v2.0.0": "## Breaking\n- Removed foo()", "v1.9.9": "Version 1.9.9"})
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github_releases("https://github.com/o/r")
+
+        assert "Removed foo()" in text
+        assert "v1.9.9" not in text
+
+
+class TestPerMajorReleaseNotesFiles:
+    """MO-62.3: ejs keeps its notes in RELEASE_NOTES_v4.md / RELEASE_NOTES_v5.md."""
+
+    async def test_per_major_files_in_the_bump_range_are_found(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_github, chunk_changelog_by_version, filter_chunks_by_version_range
+
+        files = {
+            "RELEASE_NOTES_v4.md": "# EJS Version 4.0.1 Release Notes\n\n## Major Changes\n- Dual module support\n",
+            "RELEASE_NOTES_v5.md": "# EJS Version 5.0.1 Release Notes\n\n### Deprecated Option Removed\n"
+                                   "- **Removed `client` option**\n",
+        }
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            name = url.split("/HEAD/", 1)[-1]
+            req = httpx.Request("GET", url)
+            return httpx.Response(200, text=files[name], request=req) if name in files else httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_from_github("https://github.com/mde/ejs", current_version="3.1.10", latest_version="7.0.1")
+
+        chunks = filter_chunks_by_version_range(chunk_changelog_by_version(text), "3.1.10", "7.0.1")
+        versions = {c["version"]: c["content"] for c in chunks}
+        assert set(versions) == {"4.0.1", "5.0.1"}
+        assert "Removed `client` option" in versions["5.0.1"]
+        assert not any("RELEASE_NOTES_v3" in u or "RELEASE_NOTES_v8" in u for u in requested), "only majors in range"
+
+    async def test_without_versions_no_per_major_probing_happens(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_github
+
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            return httpx.Response(404, request=httpx.Request("GET", url))
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client), pytest.raises(FileNotFoundError):
+            await _fetch_from_github("https://github.com/o/r")
+
+        assert not any("RELEASE_NOTES_v" in u for u in requested)
+
+    async def test_fetch_changelog_passes_both_versions_to_the_file_strategy(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from_github = _AsyncMock(return_value="## 2.0.0\nnotes")
+        with (
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", _AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", from_github),
+            patch("migratowl.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.github_token = ""
+            await fetch_changelog(None, "https://github.com/o/r", "pkg", current_version="1.0.0", latest_version="2.0.0")
+
+        from_github.assert_awaited_once_with("https://github.com/o/r", "1.0.0", "2.0.0")
+
+
+class TestDuplicateVersions:
+    """MO-62.4: one version, one chunk."""
+
+    def test_chunks_with_the_same_version_merge(self) -> None:
+        from migratowl.changelog import merge_duplicate_versions
+
+        merged = merge_duplicate_versions([
+            {"version": "7.0.1", "content": ""},
+            {"version": "6.0.0", "content": "six"},
+            {"version": "7.0.1", "content": "real notes"},
+            {"version": "7.0.1", "content": "more"},
+        ])
+
+        assert [c["version"] for c in merged] == ["7.0.1", "6.0.0"]
+        assert merged[0]["content"] == "real notes\n\nmore"
