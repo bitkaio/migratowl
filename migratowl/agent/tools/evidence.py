@@ -21,6 +21,7 @@ from typing import Any
 
 from langchain.tools import tool
 
+from migratowl.agent.tools.files import upload_to_sandbox
 from migratowl.agent.tools.update import _sh, q
 from migratowl.evidence import sandbox_scan
 
@@ -40,9 +41,7 @@ def create_gather_evidence_tool(get_backend: Callable[[], Any], workspace_path: 
     def gather_evidence(request_json: str) -> str:
         """Parse source/ with ast-grep: who imports each package, whether tests reach it, rule hits (JSON)."""
         backend = get_backend()
-        backend.execute(f"mkdir -p {q(work_dir)}")
-        responses = backend.upload_files([(script, _SCRIPT), (request_file, request_json.encode())])
-        failed = [f"{r.path}: {r.error}" for r in responses if r.error]
+        failed = upload_to_sandbox(backend, [(script, _SCRIPT), (request_file, request_json.encode())])
         if failed:
             return _unavailable("upload failed: " + "; ".join(failed))
         result = backend.execute(_sh(f"python3 {q(script)} {q(request_file)} {q(workspace_path + '/source')}"))

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Files uploaded to agent-sandbox sandboxes landed in the wrong place** — the agent-sandbox runtime writes every
+  upload to `/app/<file name>`, so the registry-mirror configs (`pip.conf`, `.npmrc`, Go, Cargo, Maven) never took
+  effect in agent-sandbox mode, while the upload reported success. Uploads now go one file at a time and are moved
+  to their real path, and a missing file is reported as an error.
+
 - **Per-major release notes and GitHub pages** — a README "Latest Release" link was fetched as the changelog, so
   GitHub's HTML page became the excerpt (ejs: "7.0.1" twice, nothing for 4.x–6.x). Links to GitHub releases pages
   now go to the Releases API, GitHub web pages are never parsed, release bodies that only restate the version

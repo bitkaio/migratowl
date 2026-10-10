@@ -15,8 +15,12 @@ WS = "/home/user/workspace"
 
 def _backend(output: str = '{"available": true, "packages": {}}', exit_code: int = 0, upload_error=None):
     backend = MagicMock()
-    backend.execute.side_effect = lambda cmd: ExecResult(output="", exit_code=0) if cmd.startswith("mkdir") \
-        else ExecResult(output=output, exit_code=exit_code)
+    def execute(cmd: str) -> ExecResult:
+        if cmd.startswith(("mkdir", "test -f")) or "mv -f" in cmd:
+            return ExecResult(output="", exit_code=0)
+        return ExecResult(output=output, exit_code=exit_code)
+
+    backend.execute.side_effect = execute
     backend.upload_files.side_effect = lambda files: [SimpleNamespace(path=p, error=upload_error) for p, _ in files]
     return backend
 
@@ -27,7 +31,7 @@ def test_uploads_the_scanner_and_request_and_runs_it_on_source() -> None:
 
     out = create_gather_evidence_tool(lambda: backend, WS).invoke({"request_json": json.dumps(request)})
 
-    uploaded = dict(backend.upload_files.call_args.args[0])
+    uploaded = {p: c for call in backend.upload_files.call_args_list for p, c in call.args[0]}
     script_path = next(p for p in uploaded if p.endswith("sandbox_scan.py"))
     request_path = next(p for p in uploaded if p.endswith("request.json"))
     assert uploaded[script_path] == open(sandbox_scan.__file__, "rb").read()
