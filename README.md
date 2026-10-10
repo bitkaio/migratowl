@@ -228,6 +228,15 @@ flowchart TB
 
 The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (default `0.7`).
 
+**Code evidence (static analysis, before the model runs):** Migratowl parses `source/` inside the sandbox with [ast-grep](https://ast-grep.github.io/) (the code is parsed, never run) and reports for each package under analysis:
+
+- which files import it, and whether any test reaches it (directly, or through local imports for Python and JavaScript/TypeScript; by package for Go);
+- where its breaking changes appear in the code: curated rules for well-known majors (Express 5, pydantic 2, NumPy 2) plus call patterns taken from the changelog excerpt (`res.json(status, obj)` → any `x.json(a, b)` call).
+
+The evidence goes into the model's brief, and code (not the model) checks every "safe" verdict against it. A package is marked **🔍 Review** in the PR comment when a breaking pattern was found in the code, or when a major upgrade was judged safe with no changelog evidence on tests that never reach it. Review does not fail the commit status; breaking verdicts do.
+
+**Choosing a model:** Claude (the default `claude-sonnet-5-5`) gives the most accurate verdicts. Free or small models are fine for smoke tests, but they miss behaviour changes that only the changelog and the code reveal. The evidence and Review flags limit the damage, and `MIGRATOWL_MAX_MODEL_CALLS` limits the cost.
+
 **Sandbox workspace layout:**
 
 ```text
@@ -235,6 +244,7 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 ├── source/          # Immutable clone — never executed
 ├── main/            # All deps bumped, executed in Phase 2
 ├── <package-name>/  # Per-package isolation (created on demand by subagent)
+├── .migratowl-evidence/ # The ast-grep scanner and its request
 └── .venvs/<folder>/ # One Python venv per working folder (Python projects only)
 ```
 

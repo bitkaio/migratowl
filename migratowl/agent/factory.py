@@ -33,6 +33,7 @@ from migratowl.agent.subagents import create_package_analyzer_subagent
 from migratowl.agent.tools.changelog import create_fetch_changelog_tool
 from migratowl.agent.tools.clone import clone_tokens, create_clone_repo_tool, create_copy_source_tool
 from migratowl.agent.tools.detect import create_detect_languages_tool
+from migratowl.agent.tools.evidence import create_gather_evidence_tool
 from migratowl.agent.tools.execute import create_execute_project_tool
 from migratowl.agent.tools.manifest import create_patch_manifest_tool, create_read_manifest_tool
 from migratowl.agent.tools.prepare import create_prepare_scan_tool
@@ -119,6 +120,7 @@ class MigratowlTools:
     validate_project: BaseTool
     execute_project: BaseTool
     fetch_changelog: BaseTool
+    gather_evidence: BaseTool
     read_manifest: BaseTool
     patch_manifest: BaseTool
 
@@ -196,6 +198,7 @@ def build_tools(
             get_sandbox, workspace_path=workspace_path, max_output_chars=settings.max_output_chars
         ),
         fetch_changelog=create_fetch_changelog_tool(),
+        gather_evidence=create_gather_evidence_tool(get_sandbox, workspace_path),
         read_manifest=create_read_manifest_tool(get_sandbox, workspace_path=workspace_path),
         patch_manifest=create_patch_manifest_tool(get_sandbox),
     )

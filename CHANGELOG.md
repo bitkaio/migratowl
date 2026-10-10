@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Code evidence and Review flags** — before the model runs, Migratowl parses the repository inside the sandbox
+  with ast-grep (`ast-grep-py`, added to the runtime image) and reports per package which files import it, whether
+  tests reach it, and where its breaking changes appear in the code: curated rules for Express 5, pydantic 2 and
+  NumPy 2, plus call patterns taken from the changelog excerpt. The evidence goes into the model's brief and the
+  report (`evidence`). Code then checks each "safe" verdict: a breaking pattern in the code, or a major upgrade with
+  no changelog evidence on tests that never reach the package, marks it **🔍 Review** with the reason (`reviews`).
+  The PR comment gains a Confidence column and the review reasons; the commit status names the count. On
+  `server-side-js`, express 4 → 5 is flagged at the `'/?search=:query'` route even when a model calls it safe.
 - **Bounded analysis cost** — the analysis agent and each package-analyzer subagent stop after a number of model
   calls (`MIGRATOWL_MAX_MODEL_CALLS`, default 30; `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS`, default 15), and older tool
   outputs are replaced with a placeholder once the context passes `MIGRATOWL_CONTEXT_TRIM_TOKENS` (default 40000).

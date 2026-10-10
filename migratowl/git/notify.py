@@ -99,11 +99,13 @@ async def notify_pr_done(
 ) -> None:
     """Post the report as a PR/MR comment and set the final commit status."""
     breaking_count = sum(1 for r in report.reports if r.is_breaking)
-    description = (
-        f"Migratowl: {breaking_count} breaking upgrade(s) found"
-        if breaking_count
-        else "Migratowl: all upgrades safe"
-    )
+    review_count = sum(1 for r in report.reports if not r.is_breaking and r.dependency_name in report.reviews)
+    if breaking_count:
+        description = f"Migratowl: {breaking_count} breaking upgrade(s) found"
+    elif review_count:
+        description = f"Migratowl: no breaking upgrade confirmed, {review_count} to review"
+    else:
+        description = "Migratowl: all upgrades safe"
     await _guarded("PR comment", payload, _comment(payload, settings, format_pr_comment(report)))
     await _guarded(
         "final status",

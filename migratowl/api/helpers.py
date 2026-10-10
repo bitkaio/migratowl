@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from migratowl.models.schemas import (
     AnalysisReport,
+    PackageEvidence,
     PackageVerdicts,
     ScanAnalysisReport,
     ScanWebhookPayload,
@@ -124,6 +125,37 @@ def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
     return reports
 
 
+def _reviews(
+    prepared: PreparedScan, verdicts: dict[str, AnalysisReport], evidence: dict[str, PackageEvidence]
+) -> dict[str, str]:
+    """'Safe' verdicts the static evidence contradicts, with the reason (package → reason).
+
+    Flagged when a breaking-change rule matched the code, or when a major bump was judged safe with
+    no changelog evidence on tests that never reach the package. Missing evidence flags nothing.
+    """
+    from migratowl.pipeline import dependency_is_major_bump  # pipeline imports this module's callers
+
+    deps = {dep.name: dep for dep in prepared.candidates}
+    reviews: dict[str, str] = {}
+    for name, verdict in verdicts.items():
+        ev = evidence.get(name)
+        if verdict.is_breaking or ev is None:
+            continue
+        if ev.hits:
+            first = ev.hits[0]
+            more = f" (+{len(ev.hits) - 1} more)" if len(ev.hits) > 1 else ""
+            reviews[name] = f"{first.note} — found at {first.file}:{first.line}{more}"
+            continue
+        dep = deps.get(name)
+        has_changelog = bool(prepared.changelog_excerpts.get(name) or verdict.changelog_citation.strip())
+        if dep is not None and dependency_is_major_bump(dep) and ev.tests_reach is False and not has_changelog:
+            reviews[name] = (
+                "Major upgrade judged safe on passing tests, but no test reaches this package and no "
+                "changelog evidence was found"
+            )
+    return reviews
+
+
 def assemble_report(
     payload: ScanWebhookPayload,
     prepared: PreparedScan,
@@ -156,6 +188,8 @@ def assemble_report(
                 update["changelog_citation"] = excerpt
             by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
+    evidence = {name: ev for name, ev in prepared.evidence.items() if name in by_name}
+    reviews = _reviews(prepared, by_name, evidence)
     missing = [name for name in names if name not in by_name]
     if missing:
         logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))
@@ -170,4 +204,6 @@ def assemble_report(
         total_output_tokens=tokens.output,
         total_cache_read_tokens=tokens.cache_read,
         total_cache_creation_tokens=tokens.cache_creation,
+        evidence=evidence,
+        reviews=reviews,
     )

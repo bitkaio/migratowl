@@ -133,17 +133,24 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         lines.append("_No outdated dependencies found to analyze._")
     else:
         lines += [
-            "| Package | Status | Fix |",
-            "|---------|--------|-----|",
+            "| Package | Status | Confidence | Note |",
+            "|---------|--------|------------|------|",
         ]
         sorted_reports = sorted(
             report.reports,
-            key=lambda r: (not r.is_breaking, r.dependency_name),
+            key=lambda r: (not r.is_breaking, r.dependency_name not in report.reviews, r.dependency_name),
         )
         for r in sorted_reports:
-            status = "⚠️ Breaking" if r.is_breaking else "✅ Safe"
-            fix_inline = _cell(_short_fix(r.suggested_human_fix)) if r.is_breaking and r.suggested_human_fix else "—"
-            lines.append(f"| {_code(r.dependency_name)} | {status} | {fix_inline} |")
+            review = report.reviews.get(r.dependency_name)
+            if r.is_breaking:
+                status = "⚠️ Breaking"
+                note = _cell(_short_fix(r.suggested_human_fix)) if r.suggested_human_fix else "—"
+            elif review:
+                status, note = "🔍 Review", _cell(_short_fix(review))
+            else:
+                status, note = "✅ Safe", "—"
+            confidence = f"{round(r.confidence * 100)}%"
+            lines.append(f"| {_code(r.dependency_name)} | {status} | {confidence} | {note} |")
 
         breaking_with_fix = [r for r in sorted_reports if r.is_breaking and r.suggested_human_fix]
         if breaking_with_fix:
@@ -152,6 +159,15 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
                 for r in breaking_with_fix
             )
             lines += _details_block(f"Fix details ({len(breaking_with_fix)} package(s))", fix_body)
+
+    reviewed = [r for r in sorted_reports if r.dependency_name in report.reviews] if report.reports else []
+    if reviewed:
+        review_body = "\n\n".join(
+            f"**{_code(r.dependency_name)}** — {_safe_text(report.reviews[r.dependency_name])}" for r in reviewed
+        )
+        lines += _details_block(
+            f"Why {len(reviewed)} package(s) need review (found by static analysis of the code)", review_body
+        )
 
     if report.skipped:
         skipped_str = ", ".join(_code(s) for s in report.skipped)
@@ -168,7 +184,11 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
         )
 
     breaking_count = sum(1 for r in report.reports if r.is_breaking)
-    summary = f"{breaking_count} breaking" if breaking_count else "all safe"
+    review_count = sum(1 for r in report.reports if not r.is_breaking and r.dependency_name in report.reviews)
+    summary_parts = [f"{breaking_count} breaking"] if breaking_count else []
+    if review_count:
+        summary_parts.append(f"{review_count} to review")
+    summary = ", ".join(summary_parts) or "all safe"
 
     footer_parts = [
         f"Scan duration: {report.total_duration_seconds:.1f}s",

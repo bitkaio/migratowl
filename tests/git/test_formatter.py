@@ -103,11 +103,11 @@ class TestFormatPrComment:
         comment = format_pr_comment(_make_report([safe, breaking]))
         assert comment.index("zzz") < comment.index("aaa")
 
-    def test_confidence_not_shown_in_output(self) -> None:
+    def test_confidence_is_shown_as_a_percentage(self) -> None:
         r = _make_analysis("requests", is_breaking=False, confidence=0.9)
         comment = format_pr_comment(_make_report([r]))
-        assert "Confidence" not in comment
-        assert "90%" not in comment
+        assert "| Confidence |" in comment
+        assert "90%" in comment
 
 
 class TestFormatTokens:
@@ -348,7 +348,7 @@ class TestCommentEscaping:
 
     def test_pipes_and_newlines_cannot_break_the_table(self) -> None:
         row = self._table_row(self._comment(suggested_human_fix="Use a | b.\nThen | c"))
-        assert row.count(" | ") == 2  # still exactly three cells
+        assert row.count(" | ") == 3  # still exactly four cells
         assert "\\|" in row
 
     def test_mentions_do_not_ping_anyone(self) -> None:
@@ -372,3 +372,42 @@ class TestCommentEscaping:
     def test_backticks_in_names_cannot_escape_code_span(self) -> None:
         row = self._table_row(self._comment(dependency_name="evil`<b>x</b>`"))
         assert "<b>" not in row
+
+
+class TestReviewInComment:
+    """MO-65.4: the PR comment shows reviews and confidence."""
+
+    @staticmethod
+    def _report(reviews: dict):
+        from migratowl.models.schemas import AnalysisReport, ScanAnalysisReport, ScanResult
+
+        return ScanAnalysisReport(
+            repo_url="https://x/y", branch_name="main",
+            scan_result=ScanResult(all_deps=[], outdated=[], manifests_found=[], scan_duration_seconds=0),
+            reports=[
+                AnalysisReport(dependency_name="express", is_breaking=False, error_summary="", changelog_citation="",
+                               suggested_human_fix="", confidence=0.9),
+                AnalysisReport(dependency_name="ejs", is_breaking=False, error_summary="", changelog_citation="",
+                               suggested_human_fix="", confidence=0.5),
+            ],
+            total_duration_seconds=1.0, reviews=reviews,
+        )
+
+    def test_review_status_reason_and_confidence(self) -> None:
+        from migratowl.git.formatter import format_pr_comment
+
+        comment = format_pr_comment(self._report({"express": "Express 5 no longer accepts ? in route paths "
+                                                              "— found at app.js:4"}))
+
+        assert "| Package | Status | Confidence | Note |" in comment
+        assert "🔍 Review" in comment and "✅ Safe" in comment
+        assert "90%" in comment and "50%" in comment
+        assert "app.js:4" in comment
+        assert "1 to review" in comment
+
+    def test_without_reviews_everything_safe(self) -> None:
+        from migratowl.git.formatter import format_pr_comment
+
+        comment = format_pr_comment(self._report({}))
+
+        assert "🔍 Review" not in comment and "all safe" in comment

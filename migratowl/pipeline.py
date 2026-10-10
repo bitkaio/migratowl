@@ -25,15 +25,17 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from migratowl.evidence.rules import rules_for
 from migratowl.models.schemas import (
     AnalysisReport,
     Dependency,
     OutdatedDependency,
+    PackageEvidence,
     RegistryFailure,
     ScanResult,
     ScanWebhookPayload,
@@ -72,6 +74,8 @@ class PreparedScan(BaseModel):
     validations: list[EcosystemValidation] = []
     # name → breaking-change excerpt fetched in code for pending major bumps
     changelog_excerpts: dict[str, str] = {}
+    # name → how the code uses the package (ast-grep in the sandbox)
+    evidence: dict[str, PackageEvidence] = {}
 
 
 def parse_major(version: str) -> int | None:
@@ -310,6 +314,53 @@ async def fetch_major_changelogs(
     return excerpts
 
 
+async def collect_evidence(
+    tools: MigratowlTools, pending: list[OutdatedDependency], excerpts: dict[str, str], config: RunnableConfig
+) -> dict[str, PackageEvidence]:
+    """Parse ``source/`` in the sandbox: who imports each pending package, whether tests reach it,
+    and where curated or changelog-derived breaking-change rules match (best effort)."""
+    packages: dict[str, dict[str, Any]] = {}
+    for dep in pending:
+        packages.setdefault(dep.name, {
+            "name": dep.name,
+            "ecosystem": dep.ecosystem.value,
+            "rules": rules_for(
+                dep.ecosystem.value, dep.name, dep.installed_version or dep.current_version,
+                dep.latest_version, excerpts.get(dep.name, ""),
+            ),
+        })
+    if not packages:
+        return {}
+    try:
+        raw = await tools.gather_evidence.ainvoke(
+            {"request_json": json.dumps({"packages": list(packages.values())})}, config=config
+        )
+        result = json.loads(raw.strip().splitlines()[-1] if raw.strip() else "{}")
+    except Exception:
+        logger.info("Code evidence unavailable", exc_info=True)
+        return {}
+    if not result.get("available"):
+        logger.info("Code evidence unavailable: %s", result.get("reason", "unknown reason"))
+        return {}
+    evidence: dict[str, PackageEvidence] = {}
+    for name, data in (result.get("packages") or {}).items():
+        try:
+            evidence[name] = PackageEvidence.model_validate(data)
+        except ValueError:
+            continue
+    return evidence
+
+
+def _evidence_line(name: str, ev: PackageEvidence) -> list[str]:
+    files = ", ".join(ev.importing_files[:5]) + (" …" if ev.importing_count > 5 else "")
+    reach = {True: "yes", False: "no", None: "unknown"}[ev.tests_reach]
+    line = f"- {name}: imported in {ev.importing_count} file(s)" + (f" ({files})" if files else "")
+    lines = [f"{line}; tests reach it: {reach}"]
+    for hit in ev.hits:
+        lines.append(f"  - {hit.note} — {hit.file}:{hit.line} `{hit.text}`")
+    return lines
+
+
 def build_analysis_brief(
     payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
 ) -> str:
@@ -348,5 +399,14 @@ def build_analysis_brief(
         lines += ["", "Changelog excerpts (already fetched; cite from these instead of fetching again):"]
         for name, text in excerpts.items():
             lines += [f"- {name}:", f"```\n{text}\n```"]
+    evidence = {name: ev for name, ev in prepared.evidence.items() if name in pending_names}
+    if evidence:
+        lines += ["", "Code evidence (static analysis of source/ with ast-grep; the code was parsed, not run):"]
+        for name, ev in evidence.items():
+            lines += _evidence_line(name, ev)
+        lines.append(
+            "A breaking pattern found in the code is strong evidence of a break even when the tests pass; "
+            "passing tests that never reach a package say little about it."
+        )
     lines += ["", "Return exactly one AnalysisReport per package listed above."]
     return "\n".join(lines)
