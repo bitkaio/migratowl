@@ -114,6 +114,7 @@ async def _fetch_from_url(url: str) -> str:
         # GitHub's own pages (releases, repository views) are site chrome, not changelogs.
         raise ValueError(f"GitHub web page, not a changelog: {url}")
     if is_html:
+        text = _main_content(text)
         converter = _html2text.HTML2Text()
         converter.ignore_links = True
         converter.ignore_images = True
@@ -123,6 +124,34 @@ async def _fetch_from_url(url: str) -> str:
             raise ValueError(f"HTML response with no parseable version headers: {url}")
         return stripped
     return text
+
+
+_MAIN_START = (
+    re.compile(r"<main\b[^>]*>", re.IGNORECASE),
+    re.compile(r"<article\b[^>]*>", re.IGNORECASE),
+    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
+)
+
+
+def _main_content(html: str) -> str:
+    """The inner HTML of the page's main element (``<main>``, ``<article>``, ``role="main"``), else the page.
+
+    Documentation sites wrap the changelog in navigation, sidebars and footers that would otherwise be
+    converted along with it (and carry stray version numbers of their own).
+    """
+    for start_re in _MAIN_START:
+        start = start_re.search(html)
+        if not start:
+            continue
+        tag = start.groupdict().get("tag") or start.group(0)[1:].split()[0].rstrip(">").lower()
+        depth, pos = 1, start.end()
+        tags = re.compile(rf"<(/?){re.escape(tag)}\b[^>]*>", re.IGNORECASE)
+        for m in tags.finditer(html, pos):
+            depth += -1 if m.group(1) else 1
+            if depth == 0:
+                return html[start.end() : m.start()]
+        return html[start.end() :]
+    return html
 
 
 # Regex to find a GitHub blob URL embedded in stub/redirect files.

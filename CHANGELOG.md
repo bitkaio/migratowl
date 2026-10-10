@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now go to the Releases API, GitHub web pages are never parsed, release bodies that only restate the version
   ("Version 7.0.1") count as empty, per-major notes files (`RELEASE_NOTES_v5.md` and similar) are read for each
   major in the bump range, and chunks that repeat a version merge into one.
+- **Documentation-site changelogs came with their navigation** — HTML changelog pages were converted whole, so menus,
+  sidebars and footers (with stray version numbers) went into the excerpt. Only the page's main element (`<main>`,
+  `<article>` or `role="main"`) is converted now (psutil, pydantic, Flask, Django docs).
 - **Java packages: versions, speed and changelogs** — Maven Central is read from its `maven-metadata.xml` (every
   version, fast) instead of the search API, which often timed out and returned at most 100 versions. Maven
   qualifiers now compare: `-jre` / `-android` stay within their flavour, `.Final` / `.GA` are releases,

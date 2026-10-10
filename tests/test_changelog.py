@@ -756,3 +756,40 @@ class TestDuplicateVersions:
 
         assert [c["version"] for c in merged] == ["7.0.1", "6.0.0"]
         assert merged[0]["content"] == "real notes\n\nmore"
+
+
+class TestHtmlMainContent:
+    """MO-62.6: documentation pages are converted from their main element, without the navigation."""
+
+    PAGE = (
+        "<!DOCTYPE html><html><body><nav>Skip to content <a>v9.9.9</a> Docs menu</nav>"
+        "<div class='sidebar'><h2>1.0.0 docs</h2></div>"
+        "<{tag}><h2>v2.0.0 (2026-10-08)</h2><ul><li>Removed the old API</li></ul>"
+        "<div><div><h2>v1.5.0</h2><p>Fixes</p></div></div></{close}>"
+        "<footer>Copyright</footer></body></html>"
+    )
+
+    async def _fetch(self, page: str) -> str:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_from_url
+
+        client = _AsyncMock()
+        client.get.return_value = httpx.Response(
+            200, text=page, request=httpx.Request("GET", "https://docs.example.org/changelog/")
+        )
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            return await _fetch_from_url("https://docs.example.org/changelog/")
+
+    @pytest.mark.parametrize("tag,close", [("main", "main"), ("article", "article"), ("div role=\"main\"", "div")])
+    async def test_only_the_main_element_is_converted(self, tag: str, close: str) -> None:
+        text = await self._fetch(self.PAGE.format(tag=tag, close=close))
+
+        assert "Removed the old API" in text and "v1.5.0" in text
+        assert "Skip to content" not in text and "9.9.9" not in text and "Copyright" not in text
+        assert [c["version"] for c in chunk_changelog_by_version(text)] == ["2.0.0", "1.5.0"]
+
+    async def test_pages_without_a_main_element_are_converted_whole(self) -> None:
+        text = await self._fetch("<html><body><h2>2.0.0</h2><p>Removed x</p></body></html>")
+
+        assert "Removed x" in text
