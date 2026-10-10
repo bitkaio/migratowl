@@ -89,7 +89,8 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
             return verdicts.reports
         except Exception:
             logger.debug("structured_response present but failed validation")
-    for msg in reversed(agent_result.get("messages", [])):
+    messages = agent_result.get("messages", [])
+    for msg in reversed(messages):
         content = _message_text(msg)
         if not content:
             continue
@@ -97,7 +98,30 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
             return PackageVerdicts.model_validate(json.loads(content)).reports
         except Exception:
             continue
+    if any(_message_text(m).startswith(_CALL_LIMIT_PREFIX) for m in messages):
+        # The model-call cap ended the run: keep what the package-analyzer subagents already
+        # returned; every other package is reported as skipped (never as safe).
+        finished = _subagent_verdicts(messages)
+        logger.warning("Model-call limit reached; keeping %d finished verdict(s)", len(finished))
+        return finished
     raise ReportExtractionError("Agent finished without returning a structured report")
+
+
+# What langchain's ModelCallLimitMiddleware leaves as the last message when it ends a run.
+_CALL_LIMIT_PREFIX = "Model call limits exceeded"
+
+
+def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
+    """Single-package ``AnalysisReport`` JSON objects returned by subagents (tool messages)."""
+    reports: list[AnalysisReport] = []
+    for msg in messages:
+        if getattr(msg, "type", "") != "tool":
+            continue
+        try:
+            reports.append(AnalysisReport.model_validate(json.loads(_message_text(msg))))
+        except Exception:
+            continue
+    return reports
 
 
 def assemble_report(

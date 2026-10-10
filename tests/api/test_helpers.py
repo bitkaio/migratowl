@@ -157,3 +157,45 @@ class TestCitationFallback:
         report = assemble_report(ScanWebhookPayload(repo_url="r"), self._prepared({"express": "other"}),
                                  [verdict], duration=0, tokens=TokenUsage())
         assert report.reports[0].changelog_citation == "## 5.0.0 removed x"
+
+
+class TestBudgetCappedRuns:
+    """MO-65.2: a run ended by the model-call cap keeps finished verdicts and fails nothing."""
+
+    LIMIT = "Model call limits exceeded: run limit (30/30)"
+
+    def test_capped_run_without_verdicts_returns_none(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from migratowl.api.helpers import extract_verdicts
+
+        assert extract_verdicts({"messages": [HumanMessage("brief"), AIMessage(self.LIMIT)]}) == []
+
+    def test_capped_run_keeps_subagent_verdicts(self) -> None:
+        import json
+
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import extract_verdicts
+
+        verdict = {"dependency_name": "express", "is_breaking": True, "error_summary": "routes",
+                   "changelog_citation": "5.0.0 ...", "suggested_human_fix": "use req.query", "confidence": 0.8}
+        state = {"messages": [
+            HumanMessage("brief"),
+            ToolMessage(content=json.dumps(verdict), tool_call_id="t1", name="task"),
+            ToolMessage(content="not json", tool_call_id="t2", name="fetch_changelog_tool"),
+            AIMessage(self.LIMIT),
+        ]}
+
+        reports = extract_verdicts(state)
+
+        assert [(r.dependency_name, r.is_breaking) for r in reports] == [("express", True)]
+
+    def test_an_uncapped_run_without_a_report_still_fails(self) -> None:
+        import pytest
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from migratowl.api.helpers import ReportExtractionError, extract_verdicts
+
+        with pytest.raises(ReportExtractionError):
+            extract_verdicts({"messages": [HumanMessage("brief"), AIMessage("I am done.")]})

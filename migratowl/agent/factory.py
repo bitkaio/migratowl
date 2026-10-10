@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware, ModelCallLimitMiddleware
 from langchain.agents.structured_output import ProviderStrategy
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
@@ -120,6 +121,25 @@ class MigratowlTools:
     fetch_changelog: BaseTool
     read_manifest: BaseTool
     patch_manifest: BaseTool
+
+
+# langchain's approximate token counter over-counts by about this factor (see patches.py).
+_APPROX_TOKEN_OVERCOUNT = 4.6
+
+
+def _budget_middleware(max_calls: int, trim_tokens: int) -> list[Any]:
+    """Cap model calls per run (ending gracefully) and trim old tool outputs once the context grows.
+
+    A run cut short leaves some packages without a verdict; those are reported as skipped, never as safe.
+    """
+    middleware: list[Any] = []
+    if max_calls > 0:
+        middleware.append(ModelCallLimitMiddleware(run_limit=max_calls, exit_behavior="end"))
+    if trim_tokens > 0:
+        middleware.append(ContextEditingMiddleware(
+            edits=[ClearToolUsesEdit(trigger=int(trim_tokens * _APPROX_TOKEN_OVERCOUNT), keep=3)]
+        ))
+    return middleware
 
 
 def build_tools(
@@ -275,6 +295,7 @@ def create_migratowl_agent(
     # Subagent
     package_analyzer = create_package_analyzer_subagent(
         model=model,
+        middleware=_budget_middleware(settings.max_subagent_model_calls, settings.context_trim_tokens),
         backend_factory=tools.backend_factory,
         tools=[
             tools.copy_source, tools.update_dependencies, tools.validate_project,
@@ -303,5 +324,6 @@ def create_migratowl_agent(
             subagents=[package_analyzer],
             response_format=response_format,
             checkpointer=checkpointer,
+            middleware=_budget_middleware(settings.max_model_calls, settings.context_trim_tokens),
         )
     )

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bounded analysis cost** — the analysis agent and each package-analyzer subagent stop after a number of model
+  calls (`MIGRATOWL_MAX_MODEL_CALLS`, default 30; `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS`, default 15), and older tool
+  outputs are replaced with a placeholder once the context passes `MIGRATOWL_CONTEXT_TRIM_TOKENS` (default 40000).
+  A run that hits the cap keeps the verdicts it already has and reports the remaining packages as skipped instead
+  of failing the job. A free model had spent 326K tokens on 3 packages before.
+
 ### Fixed
 
 - **Per-major release notes and GitHub pages** — a README "Latest Release" link was fetched as the changelog, so

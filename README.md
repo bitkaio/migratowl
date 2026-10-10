@@ -544,6 +544,9 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
+| `MIGRATOWL_MAX_MODEL_CALLS` | `30` | Model calls the analysis agent may make in one scan; the run then ends gracefully. Packages left without a verdict are reported as skipped, never as safe. `0` = no limit |
+| `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS` | `15` | The same cap for each package-analyzer subagent run. `0` = no limit |
+| `MIGRATOWL_CONTEXT_TRIM_TOKENS` | `40000` | Once the agent's context passes this many tokens, older tool outputs are replaced with a placeholder (the last 3 are kept). `0` = never trim |
 
 ### Jobs and Crash Recovery
 

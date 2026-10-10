@@ -595,3 +595,46 @@ class TestBuildToolsPythonVersion:
             build_tools(_make_mock_manager(), settings=Settings(_env_file=None, sandbox_python_version="3.12"))
 
         assert mock_check.call_args.kwargs["options"].python_version == "3.12"
+
+
+class TestAgentBudget:
+    """MO-65.2: model calls are capped and old tool outputs are trimmed, on the agent and the subagent."""
+
+    def _build(self, **env) -> tuple[MagicMock, MagicMock]:
+        mock_manager = _make_mock_manager()
+        with (
+            patch("migratowl.agent.factory.init_chat_model"),
+            patch("migratowl.agent.factory.create_package_analyzer_subagent") as subagent,
+            patch("migratowl.agent.factory.apply_session_injection", side_effect=lambda g: g),
+        ):
+            create_migratowl_agent(mock_manager, settings=Settings(_env_file=None, **env))
+        return mock_manager, subagent
+
+    @staticmethod
+    def _limits(middleware: list) -> tuple[int | None, int | None]:
+        from langchain.agents.middleware import ContextEditingMiddleware, ModelCallLimitMiddleware
+
+        calls = [m.run_limit for m in middleware if isinstance(m, ModelCallLimitMiddleware)]
+        trims = [e.trigger for m in middleware if isinstance(m, ContextEditingMiddleware) for e in m.edits]
+        return (calls[0] if calls else None), (trims[0] if trims else None)
+
+    def test_defaults_cap_the_agent_and_the_subagent(self) -> None:
+        manager, subagent = self._build()
+
+        agent_calls, agent_trim = self._limits(manager.create_agent.call_args.kwargs["middleware"])
+        sub_calls, sub_trim = self._limits(subagent.call_args.kwargs["middleware"])
+        assert (agent_calls, sub_calls) == (30, 15)
+        # The trim threshold is given in real tokens; the approximate counter over-counts about 4.6x.
+        assert agent_trim == sub_trim == int(40_000 * 4.6)
+
+    def test_settings_change_the_limits(self) -> None:
+        manager, subagent = self._build(max_model_calls=12, max_subagent_model_calls=4, context_trim_tokens=10_000)
+
+        assert self._limits(manager.create_agent.call_args.kwargs["middleware"]) == (12, int(10_000 * 4.6))
+        assert self._limits(subagent.call_args.kwargs["middleware"])[0] == 4
+
+    def test_zero_disables_each_limit(self) -> None:
+        manager, subagent = self._build(max_model_calls=0, max_subagent_model_calls=0, context_trim_tokens=0)
+
+        assert manager.create_agent.call_args.kwargs["middleware"] == []
+        assert subagent.call_args.kwargs["middleware"] == []
