@@ -20,7 +20,7 @@ class TestDefaults:
         assert r.npm_url("@scope/pkg") == "https://registry.npmjs.org/@scope/pkg"
         assert r.crates_url("serde") == "https://crates.io/api/v1/crates/serde"
         assert r.go_list_url("example.com/a/b") == "https://proxy.golang.org/example.com/a/b/@v/list"
-        assert r.maven_metadata_url("org.x", "y") is None
+        assert r.maven_metadata_url("org.x", "y") == "https://repo1.maven.org/maven2/org/x/y/maven-metadata.xml"
 
     def test_nothing_to_configure_in_the_sandbox(self) -> None:
         assert Registries().sandbox_files() == {}
@@ -135,3 +135,10 @@ class TestValidation:
     def test_plain_http_mirror_with_credentials_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="https"):
             _settings(pypi_url="http://pypi.corp", registry_username="u", registry_password="p")
+
+
+def test_maven_central_is_not_a_mirror() -> None:
+    r = Registries()
+    assert not r.uses_mirror
+    assert r.sandbox_files() == {}
+    assert r.request_kwargs("https://repo1.maven.org/maven2/a/b/maven-metadata.xml") == {}

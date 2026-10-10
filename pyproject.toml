@@ -81,6 +81,7 @@ dev = [
     # Coverage-guided fuzzing of the untrusted-input manifest/changelog parsers.
     # Linux-only wheels; guarded so non-Linux dev installs still resolve.
     "atheris>=2.3.0 ; sys_platform == 'linux'",
+    "ast-grep-py>=0.50",
 ]
 
 [tool.pytest.ini_options]

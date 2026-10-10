@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Code evidence and Review flags** — before the model runs, Migratowl parses the repository inside the sandbox
+  with ast-grep (`ast-grep-py`, added to the runtime image) and reports per package which files import it, whether
+  tests reach it, and where its breaking changes appear in the code: curated rules for Express 5, pydantic 2 and
+  NumPy 2, plus call patterns taken from the changelog excerpt. The evidence goes into the model's brief and the
+  report (`evidence`). Code then checks each "safe" verdict: a breaking pattern in the code, or a major upgrade with
+  no changelog evidence on tests that never reach the package, marks it **🔍 Review** with the reason (`reviews`).
+  The PR comment gains a Confidence column and the review reasons; the commit status names the count. On
+  `server-side-js`, express 4 → 5 is flagged at the `'/?search=:query'` route even when a model calls it safe.
+- **Bounded analysis cost** — the analysis agent and each package-analyzer subagent stop after a number of model
+  calls, and older tool outputs are replaced with a placeholder once the context passes
+  `MIGRATOWL_CONTEXT_TRIM_TOKENS` (default 40000). The caps are sized to each scan: the agent gets 6 calls plus 3
+  per package left to analyse, a subagent run 6 plus 1 per 5 files importing the most-used package.
+  `MIGRATOWL_MAX_MODEL_CALLS` (default 60) and `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS` (default 20) are the
+  ceilings, and apply as-is when the packages are not known up front (the chat UI). A run that hits the cap
+  keeps the verdicts it already has and reports the remaining packages as skipped instead of failing the job;
+  the report records the budget (`model_call_budget`, `call_limit_reached`) and the PR comment says why packages
+  were skipped. A free model had spent 326K tokens on 3 packages before.
+
 ### Fixed
+
+- **Files uploaded to agent-sandbox sandboxes landed in the wrong place** — the agent-sandbox runtime writes every
+  upload to `/app/<file name>`, so the registry-mirror configs (`pip.conf`, `.npmrc`, Go, Cargo, Maven) never took
+  effect in agent-sandbox mode, while the upload reported success. Uploads now go one file at a time and are moved
+  to their real path, and a missing file is reported as an error.
+
+- **Per-major release notes and GitHub pages** — a README "Latest Release" link was fetched as the changelog, so
+  GitHub's HTML page became the excerpt (ejs: "7.0.1" twice, nothing for 4.x–6.x). Links to GitHub releases pages
+  now go to the Releases API, GitHub web pages are never parsed, release bodies that only restate the version
+  ("Version 7.0.1") count as empty, per-major notes files (`RELEASE_NOTES_v5.md` and similar) are read for each
+  major in the bump range, and chunks that repeat a version merge into one.
+- **Documentation-site changelogs came with their navigation** — HTML changelog pages were converted whole, so menus,
+  sidebars and footers (with stray version numbers) went into the excerpt. Only the page's main element (`<main>`,
+  `<article>` or `role="main"`) is converted now (psutil, pydantic, Flask, Django docs).
+- **Java packages: versions, speed and changelogs** — Maven Central is read from its `maven-metadata.xml` (every
+  version, fast) instead of the search API, which often timed out and returned at most 100 versions. Maven
+  qualifiers now compare: `-jre` / `-android` stay within their flavour, `.Final` / `.GA` are releases,
+  `-M1` / `.Beta1` / `.CR2` are pre-releases (guava and Hibernate were never reported before). Packages whose
+  registry names no repository (all of Maven) get one from deps.dev, with Apache's gitbox mapped to its GitHub
+  mirror; skipped when a private mirror is configured so private names never leave.
 
 - **Changelog files on branches other than `main` / `master` were never found** — the lookup guessed those two branch
   names, so repos with `develop`, `trunk` or `13.x` as default branch (Laravel) got no changelog file. It now reads

@@ -157,3 +157,124 @@ class TestCitationFallback:
         report = assemble_report(ScanWebhookPayload(repo_url="r"), self._prepared({"express": "other"}),
                                  [verdict], duration=0, tokens=TokenUsage())
         assert report.reports[0].changelog_citation == "## 5.0.0 removed x"
+
+
+class TestBudgetCappedRuns:
+    """MO-65.2: a run ended by the model-call cap keeps finished verdicts and fails nothing."""
+
+    LIMIT = "Model call limits exceeded: run limit (30/30)"
+
+    def test_capped_run_without_verdicts_returns_none(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from migratowl.api.helpers import extract_verdicts
+
+        assert extract_verdicts({"messages": [HumanMessage("brief"), AIMessage(self.LIMIT)]}) == []
+
+    def test_capped_run_keeps_subagent_verdicts(self) -> None:
+        import json
+
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import extract_verdicts
+
+        verdict = {"dependency_name": "express", "is_breaking": True, "error_summary": "routes",
+                   "changelog_citation": "5.0.0 ...", "suggested_human_fix": "use req.query", "confidence": 0.8}
+        state = {"messages": [
+            HumanMessage("brief"),
+            ToolMessage(content=json.dumps(verdict), tool_call_id="t1", name="task"),
+            ToolMessage(content="not json", tool_call_id="t2", name="fetch_changelog_tool"),
+            AIMessage(self.LIMIT),
+        ]}
+
+        reports = extract_verdicts(state)
+
+        assert [(r.dependency_name, r.is_breaking) for r in reports] == [("express", True)]
+
+    def test_call_limit_reached_only_for_the_agent_itself(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import call_limit_reached
+
+        assert call_limit_reached({"messages": [HumanMessage("brief"), AIMessage(self.LIMIT)]})
+        # A subagent hitting its own cap reaches the agent as a tool result; the agent itself went on.
+        sub = ToolMessage(content=self.LIMIT, tool_call_id="t1", name="task")
+        assert not call_limit_reached({"messages": [HumanMessage("brief"), sub, AIMessage("{}")]})
+        assert not call_limit_reached({})
+
+    def test_an_uncapped_run_without_a_report_still_fails(self) -> None:
+        import pytest
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from migratowl.api.helpers import ReportExtractionError, extract_verdicts
+
+        with pytest.raises(ReportExtractionError):
+            extract_verdicts({"messages": [HumanMessage("brief"), AIMessage("I am done.")]})
+
+
+class TestReviewFlags:
+    """MO-65.4: code, not the model, flags a 'safe' verdict that the evidence does not support."""
+
+    @staticmethod
+    def _prepared(evidence: dict, excerpts: dict | None = None, latest: str = "5.2.1"):
+        from migratowl.models.schemas import OutdatedDependency, ScanResult
+        from migratowl.pipeline import PreparedScan
+
+        dep = OutdatedDependency(name="express", current_version="4.21.2", latest_version=latest,
+                                 ecosystem="nodejs", manifest_path="package.json")
+        return PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], evidence=evidence, changelog_excerpts=excerpts or {},
+        )
+
+    @staticmethod
+    def _verdict(is_breaking: bool = False, citation: str = ""):
+        from migratowl.models.schemas import AnalysisReport
+
+        return AnalysisReport(dependency_name="express", is_breaking=is_breaking, error_summary="",
+                              changelog_citation=citation, suggested_human_fix="", confidence=0.9)
+
+    @staticmethod
+    def _assemble(prepared, verdicts):
+        from migratowl.api.helpers import TokenUsage, assemble_report
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        return assemble_report(ScanWebhookPayload(repo_url="https://x/y"), prepared, verdicts,
+                               duration=1.0, tokens=TokenUsage())
+
+    @staticmethod
+    def _evidence(tests_reach, hits=()):
+        from migratowl.models.schemas import EvidenceHit, PackageEvidence
+
+        return PackageEvidence(importing_files=["app.js"], importing_count=1, tests_reach=tests_reach,
+                               hits=[EvidenceHit(**h) for h in hits])
+
+    HIT = {"rule": "express5-route-path-syntax", "note": "Express 5 no longer accepts ? in route paths",
+           "file": "app.js", "line": 4, "text": "app.get('/?search=:query', h)"}
+
+    def test_a_breaking_pattern_in_the_code_overrides_safe(self) -> None:
+        report = self._assemble(self._prepared({"express": self._evidence(True, [self.HIT])}), [self._verdict()])
+
+        reason = report.reviews["express"]
+        assert "Express 5 no longer accepts ? in route paths" in reason and "app.js:4" in reason
+        assert report.evidence["express"].hits[0].file == "app.js"
+
+    def test_major_bump_resting_on_tests_that_never_reach_it(self) -> None:
+        report = self._assemble(self._prepared({"express": self._evidence(False)}), [self._verdict()])
+
+        assert "no test reaches" in report.reviews["express"]
+
+    def test_changelog_evidence_or_reaching_tests_keep_safe(self) -> None:
+        with_citation = self._assemble(self._prepared({"express": self._evidence(False)}),
+                                       [self._verdict(citation="5.0.0: nothing relevant")])
+        reached = self._assemble(self._prepared({"express": self._evidence(True)}), [self._verdict()])
+        minor = self._assemble(self._prepared({"express": self._evidence(False)}, latest="4.22.0"), [self._verdict()])
+
+        assert with_citation.reviews == {} and reached.reviews == {} and minor.reviews == {}
+
+    def test_breaking_verdicts_and_missing_evidence_are_not_flagged(self) -> None:
+        breaking = self._assemble(self._prepared({"express": self._evidence(False, [self.HIT])}),
+                                  [self._verdict(is_breaking=True)])
+        unknown = self._assemble(self._prepared({}), [self._verdict()])
+
+        assert breaking.reviews == {} and unknown.reviews == {}

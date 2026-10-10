@@ -228,6 +228,15 @@ flowchart TB
 
 The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (default `0.7`).
 
+**Code evidence (static analysis, before the model runs):** Migratowl parses `source/` inside the sandbox with [ast-grep](https://ast-grep.github.io/) (the code is parsed, never run) and reports for each package under analysis:
+
+- which files import it, and whether any test reaches it (directly, or through local imports for Python and JavaScript/TypeScript; by package for Go);
+- where its breaking changes appear in the code: curated rules for well-known majors (Express 5, pydantic 2, NumPy 2) plus call patterns taken from the changelog excerpt (`res.json(status, obj)` → any `x.json(a, b)` call).
+
+The evidence goes into the model's brief, and code (not the model) checks every "safe" verdict against it. A package is marked **🔍 Review** in the PR comment when a breaking pattern was found in the code, or when a major upgrade was judged safe with no changelog evidence on tests that never reach it. Review does not fail the commit status; breaking verdicts do.
+
+**Choosing a model:** Claude (the default `claude-sonnet-5-5`) gives the most accurate verdicts. Free or small models are fine for smoke tests, but they miss behaviour changes that only the changelog and the code reveal. The evidence and Review flags limit the damage, and `MIGRATOWL_MAX_MODEL_CALLS` limits the cost.
+
 **Sandbox workspace layout:**
 
 ```text
@@ -235,6 +244,7 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 ├── source/          # Immutable clone — never executed
 ├── main/            # All deps bumped, executed in Phase 2
 ├── <package-name>/  # Per-package isolation (created on demand by subagent)
+├── .migratowl-evidence/ # The ast-grep scanner and its request
 └── .venvs/<folder>/ # One Python venv per working folder (Python projects only)
 ```
 
@@ -544,6 +554,9 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
+| `MIGRATOWL_MAX_MODEL_CALLS` | `60` | Ceiling on the model calls the analysis agent may make in one scan; the run then ends gracefully. Each scan sizes its cap below this: 6 calls plus 3 per package left to analyse. Packages left without a verdict are reported as skipped, never as safe. `0` = no limit |
+| `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS` | `20` | Ceiling on each package-analyzer subagent run. Sized per scan: 6 calls plus 1 per 5 files importing the most-used package (the ceiling when that is unknown). `0` = no limit |
+| `MIGRATOWL_CONTEXT_TRIM_TOKENS` | `40000` | Once the agent's context passes this many tokens, older tool outputs are replaced with a placeholder (the last 3 are kept). `0` = never trim |
 
 ### Jobs and Crash Recovery
 

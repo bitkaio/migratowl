@@ -37,6 +37,7 @@ async def fetch_changelog(
     repository_url: str | None,
     dep_name: str,
     current_version: str | None = None,
+    latest_version: str | None = None,
 ) -> tuple[str, list[str]]:
     """Fetch changelog text, trying changelog_url first, then GitHub raw fallback.
 
@@ -48,7 +49,7 @@ async def fetch_changelog(
     """
     # A "changelog" link that is only the repository page (e.g. github.com/o/r#history)
     # renders as HTML noise; use it as the repository and look for the real file.
-    repo_page = forge_repo_url(changelog_url)
+    repo_page = forge_repo_url(changelog_url) or _github_releases_repo(changelog_url)
     if repo_page:
         repository_url = repository_url or repo_page
         changelog_url = None
@@ -65,7 +66,8 @@ async def fetch_changelog(
     # Step 2: extract changelog link from README.
     if repository_url:
         readme_link = await _fetch_changelog_link_from_readme(repository_url)
-        if readme_link and readme_link != changelog_url:
+        # A link to the GitHub releases page ("Latest Release") is served by the Releases API below.
+        if readme_link and readme_link != changelog_url and not _github_releases_repo(readme_link):
             try:
                 return await _fetch_from_url(readme_link), []
             except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
@@ -75,16 +77,18 @@ async def fetch_changelog(
         settings = get_settings()
         # With a token: API is cheap (5 000 req/hr) → try it before slow file probing.
         # Without token: preserve quota (60 req/hr) → file probing first, API last.
-        ordered = (
-            [_fetch_from_github_releases, _fetch_from_github]
-            if settings.github_token
-            else [_fetch_from_github, _fetch_from_github_releases]
-        )
+        repo = repository_url
+
+        async def from_releases() -> str:
+            return await _fetch_from_github_releases(repo, current_version)
+
+        async def from_files() -> str:
+            return await _fetch_from_github(repo, current_version, latest_version)
+
+        ordered = [from_releases, from_files] if settings.github_token else [from_files, from_releases]
         for strategy in ordered:
             try:
-                if strategy is _fetch_from_github_releases:
-                    return await strategy(repository_url, current_version), []
-                return await strategy(repository_url), []
+                return await strategy(), []
             except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
                 logger.debug("strategy %s failed for %s: %s", strategy.__name__, dep_name, exc)
 
@@ -98,11 +102,19 @@ async def _fetch_from_url(url: str) -> str:
     for parseable version headers.  Raises ValueError if no version headers are
     found after stripping (triggers the GitHub raw-file fallback).
     """
+    blob = _GITHUB_BLOB_RE.match(url)
+    if blob:
+        url = f"https://raw.githubusercontent.com/{blob.group(1)}/{blob.group(2)}/{blob.group(3)}/{blob.group(4)}"
     client = get_http_client()
     response = await client.get(url)
     response.raise_for_status()
     text = response.text
-    if text.lstrip().startswith(("<", "<!DOCTYPE", "<!doctype")):
+    is_html = text.lstrip().startswith(("<", "<!DOCTYPE", "<!doctype"))
+    if is_html and _GITHUB_WEB_HOST.match(url):
+        # GitHub's own pages (releases, repository views) are site chrome, not changelogs.
+        raise ValueError(f"GitHub web page, not a changelog: {url}")
+    if is_html:
+        text = _main_content(text)
         converter = _html2text.HTML2Text()
         converter.ignore_links = True
         converter.ignore_images = True
@@ -112,6 +124,34 @@ async def _fetch_from_url(url: str) -> str:
             raise ValueError(f"HTML response with no parseable version headers: {url}")
         return stripped
     return text
+
+
+_MAIN_START = (
+    re.compile(r"<main\b[^>]*>", re.IGNORECASE),
+    re.compile(r"<article\b[^>]*>", re.IGNORECASE),
+    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
+)
+
+
+def _main_content(html: str) -> str:
+    """The inner HTML of the page's main element (``<main>``, ``<article>``, ``role="main"``), else the page.
+
+    Documentation sites wrap the changelog in navigation, sidebars and footers that would otherwise be
+    converted along with it (and carry stray version numbers of their own).
+    """
+    for start_re in _MAIN_START:
+        start = start_re.search(html)
+        if not start:
+            continue
+        tag = start.groupdict().get("tag") or start.group(0)[1:].split()[0].rstrip(">").lower()
+        depth, pos = 1, start.end()
+        tags = re.compile(rf"<(/?){re.escape(tag)}\b[^>]*>", re.IGNORECASE)
+        for m in tags.finditer(html, pos):
+            depth += -1 if m.group(1) else 1
+            if depth == 0:
+                return html[start.end() : m.start()]
+        return html[start.end() :]
+    return html
 
 
 # Regex to find a GitHub blob URL embedded in stub/redirect files.
@@ -138,11 +178,20 @@ _STUB_MAX_CHARS = 2000
 _BARE_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
 
 _README_CANDIDATES = [
-    ("README.md", "main"),
-    ("README.md", "master"),
-    ("README.rst", "main"),
-    ("README.rst", "master"),
+    ("README.md", "HEAD"),
+    ("README.rst", "HEAD"),
 ]
+
+_GITHUB_WEB_HOST = re.compile(r"^https?://(?:www\.)?github\.com/", re.IGNORECASE)
+_GITHUB_RELEASES_PAGE = re.compile(
+    r"^https?://(?:www\.)?github\.com/([^/#?\s]+)/([^/#?\s]+)/releases(?:[/?#].*)?$", re.IGNORECASE
+)
+
+
+def _github_releases_repo(url: str | None) -> str | None:
+    """``https://github.com/o/r`` when ``url`` is that repository's releases page (or one release), else None."""
+    m = _GITHUB_RELEASES_PAGE.match((url or "").strip())
+    return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 _GITHUB_OWNER_REPO_RE = re.compile(r"github\.com[/:]([^/]+)/([^/#]+?)(?:\.git)?(?:[#/]|$)")
 
@@ -276,7 +325,62 @@ async def _try_urls_concurrently(
     return result
 
 
-async def _fetch_from_github(repository_url: str) -> str:
+# Per-major release-notes files (ejs: RELEASE_NOTES_v5.md); {n} is the major version.
+_PER_MAJOR_FILENAMES: list[str] = [
+    "RELEASE_NOTES_v{n}.md",
+    "RELEASE-NOTES-v{n}.md",
+    "RELEASE_NOTES_{n}.md",
+    "release-notes/v{n}.md",
+    "docs/release-notes/v{n}.md",
+    "UPGRADING_v{n}.md",
+    "MIGRATION_v{n}.md",
+]
+_MAX_PER_MAJOR_PROBES = 6  # majors probed at most, newest first
+
+
+def _major(version: str | None) -> int | None:
+    m = re.search(r"\d+", _bound_version(version or ""))
+    return int(m.group(0)) if m else None
+
+
+async def _fetch_per_major_notes(
+    client: httpx.AsyncClient, owner: str, repo: str, current_version: str, latest_version: str
+) -> str | None:
+    """Release-notes files named after a major in (current, latest], as one changelog text."""
+    cur, new = _major(current_version), _major(latest_version)
+    if cur is None or new is None or new <= cur:
+        return None
+    majors = list(range(new, cur, -1))[:_MAX_PER_MAJOR_PROBES]
+    sem = asyncio.Semaphore(10)
+
+    async def probe(major: int, template: str) -> tuple[int, str] | None:
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{template.format(n=major)}"
+        async with sem:
+            try:
+                r = await client.get(url)
+            except (httpx.HTTPStatusError, httpx.RequestError):
+                return None
+        return (major, r.text) if r.status_code == 200 and r.text.strip() else None
+
+    found = await asyncio.gather(*(probe(m, t) for m in majors for t in _PER_MAJOR_FILENAMES))
+    by_major: dict[int, str] = {}
+    for hit in found:
+        if hit and hit[0] not in by_major:
+            by_major[hit[0]] = hit[1]
+    if not by_major:
+        return None
+    sections = []
+    for major in sorted(by_major, reverse=True):
+        text = by_major[major]
+        title = next((line for line in text.splitlines() if line.strip()), "")
+        named = re.search(rf"\b({major}\.\d+(?:\.\d+)?)\b", title)
+        sections.append(f"## {named.group(1) if named else f'{major}.0.0'}\n{text.strip()}")
+    return "\n\n".join(sections)
+
+
+async def _fetch_from_github(
+    repository_url: str, current_version: str | None = None, latest_version: str | None = None
+) -> str:
     """Try common changelog filenames on raw.githubusercontent.com.
 
     Strategy:
@@ -331,6 +435,11 @@ async def _fetch_from_github(repository_url: str) -> str:
             except (httpx.HTTPStatusError, httpx.RequestError):
                 continue
 
+    if current_version and latest_version:
+        per_major = await _fetch_per_major_notes(client, owner, repo, current_version, latest_version)
+        if per_major:
+            return per_major
+
     raise FileNotFoundError(f"No changelog found for {owner}/{repo}")
 
 
@@ -346,6 +455,12 @@ def _parse_next_link(link_header: str | None) -> str | None:
 
 
 _TAG_VERSION = re.compile(r"\d+(?:\.\d+)+")
+# A release body that only restates its version ("Version 7.0.1", "v7.0.1", "Release 5.0.2").
+_VERSION_ONLY_BODY = re.compile(r"^\s*(?:release|version)?\s*v?\d+(?:\.\d+)*\S*\s*$", re.IGNORECASE)
+
+
+def _has_notes(body: str | None) -> bool:
+    return bool(body and body.strip() and not _VERSION_ONLY_BODY.match(body))
 
 
 def _tag_reached(tag: str, current: Version | tuple[int, ...] | None) -> bool:
@@ -392,7 +507,10 @@ async def _fetch_from_github_releases(repository_url: str, current_version: str 
             break
         url = _parse_next_link(response.headers.get("Link"))
 
-    usable = [r for r in all_releases if not r.get("draft") and not r.get("prerelease")]
+    usable = [
+        r for r in all_releases
+        if not r.get("draft") and not r.get("prerelease") and _has_notes(r.get("body"))
+    ]
     if not usable:
         raise FileNotFoundError(f"No releases found for {owner}/{repo}")
 
@@ -656,6 +774,27 @@ def _rank_lines(text: str) -> str:
 
 # Matches the start of a markdown heading or a blank line (section boundary).
 _SECTION_BOUNDARY = re.compile(r"(?:^|\n)(?=#{1,6}\s|\s*$)")
+
+
+def merge_duplicate_versions(chunks: list[dict]) -> list[dict]:
+    """One chunk per version, in first-seen order; non-empty bodies joined, longest first.
+
+    A release page can name a version twice (title and tag), and a changelog can repeat a header.
+    """
+    order: list[str] = []
+    bodies: dict[str, list[str]] = {}
+    for chunk in chunks:
+        version = str(chunk.get("version", ""))
+        if version not in bodies:
+            order.append(version)
+            bodies[version] = []
+        content = str(chunk.get("content", ""))
+        if content.strip():
+            bodies[version].append(content.strip())
+    return [
+        {"version": v, "content": "\n\n".join(sorted(bodies[v], key=len, reverse=True))}
+        for v in order
+    ]
 
 
 def extract_breaking_changes(chunks: list[dict]) -> list[dict]:

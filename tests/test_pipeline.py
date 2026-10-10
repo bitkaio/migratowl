@@ -4,7 +4,9 @@
 
 import json
 
-from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanWebhookPayload
+from types import SimpleNamespace
+
+from migratowl.models.schemas import Ecosystem, OutdatedDependency, ScanResult, ScanWebhookPayload
 
 
 def _dep(name: str, current: str, latest: str, eco: Ecosystem = Ecosystem.PYTHON) -> OutdatedDependency:
@@ -495,3 +497,77 @@ async def test_update_receives_go_module_path() -> None:
     sent = _json.loads(update.await_args.args[0]["packages_json"])
     assert sent[0]["module_path"] == "github.com/x/y/v2"
     assert "version_key" in sent[0]
+
+
+class TestCollectEvidence:
+    """MO-65.3: the scanner gets curated and changelog rules per pending package; its result lands in evidence."""
+
+    @staticmethod
+    def _dep(name: str, current: str, latest: str, eco: str = "nodejs"):
+        from migratowl.models.schemas import OutdatedDependency
+
+        return OutdatedDependency(name=name, current_version=current, latest_version=latest,
+                                  ecosystem=eco, manifest_path="package.json")
+
+    async def test_request_and_result(self) -> None:
+        from migratowl.pipeline import collect_evidence
+
+        seen: dict = {}
+
+        async def gather(args: dict, config=None) -> str:
+            seen.update(json.loads(args["request_json"]))
+            return json.dumps({"available": True, "packages": {"express": {
+                "importing_files": ["app.js"], "importing_count": 1, "test_files": [], "tests_reach": False,
+                "hits": [{"rule": "express5-res-json-status", "note": "res.json(status, body) was removed",
+                          "file": "app.js", "line": 4, "text": "res.json(200, {})"}]}}})
+
+        tools = SimpleNamespace(gather_evidence=SimpleNamespace(ainvoke=gather))
+        evidence = await collect_evidence(
+            tools, [self._dep("express", "4.21.2", "5.2.1")], {"express": "`res.jsonp(status, obj)` removed"}, {}
+        )
+
+        rules = seen["packages"][0]["rules"]
+        assert seen["packages"][0]["name"] == "express" and seen["packages"][0]["ecosystem"] == "nodejs"
+        assert any(r["id"] == "express5-route-path-syntax" for r in rules)
+        assert any(r["id"].startswith("changelog:") for r in rules)
+        assert evidence["express"].tests_reach is False
+        assert evidence["express"].hits[0].line == 4
+
+    async def test_an_unavailable_scanner_gives_no_evidence(self) -> None:
+        from migratowl.pipeline import collect_evidence
+
+        async def gather(args: dict, config=None) -> str:
+            return json.dumps({"available": False, "reason": "ast-grep-py is not installed"})
+
+        tools = SimpleNamespace(gather_evidence=SimpleNamespace(ainvoke=gather))
+        assert await collect_evidence(tools, [self._dep("express", "4.0.0", "5.0.0")], {}, {}) == {}
+
+    async def test_a_tool_error_gives_no_evidence(self) -> None:
+        from migratowl.pipeline import collect_evidence
+
+        async def gather(args: dict, config=None) -> str:
+            raise RuntimeError("sandbox gone")
+
+        tools = SimpleNamespace(gather_evidence=SimpleNamespace(ainvoke=gather))
+        assert await collect_evidence(tools, [self._dep("express", "4.0.0", "5.0.0")], {}, {}) == {}
+
+    def test_brief_shows_the_evidence(self) -> None:
+        from migratowl.models.schemas import EvidenceHit, PackageEvidence, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan, build_analysis_brief
+
+        dep = self._dep("express", "4.21.2", "5.2.1")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[],
+            evidence={"express": PackageEvidence(
+                importing_files=["app.js"], importing_count=1, tests_reach=False,
+                hits=[EvidenceHit(rule="express5-res-json-status", note="res.json(status, body) was removed",
+                                  file="app.js", line=4, text="res.json(200, {})")])},
+        )
+
+        brief = build_analysis_brief(ScanWebhookPayload(repo_url="https://x/y"), prepared, [dep])
+
+        assert "Code evidence" in brief
+        assert "imported in 1 file(s) (app.js)" in brief
+        assert "tests reach it: no" in brief
+        assert "app.js:4" in brief and "res.json(status, body) was removed" in brief

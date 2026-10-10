@@ -38,6 +38,9 @@ _PYPI = "https://pypi.org"
 _NPM = "https://registry.npmjs.org"
 _CRATES = "https://crates.io"
 _GO_PROXY = "https://proxy.golang.org"
+# Maven Central's repository. Its maven-metadata.xml lists every version and answers fast; the
+# search API (search.maven.org) times out often and returns at most 100 versions.
+_MAVEN = "https://repo1.maven.org/maven2"
 
 
 def _xml_text(value: str) -> str:
@@ -63,7 +66,7 @@ class Registries:
     npm: str = _NPM
     crates: str = _CRATES
     go_proxy: str = _GO_PROXY
-    maven: str | None = None  # repository URL; None = Maven Central through its search API
+    maven: str = _MAVEN
     cargo_index: str | None = None
     username: str | None = None
     password: str | None = None
@@ -76,7 +79,7 @@ class Registries:
             npm=settings.npm_registry_url or _NPM,
             crates=settings.crates_api_url or _CRATES,
             go_proxy=settings.go_proxy_url or _GO_PROXY,
-            maven=settings.maven_url,
+            maven=settings.maven_url or _MAVEN,
             cargo_index=settings.cargo_registry_url,
             username=settings.registry_username,
             password=settings.registry_password,
@@ -97,18 +100,20 @@ class Registries:
     def go_list_url(self, encoded_module: str) -> str:
         return _join(self.go_proxy, f"{encoded_module}/@v/list")
 
-    def maven_metadata_url(self, group_id: str, artifact_id: str) -> str | None:
-        if self.maven is None:
-            return None
+    def maven_metadata_url(self, group_id: str, artifact_id: str) -> str:
         return _join(self.maven, f"{group_id.replace('.', '/')}/{artifact_id}/maven-metadata.xml")
 
+    @property
+    def uses_mirror(self) -> bool:
+        """True when any registry is not the public one (private package names may be involved)."""
+        return bool(self._mirror_hosts())
+
     def _mirror_hosts(self) -> set[str]:
-        configured = {
-            self.pypi: _PYPI, self.npm: _NPM, self.crates: _CRATES, self.go_proxy: _GO_PROXY,
-        }
-        urls = [url for url, default in configured.items() if url != default]
-        if self.maven:
-            urls.append(self.maven)
+        configured = [
+            (self.pypi, _PYPI), (self.npm, _NPM), (self.crates, _CRATES),
+            (self.go_proxy, _GO_PROXY), (self.maven, _MAVEN),
+        ]
+        urls = [url for url, default in configured if url != default]
         return {urlsplit(url).hostname or "" for url in urls}
 
     def request_kwargs(self, url: str) -> dict[str, Any]:
@@ -139,7 +144,7 @@ class Registries:
                 '[source.crates-io]\nreplace-with = "migratowl-mirror"\n\n'
                 f'[source.migratowl-mirror]\nregistry = "{self.cargo_index}"\n'
             )
-        if self.maven:
+        if self.maven != _MAVEN:
             files[f"{SANDBOX_HOME}/.m2/settings.xml"] = self._maven_settings()
         return files
 
@@ -166,5 +171,5 @@ class Registries:
             '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">\n'
             f"{server}"
             "  <mirrors>\n    <mirror>\n      <id>migratowl</id>\n      <mirrorOf>*</mirrorOf>\n"
-            f"      <url>{_xml_text(self.maven or '')}</url>\n    </mirror>\n  </mirrors>\n</settings>\n"
+            f"      <url>{_xml_text(self.maven)}</url>\n    </mirror>\n  </mirrors>\n</settings>\n"
         )

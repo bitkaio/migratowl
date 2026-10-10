@@ -158,11 +158,7 @@ class TestQueryMavenCentral:
         )
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "response": {
-                "docs": [{"v": "3.2.0"}, {"v": "3.3.0"}]
-            }
-        }
+        mock_response.text = "<metadata><versioning><versions><version>3.2.0</version><version>3.3.0</version></versions></versioning></metadata>"
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.return_value = mock_response
 
@@ -172,10 +168,9 @@ class TestQueryMavenCentral:
         assert result.latest_version == "3.3.0"
         assert result.current_version == "3.2.0"
         assert result.ecosystem == Ecosystem.JAVA
-        assert client.get.call_args[0][0].startswith("https://search.maven.org/")
-        assert "org.springframework.boot" in client.get.call_args[0][0]
-        assert "spring-boot-starter" in client.get.call_args[0][0]
-        assert "core=gav" in client.get.call_args[0][0]
+        assert client.get.call_args[0][0] == (
+            "https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-starter/maven-metadata.xml"
+        )
 
     async def test_returns_none_when_up_to_date(self) -> None:
         dep = Dependency(
@@ -186,9 +181,7 @@ class TestQueryMavenCentral:
         )
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "response": {"docs": [{"v": "2.0.0"}]}
-        }
+        mock_response.text = "<metadata><versioning><versions><version>2.0.0</version></versions></versioning></metadata>"
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.return_value = mock_response
 
@@ -205,7 +198,7 @@ class TestQueryMavenCentral:
         )
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {"response": {"docs": []}}
+        mock_response.text = "<metadata><versioning><versions></versions></versioning></metadata>"
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.return_value = mock_response
 
