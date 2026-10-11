@@ -117,6 +117,16 @@ class TestExtractChangelogLink:
         assert _extract_changelog_link("") is None
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(request):
+    """Changelog fetches only reach public addresses; tests resolve every host to a public IP."""
+    if "real_dns_guard" in request.keywords:
+        yield
+        return
+    with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])):
+        yield
+
+
 class TestFetchChangelog:
     async def test_direct_url_success(self) -> None:
         mock_client = AsyncMock()
@@ -973,3 +983,77 @@ class TestDocumentationIndexes:
 
         assert text.index("Engine.execute() is removed") < text.index("Final release.")
         assert base + "changelog_14.html" not in requested and base + "changelog_21.html" not in requested
+
+
+
+@pytest.mark.real_dns_guard
+class TestPublicAddressesOnly:
+    """Changelog URLs come from package metadata and pages: never fetch internal addresses."""
+
+    @staticmethod
+    def _client(responses: dict[str, httpx.Response]):
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            return responses[url]
+
+        client = AsyncMock()
+        client.get.side_effect = get
+        return client, requested
+
+    async def test_internal_and_non_http_urls_are_refused(self) -> None:
+        from migratowl.changelog import _get_public
+
+        client, requested = self._client({})
+        resolve = AsyncMock(side_effect=lambda host: {"intranet.corp": ["10.0.0.5"]}.get(host, ["93.184.216.34"]))
+        with patch("migratowl.changelog._resolve", resolve):
+            for url in ("http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8000/jobs",
+                        "https://intranet.corp/changelog", "file:///etc/passwd", "http://[::1]/x"):
+                with pytest.raises(ValueError):
+                    await _get_public(client, url)
+
+        assert requested == []
+
+    async def test_a_redirect_to_an_internal_address_is_refused(self) -> None:
+        from migratowl.changelog import _get_public
+
+        start = "https://docs.example.org/changelog"
+        redirect = httpx.Response(302, headers={"location": "http://127.0.0.1/admin"}, request=httpx.Request("GET", start))
+        client, requested = self._client({start: redirect})
+        with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])), pytest.raises(ValueError):
+            await _get_public(client, start)
+
+        assert requested == [start]
+
+    async def test_public_redirects_are_followed(self) -> None:
+        from migratowl.changelog import _get_public
+
+        start, final = "https://docs.example.org/a", "https://docs.example.org/b"
+        client, _ = self._client({
+            start: httpx.Response(301, headers={"location": "/b"}, request=httpx.Request("GET", start)),
+            final: httpx.Response(200, text="## 1.0.0\nok", request=httpx.Request("GET", final)),
+        })
+        with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])):
+            response = await _get_public(client, start)
+
+        assert response.text == "## 1.0.0\nok"
+
+    async def test_index_links_to_internal_hosts_are_skipped(self) -> None:
+        from migratowl.changelog import _fetch_version_pages
+
+        index_url = "https://docs.example.org/changelog/index.html"
+        index = ('<a href="http://10.0.0.1/changelog_20.html">2.0 Changelog</a>'
+                 '<a href="migration_20.html">What’s New in 2.0</a>')
+        page = "https://docs.example.org/changelog/migration_20.html"
+        client, requested = self._client({
+            index_url: httpx.Response(200, text=index, request=httpx.Request("GET", index_url)),
+            page: httpx.Response(200, text="<p>Engine.execute() removed</p>", request=httpx.Request("GET", page)),
+        })
+        resolve = AsyncMock(return_value=["93.184.216.34"])
+        with patch("migratowl.changelog.get_http_client", return_value=client), \
+             patch("migratowl.changelog._resolve", resolve):
+            text = await _fetch_version_pages(index_url, "1.4.54", "2.1.4")
+
+        assert "Engine.execute() removed" in text
+        assert "http://10.0.0.1/changelog_20.html" not in requested

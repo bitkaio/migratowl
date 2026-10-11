@@ -87,6 +87,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["real_dns_guard: run the changelog public-address guard against its real resolver hook"]
 
 [tool.setuptools.packages.find]
 include = ["migratowl*"]

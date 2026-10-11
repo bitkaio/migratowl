@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import ipaddress
 import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Collection
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import html2text as _html2text
 import httpx
@@ -117,6 +118,47 @@ async def fetch_changelog(
     return "", [f"Could not fetch changelog for {dep_name}"]
 
 
+_MAX_REDIRECTS = 5
+
+
+async def _resolve(host: str) -> list[str]:
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    return [str(info[4][0]) for info in infos]
+
+
+async def _assert_public(url: str) -> None:
+    """Changelog URLs come from package metadata and from pages: only public http(s) addresses.
+
+    Every address the host resolves to must be global, so a link or redirect cannot reach the cluster,
+    the host or a cloud metadata service. (A host that re-resolves between this check and the request
+    is not covered.)
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").rstrip(".").lower()
+    if parts.scheme not in ("http", "https") or not host:
+        raise ValueError(f"not an http(s) URL: {url}")
+    try:
+        addresses = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        try:
+            addresses = await _resolve(host)
+        except OSError as exc:
+            raise ValueError(f"cannot resolve {host}") from exc
+    if not addresses or not all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addresses):
+        raise ValueError(f"not a public address: {url}")
+
+
+async def _get_public(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET ``url``, following redirects by hand so each hop is checked with ``_assert_public``."""
+    for _ in range(_MAX_REDIRECTS + 1):
+        await _assert_public(url)
+        response = await client.get(url, follow_redirects=False)
+        if not response.is_redirect:
+            return response
+        url = urljoin(url, response.headers["location"])
+    raise ValueError(f"too many redirects: {url}")
+
+
 async def _fetch_from_url(url: str) -> str:
     """Fetch raw text from a URL with redirect following.
 
@@ -128,7 +170,7 @@ async def _fetch_from_url(url: str) -> str:
     if blob:
         url = f"https://raw.githubusercontent.com/{blob.group(1)}/{blob.group(2)}/{blob.group(3)}/{blob.group(4)}"
     client = get_http_client()
-    response = await client.get(url)
+    response = await _get_public(client, url)
     response.raise_for_status()
     text = response.text
     is_html = text.lstrip().startswith(("<", "<!DOCTYPE", "<!doctype"))
@@ -173,7 +215,7 @@ async def _fetch_version_pages(index_url: str, current_version: str, latest_vers
         raise FileNotFoundError("versions unknown")
     low, high = _major_line(cur), _major_line(new)
     client = get_http_client()
-    response = await client.get(index_url, follow_redirects=True)
+    response = await _get_public(client, index_url)
     response.raise_for_status()
 
     pages: dict[tuple[int, ...], dict[str, tuple[str, str]]] = {}
@@ -198,9 +240,9 @@ async def _fetch_version_pages(index_url: str, current_version: str, latest_vers
 
     async def page(kind: str, version: str, url: str) -> str:
         try:
-            page_response = await client.get(url, follow_redirects=True)
+            page_response = await _get_public(client, url)
             page_response.raise_for_status()
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
             logger.debug("version page %s failed: %s", url, exc)
             return ""
         text = _html_to_text(page_response.text)
