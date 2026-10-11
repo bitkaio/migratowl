@@ -56,3 +56,13 @@ def test_files_are_uploaded_one_at_a_time() -> None:
 
     assert upload_to_sandbox(backend, [("/a/conf", b"1"), ("/b/conf", b"2")]) == []
     assert [len(c.args[0]) for c in backend.upload_files.call_args_list] == [1, 1]
+
+
+def test_an_upload_that_returns_nothing_is_checked_on_disk() -> None:
+    """MO-92: langchain-kubernetes 0.4.1's fallback returned None; rely on the test -f check, never crash."""
+    backend = _backend({"/home/user/a.txt"})
+    backend.upload_files.side_effect = lambda files: None
+
+    assert upload_to_sandbox(backend, [("/home/user/a.txt", b"x"), ("/home/user/b.txt", b"y")]) == [
+        "/home/user/b.txt: not found after upload"
+    ]
