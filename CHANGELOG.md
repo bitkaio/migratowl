@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Raw-mode sandbox activity was not recorded in the cluster** — langchain-kubernetes patches a last-activity
+  annotation on each sandbox pod for idle-TTL cleanup, but the raw-mode Role (chart, `k8s/rbac-raw.yaml`) did not
+  allow `patch` on pods, so every update was forbidden. The Role now allows it.
+
 ## [0.8.1] - 2026-10-11
 
 ### Security

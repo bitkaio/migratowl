@@ -14,7 +14,7 @@ rules:
   # Raw mode: manage ephemeral sandbox Pods directly
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "watch", "delete"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
 
   # Exec and log access for executing commands in sandbox Pods
   - apiGroups: [""]

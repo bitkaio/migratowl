@@ -132,3 +132,12 @@ def test_exec_allows_the_websocket_get(manifest: str) -> None:
     exec_verbs = {v for r in rules if "pods/exec" in r["resources"] for v in r["verbs"]}
 
     assert {"create", "get"} <= exec_verbs
+
+
+
+def test_raw_role_can_annotate_sandbox_pods() -> None:
+    """langchain-kubernetes patches a last-activity annotation on each raw-mode sandbox pod."""
+    docs = [d for d in yaml.safe_load_all((K8S_DIR / "rbac-raw.yaml").read_text()) if d]
+    rules = [r for d in docs if d["kind"] == "Role" for r in d["rules"]]
+
+    assert "patch" in {v for r in rules if "pods" in r["resources"] for v in r["verbs"]}
