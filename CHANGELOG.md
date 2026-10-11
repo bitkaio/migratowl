@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Changelog fetches reach only public addresses** — changelog URLs come from package metadata, READMEs and links
+  on documentation indexes. They now must be http(s) on a host that resolves only to global addresses, and each
+  redirect hop is checked. A package could otherwise point the server at the cluster, the host or a cloud metadata
+  service and have the response land in the brief and the PR comment.
+
 ### Added
 
 - **SQLAlchemy 2 evidence rules** — `Engine.execute()` and `MetaData(bind=...)`, both removed in 2.0.
