@@ -277,3 +277,15 @@ async def test_reviews_are_named_in_the_status_without_failing_it() -> None:
     status_args = mock_gh.set_commit_status.call_args.args
     assert status_args[3] == "success"
     assert "1 to review" in status_args[4]
+
+
+async def test_skipped_packages_are_named_instead_of_all_safe() -> None:
+    """MO-90: a run that skipped packages never reports 'all upgrades safe'."""
+    report = _report(breaking=0)
+    report.skipped = ["click", "pydantic"]
+    mock_gh = AsyncMock()
+    with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+        await notify_pr_done(_gh_payload(), report, _settings())
+
+    description = mock_gh.set_commit_status.call_args.args[4]
+    assert "2 skipped" in description and "all upgrades safe" not in description

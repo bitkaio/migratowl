@@ -428,3 +428,23 @@ class TestReviewInComment:
         comment = format_pr_comment(self._report({}))
 
         assert "🔍 Review" not in comment and "all safe" in comment
+
+
+
+class TestFooterCountsSkips:
+    """MO-90: 'all safe' only when every candidate was analysed and none breaks or needs review."""
+
+    def test_all_skipped_is_not_all_safe(self) -> None:
+        comment = format_pr_comment(_make_report([], skipped=["click", "pydantic", "sqlalchemy", "requests"]))
+
+        assert "4 skipped" in comment and "all safe" not in comment
+
+    def test_partial_skips_are_counted(self) -> None:
+        comment = format_pr_comment(_make_report([_make_analysis("a", is_breaking=False)], skipped=["b"]))
+
+        assert "1 skipped" in comment and "all safe" not in comment
+
+    def test_everything_analysed_and_safe_is_all_safe(self) -> None:
+        comment = format_pr_comment(_make_report([_make_analysis("a", is_breaking=False)]))
+
+        assert "all safe" in comment and "skipped" not in comment.split("_Scan duration")[1]

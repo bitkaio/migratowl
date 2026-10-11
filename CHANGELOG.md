@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the tests passed, and got no changelog excerpt or evidence rules.
 - **An uncited safe verdict passed after failed tests** — a major bump judged safe without a changelog citation of
   its own, when its ecosystem's upgraded tests failed, is now marked 🔍 Review.
+- **"All safe" with skipped packages** — the PR comment footer and the commit status said "all safe" / "all
+  upgrades safe" when packages were skipped (call budget, `max_deps`), even when none was analysed. Both now count
+  the skipped packages; "all safe" means every candidate was analysed.
 - **Low-confidence safe verdicts looked safe** — a safe verdict below `MIGRATOWL_CONFIDENCE_THRESHOLD` is now marked
   🔍 Review; the threshold used to steer only the prompt.
 - **Documentation indexes became release notes** — SQLAlchemy's changelog link is an index page; its navigation
