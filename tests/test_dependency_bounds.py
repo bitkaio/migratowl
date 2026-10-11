@@ -28,7 +28,7 @@ def test_langchain_kubernetes_comes_from_the_maintained_fork() -> None:
     # The fork carries fixes Migratowl depends on (raw-mode NetworkPolicy cleanup,
     # agent-sandbox reconnect in tunnel mode); PyPI's 0.4.0 has neither.
     req = _requirement("langchain-kubernetes")
-    assert req.url == "git+https://github.com/barnakun/langchain-kubernetes@py-0.4.1#subdirectory=python"
+    assert req.url == "git+https://github.com/barnakun/langchain-kubernetes@py-0.4.2#subdirectory=python"
     assert "agent-sandbox" in req.extras
 
 
