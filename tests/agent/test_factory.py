@@ -667,6 +667,15 @@ class TestModelCallBudget:
         assert model_call_budget(settings, ["a"], self._evidence(a=0)).subagent == 6
         assert model_call_budget(settings, ["a", "b"], self._evidence(a=3, b=11)).subagent == 9
 
+    def test_packages_in_a_failed_ecosystem_get_more_agent_calls(self) -> None:
+        """MO-84: subagent work on a failed validation costs the agent about 5 calls per package."""
+        from migratowl.agent.factory import model_call_budget
+
+        budget = model_call_budget(Settings(_env_file=None), ["a", "b", "c"], self._evidence(a=0, b=0, c=0),
+                                   failing=["a", "b"])
+
+        assert budget.main == 6 + 5 + 5 + 3
+
     def test_settings_are_ceilings(self) -> None:
         from migratowl.agent.factory import model_call_budget
 

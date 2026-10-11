@@ -21,7 +21,9 @@ import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import BaseMessage
+from langchain_core.outputs import LLMResult
 from pydantic import BaseModel
 
 from migratowl.models.schemas import (
@@ -112,6 +114,28 @@ def extract_verdicts(agent_result: dict) -> list[AnalysisReport]:
 _CALL_LIMIT_PREFIX = "Model call limits exceeded"
 
 
+class ScanUsageCallbackHandler(UsageMetadataCallbackHandler):
+    """Token usage per model plus the number of model calls (the analysis agent's and its subagents')."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model_calls = 0
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        super().on_llm_end(response, **kwargs)
+        with self._lock:
+            self.model_calls += 1
+
+
+def agent_model_calls(agent_result: dict) -> int:
+    """Model calls the analysis agent itself made: its AI messages, minus the call-limit notice."""
+    return sum(
+        1
+        for m in agent_result.get("messages", [])
+        if getattr(m, "type", "") == "ai" and not _message_text(m).startswith(_CALL_LIMIT_PREFIX)
+    )
+
+
 def call_limit_reached(agent_result: dict) -> bool:
     """Whether the model-call cap ended the analysis agent's run (a subagent's cap reaches it as a tool result)."""
     return any(
@@ -134,32 +158,54 @@ def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
 
 
 def _reviews(
-    prepared: PreparedScan, verdicts: dict[str, AnalysisReport], evidence: dict[str, PackageEvidence]
+    prepared: PreparedScan,
+    verdicts: dict[str, AnalysisReport],
+    evidence: dict[str, PackageEvidence],
+    *,
+    cited: set[str],
+    confidence_threshold: float = 0.0,
 ) -> dict[str, str]:
-    """'Safe' verdicts the static evidence contradicts, with the reason (package → reason).
+    """'Safe' verdicts the evidence does not support, with the reason (package → reason).
 
-    Flagged when a breaking-change rule matched the code, or when a major bump was judged safe with
-    no changelog evidence on tests that never reach the package. Missing evidence flags nothing.
+    Flagged when a breaking-change rule matched the code; when a major bump was judged safe with
+    no changelog evidence on tests that never reach the package; when a major bump was judged
+    safe without a citation (``cited``: the model's own, not the excerpt filled in for it) although
+    the tests failed after its ecosystem's upgrade; or when the verdict's confidence is below
+    ``confidence_threshold``.
     """
     from migratowl.pipeline import dependency_is_major_bump  # pipeline imports this module's callers
 
     deps = {dep.name: dep for dep in prepared.candidates}
+    failed = {v.ecosystem: v.failed_step or "validation" for v in prepared.validations if not v.passed}
     reviews: dict[str, str] = {}
     for name, verdict in verdicts.items():
-        ev = evidence.get(name)
-        if verdict.is_breaking or ev is None:
+        if verdict.is_breaking:
             continue
-        if ev.hits:
+        ev = evidence.get(name)
+        dep = deps.get(name)
+        major = dep is not None and dependency_is_major_bump(dep) is True
+        if ev is not None and ev.hits:
             first = ev.hits[0]
             more = f" (+{len(ev.hits) - 1} more)" if len(ev.hits) > 1 else ""
             reviews[name] = f"{first.note} — found at {first.file}:{first.line}{more}"
             continue
-        dep = deps.get(name)
         has_changelog = bool(prepared.changelog_excerpts.get(name) or verdict.changelog_citation.strip())
-        if dep is not None and dependency_is_major_bump(dep) and ev.tests_reach is False and not has_changelog:
+        if major and ev is not None and ev.tests_reach is False and not has_changelog:
             reviews[name] = (
                 "Major upgrade judged safe on passing tests, but no test reaches this package and no "
                 "changelog evidence was found"
+            )
+            continue
+        step = failed.get(str(dep.ecosystem)) if dep is not None else None
+        if dep is not None and major and step and name not in cited:
+            reviews[name] = (
+                f"Major upgrade judged safe without a changelog citation, although the tests failed "
+                f"after the {dep.ecosystem} upgrade ({step} step)"
+            )
+            continue
+        if verdict.confidence < confidence_threshold:
+            reviews[name] = (
+                f"Judged safe with low confidence ({verdict.confidence:.2f}, threshold {confidence_threshold:.2f})"
             )
     return reviews
 
@@ -171,6 +217,7 @@ def assemble_report(
     *,
     duration: float,
     tokens: TokenUsage,
+    confidence_threshold: float = 0.0,
 ) -> ScanAnalysisReport:
     """Build the final report in code; the LLM only contributes per-package verdicts.
 
@@ -182,6 +229,7 @@ def assemble_report(
     for dep in prepared.candidates:
         canonical.setdefault(dep.name.lower(), dep.name)
     by_name: dict[str, AnalysisReport] = {}
+    cited: set[str] = set()  # verdicts whose citation came from the model, not from the excerpt
     for report in reports:
         name = canonical.get(report.dependency_name.lower())
         if name is None:
@@ -189,6 +237,10 @@ def assemble_report(
         current = by_name.get(name)
         # Several verdicts for one name (same package in several manifests): breaking wins.
         if current is None or (report.is_breaking and not current.is_breaking):
+            if report.changelog_citation.strip():
+                cited.add(name)
+            else:
+                cited.discard(name)
             update: dict[str, str] = {"dependency_name": name}
             # Back an empty citation with the changelog excerpt fetched in code.
             excerpt = prepared.changelog_excerpts.get(name)
@@ -197,7 +249,7 @@ def assemble_report(
             by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
     evidence = {name: ev for name, ev in prepared.evidence.items() if name in by_name}
-    reviews = _reviews(prepared, by_name, evidence)
+    reviews = _reviews(prepared, by_name, evidence, cited=cited, confidence_threshold=confidence_threshold)
     missing = [name for name in names if name not in by_name]
     if missing:
         logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))

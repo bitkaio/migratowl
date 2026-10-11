@@ -117,6 +117,16 @@ class TestExtractChangelogLink:
         assert _extract_changelog_link("") is None
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(request):
+    """Changelog fetches only reach public addresses; tests resolve every host to a public IP."""
+    if "real_dns_guard" in request.keywords:
+        yield
+        return
+    with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])):
+        yield
+
+
 class TestFetchChangelog:
     async def test_direct_url_success(self) -> None:
         mock_client = AsyncMock()
@@ -793,3 +803,257 @@ class TestHtmlMainContent:
         text = await self._fetch("<html><body><h2>2.0.0</h2><p>Removed x</p></body></html>")
 
         assert "Removed x" in text
+
+
+class TestOrderForBreaking:
+    """MO-78: the first release of each crossed major comes first, oldest major first."""
+
+    @staticmethod
+    def _versions(chunks: list[dict]) -> list[str]:
+        return [c["version"] for c in chunks]
+
+    @staticmethod
+    def _chunks(*versions: str) -> list[dict]:
+        return [{"version": v, "content": f"notes {v}"} for v in versions]
+
+    def test_short_major_heading_counts(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("2.14.0", "2.13.0", "v2.0"), "1.10.21", "2.14.0")
+
+        assert self._versions(ordered) == ["v2.0", "2.14.0", "2.13.0"]
+
+    def test_each_crossed_major_oldest_first(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("9.1.0", "9.0.0", "8.5.0", "8.0.0"), "7.6.0", "9.1.0")
+
+        assert self._versions(ordered) == ["8.0.0", "9.0.0", "9.1.0", "8.5.0"]
+
+    def test_major_without_x_0_0_uses_its_first_release(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("7.0.1", "6.0.1", "5.0.2", "5.0.1", "4.0.1"), "3.1.10", "7.0.1")
+
+        assert self._versions(ordered) == ["4.0.1", "5.0.1", "6.0.1", "7.0.1", "5.0.2"]
+
+    def test_zero_major_counts_minors_as_majors(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        ordered = order_for_breaking(self._chunks("0.10.3", "0.10.0", "0.9.2", "0.9.0"), "0.8.5", "0.10.3")
+
+        assert self._versions(ordered) == ["0.9.0", "0.10.0", "0.10.3", "0.9.2"]
+
+    def test_unparseable_versions_keep_their_order(self) -> None:
+        from migratowl.changelog import order_for_breaking
+
+        chunks = self._chunks("Unreleased", "5.1.0", "5.0.0")
+
+        assert self._versions(order_for_breaking(chunks, "4.2.0", "5.1.0")) == ["5.0.0", "Unreleased", "5.1.0"]
+        assert self._versions(order_for_breaking(chunks, "", "5.1.0")) == ["Unreleased", "5.1.0", "5.0.0"]
+
+
+class TestSourceCoverage:
+    """MO-79: a source that lacks the bump's notes must not stop the search for one that has them."""
+
+    @staticmethod
+    def _patches(url_text, github_text, releases_text=None):
+        def strategy(value):
+            return AsyncMock(side_effect=FileNotFoundError) if value is None else AsyncMock(return_value=value)
+
+        return (
+            patch("migratowl.changelog._fetch_from_url", strategy(url_text)),
+            patch("migratowl.changelog._fetch_changelog_link_from_readme", AsyncMock(return_value=None)),
+            patch("migratowl.changelog._fetch_from_github", strategy(github_text)),
+            patch("migratowl.changelog._fetch_from_github_releases", strategy(releases_text)),
+            patch("migratowl.changelog.get_settings"),
+            patch("migratowl.changelog._fetch_version_pages", AsyncMock(side_effect=FileNotFoundError)),
+        )
+
+    async def _fetch(self, patches, current, latest):
+        url_p, readme_p, github_p, releases_p, settings_p, pages_p = patches
+        with url_p, readme_p, github_p as github, releases_p, settings_p as settings, pages_p:
+            settings.return_value.github_token = ""
+            text, _ = await fetch_changelog("https://docs.rs/rand", "https://github.com/rust-random/rand",
+                                            "rand", current, latest)
+        return text, github
+
+    async def test_no_notes_in_range_tries_the_repository(self) -> None:
+        docs = "## 0.11.0\nfuture\n## 0.7.0\nold"
+        repo = "## 0.10.0\nrng() replaces thread_rng()\n## 0.9.0\nrenamed gen_range"
+
+        text, github = await self._fetch(self._patches(docs, repo), "0.8.5", "0.10.3")
+
+        assert text == repo
+        github.assert_awaited_once()
+
+    async def test_missing_major_boundary_tries_the_repository(self) -> None:
+        recent_only = "## 2.14.0\nminor\n## 2.11.0\nminor"
+        full = "## 2.14.0\nminor\n## v2.0\nBaseSettings moved to pydantic-settings"
+
+        text, _ = await self._fetch(self._patches(recent_only, full), "1.10.21", "2.14.0")
+
+        assert "BaseSettings" in text
+
+    async def test_best_partial_source_is_kept_when_nothing_covers(self) -> None:
+        recent_only = "## 2.14.0\nminor\n## 2.11.0\nminor"
+        unrelated = "## 0.1.0\nold"
+
+        text, _ = await self._fetch(self._patches(recent_only, unrelated), "1.10.21", "2.14.0")
+
+        assert text == recent_only
+
+    async def test_unknown_versions_take_the_first_source(self) -> None:
+        text, github = await self._fetch(self._patches("## 0.11.0\nx", "## 0.9.0\ny"), None, None)
+
+        assert text == "## 0.11.0\nx"
+        github.assert_not_awaited()
+
+
+class TestCrossedMajorNotesAreKept:
+    """MO-78: a major's first release keeps its notes even without breaking-change keywords."""
+
+    def test_always_keep_versions_keep_their_notes(self) -> None:
+        from migratowl.changelog import extract_breaking_changes
+
+        chunks = [{"version": "0.9.0", "content": "- `thread_rng()` renamed to `rng()`"},
+                  {"version": "0.9.1", "content": "- doc fixes"}]
+
+        result = extract_breaking_changes(chunks, always_keep={"0.9.0"})
+
+        assert result[0]["content"] == "- `thread_rng()` renamed to `rng()`"
+        assert result[1]["content"] == "(no breaking changes noted)"
+
+
+class TestDocumentationIndexes:
+    """MO-86 / MO-43: navigation is not notes, and a docs index leads to the crossed majors' pages."""
+
+    NAV = "## 2.1\n" + "\n".join(f"  * {t}" for t in (
+        "Overview", "SQLAlchemy Unified Tutorial", "SQLAlchemy ORM", "SQLAlchemy Core", "Dialects",
+        "Frequently Asked Questions", "Error Messages", "2.1 Changelog", "2.0 Changelog", "1.4 Changelog"))
+
+    def test_role_main_inside_a_page_wide_main_wins(self) -> None:
+        from migratowl.changelog import _main_content
+
+        html = ('<main id="docs"><div id="nav">Overview Tutorial</div>'
+                '<div id="docs-body" role="main"><h2>2.0.0</h2><p>Engine.execute removed</p></div></main>')
+
+        body = _main_content(html)
+
+        assert "Engine.execute removed" in body and "Overview" not in body
+
+    def test_link_lists_are_not_notes(self) -> None:
+        from migratowl.changelog import _is_link_list
+
+        assert _is_link_list(self.NAV.split("\n", 1)[1])
+        assert not _is_link_list("* Removed `Engine.execute()`; use `Connection.execute()` inside a transaction.\n"
+                                 "* The `future` flag is now the default behaviour of every engine and session.")
+        assert not _is_link_list("* doc fixes")  # too short to tell
+
+    def test_navigation_does_not_cover_a_bump(self) -> None:
+        from migratowl.changelog import _coverage
+
+        assert _coverage(self.NAV, "1.4.54", "2.1.4") == 0
+
+    async def test_index_links_to_the_crossed_majors_pages(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_version_pages
+
+        base = "https://docs.example.org/changelog/"
+        index = ('<div role="main"><a href="changelog_21.html">2.1 Changelog</a>'
+                 '<a href="changelog_20.html">2.0 Changelog</a><a href="changelog_14.html">1.4 Changelog</a>'
+                 '<a href="migration_20.html">What’s New in SQLAlchemy 2.0?</a></div>')
+        pages = {
+            base + "index.html": index,
+            base + "migration_20.html": '<div role="main"><p>Engine.execute() is removed in 2.0.</p></div>',
+            base + "changelog_20.html": '<div role="main"><h2>2.0.0</h2><p>Final release.</p></div>',
+        }
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            req = httpx.Request("GET", url)
+            return httpx.Response(200, text=pages[url], request=req) if url in pages else httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_version_pages(base + "index.html", "1.4.54", "2.1.4")
+
+        assert text.index("Engine.execute() is removed") < text.index("Final release.")
+        assert base + "changelog_14.html" not in requested and base + "changelog_21.html" not in requested
+
+
+
+@pytest.mark.real_dns_guard
+class TestPublicAddressesOnly:
+    """Changelog URLs come from package metadata and pages: never fetch internal addresses."""
+
+    @staticmethod
+    def _client(responses: dict[str, httpx.Response]):
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            return responses[url]
+
+        client = AsyncMock()
+        client.get.side_effect = get
+        return client, requested
+
+    async def test_internal_and_non_http_urls_are_refused(self) -> None:
+        from migratowl.changelog import _get_public
+
+        client, requested = self._client({})
+        resolve = AsyncMock(side_effect=lambda host: {"intranet.corp": ["10.0.0.5"]}.get(host, ["93.184.216.34"]))
+        with patch("migratowl.changelog._resolve", resolve):
+            for url in ("http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8000/jobs",
+                        "https://intranet.corp/changelog", "file:///etc/passwd", "http://[::1]/x"):
+                with pytest.raises(ValueError):
+                    await _get_public(client, url)
+
+        assert requested == []
+
+    async def test_a_redirect_to_an_internal_address_is_refused(self) -> None:
+        from migratowl.changelog import _get_public
+
+        start = "https://docs.example.org/changelog"
+        redirect = httpx.Response(302, headers={"location": "http://127.0.0.1/admin"}, request=httpx.Request("GET", start))
+        client, requested = self._client({start: redirect})
+        with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])), pytest.raises(ValueError):
+            await _get_public(client, start)
+
+        assert requested == [start]
+
+    async def test_public_redirects_are_followed(self) -> None:
+        from migratowl.changelog import _get_public
+
+        start, final = "https://docs.example.org/a", "https://docs.example.org/b"
+        client, _ = self._client({
+            start: httpx.Response(301, headers={"location": "/b"}, request=httpx.Request("GET", start)),
+            final: httpx.Response(200, text="## 1.0.0\nok", request=httpx.Request("GET", final)),
+        })
+        with patch("migratowl.changelog._resolve", AsyncMock(return_value=["93.184.216.34"])):
+            response = await _get_public(client, start)
+
+        assert response.text == "## 1.0.0\nok"
+
+    async def test_index_links_to_internal_hosts_are_skipped(self) -> None:
+        from migratowl.changelog import _fetch_version_pages
+
+        index_url = "https://docs.example.org/changelog/index.html"
+        index = ('<a href="http://10.0.0.1/changelog_20.html">2.0 Changelog</a>'
+                 '<a href="migration_20.html">What’s New in 2.0</a>')
+        page = "https://docs.example.org/changelog/migration_20.html"
+        client, requested = self._client({
+            index_url: httpx.Response(200, text=index, request=httpx.Request("GET", index_url)),
+            page: httpx.Response(200, text="<p>Engine.execute() removed</p>", request=httpx.Request("GET", page)),
+        })
+        resolve = AsyncMock(return_value=["93.184.216.34"])
+        with patch("migratowl.changelog.get_http_client", return_value=client), \
+             patch("migratowl.changelog._resolve", resolve):
+            text = await _fetch_version_pages(index_url, "1.4.54", "2.1.4")
+
+        assert "Engine.execute() removed" in text
+        assert "http://10.0.0.1/changelog_20.html" not in requested

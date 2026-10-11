@@ -135,3 +135,61 @@ class TestMajorReleaseSurvivesTruncation:
         chunks = json.loads(raw)["chunks"]
         assert chunks[0]["version"] == "5.0.0"
         assert "app.del() removed" in chunks[0]["content"]
+
+
+class TestCrossedMajorFirst:
+    async def test_short_major_heading_comes_first(self) -> None:
+        """MO-78: pydantic writes `v2.0`; its notes must lead, not 2.14.0's."""
+        changelog = "\n".join([
+            "## 2.14.0\nBREAKING CHANGE: " + "minor noise " * 400,
+            "## v2.0\nBREAKING CHANGE: BaseSettings moved to pydantic-settings",
+        ])
+        input_json = json.dumps({"name": "pydantic", "current_version": "1.10.21", "latest_version": "2.14.0",
+                                 "changelog_url": "https://example.com/CHANGELOG.md"})
+        with (
+            patch("migratowl.agent.tools.changelog.fetch_changelog", new_callable=AsyncMock,
+                  return_value=(changelog, [])),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 3_000
+            raw = await create_fetch_changelog_tool().ainvoke({"outdated_dep_json": input_json})
+
+        chunks = json.loads(raw)["chunks"]
+        assert chunks[0]["version"] in ("v2.0", "2.0")
+        assert "BaseSettings" in chunks[0]["content"]
+
+
+class TestCrossedMajorNotesSurviveExtraction:
+    async def test_first_release_without_keywords_keeps_its_notes(self) -> None:
+        """MO-78: rand 0.9.0's notes name no 'breaking change' but are the 0.9 break."""
+        changelog = "## 0.9.1\n- doc fixes\n## 0.9.0\n- `thread_rng()` renamed to `rng()`\n"
+        input_json = json.dumps({"name": "rand", "current_version": "0.8.5", "latest_version": "0.9.1",
+                                 "changelog_url": "https://example.com/CHANGELOG.md"})
+        with (
+            patch("migratowl.agent.tools.changelog.fetch_changelog", new_callable=AsyncMock,
+                  return_value=(changelog, [])),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 3_000
+            raw = await create_fetch_changelog_tool().ainvoke({"outdated_dep_json": input_json})
+
+        chunks = json.loads(raw)["chunks"]
+        assert chunks[0] == {"version": "0.9.0", "content": "- `thread_rng()` renamed to `rng()`"}
+
+
+class TestNavigationIsDropped:
+    async def test_link_list_chunks_never_reach_the_model(self) -> None:
+        """MO-86: a docs index chunk (navigation) is not a release's notes."""
+        nav = "\n".join(f"  * {t}" for t in ("Overview", "Tutorial", "ORM", "Core", "Dialects", "FAQ"))
+        changelog = f"## 2.1\n{nav}\n## 2.0.0\n- BREAKING CHANGE: Engine.execute() removed\n"
+        input_json = json.dumps({"name": "sqlalchemy", "current_version": "1.4.54", "latest_version": "2.1.4",
+                                 "changelog_url": "https://example.com/CHANGELOG.md"})
+        with (
+            patch("migratowl.agent.tools.changelog.fetch_changelog", new_callable=AsyncMock,
+                  return_value=(changelog, [])),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 3_000
+            raw = await create_fetch_changelog_tool().ainvoke({"outdated_dep_json": input_json})
+
+        assert [c["version"] for c in json.loads(raw)["chunks"]] == ["2.0.0"]

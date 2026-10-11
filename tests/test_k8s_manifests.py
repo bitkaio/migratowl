@@ -121,3 +121,14 @@ class TestSandboxTemplateHardening:
         dockerfile = (K8S_DIR / "runtime" / "Dockerfile").read_text()
         users = re.findall(r"^USER (\S+)$", dockerfile, re.M)
         assert users[-1] == str(pod_spec["securityContext"]["runAsUser"])
+
+
+
+@pytest.mark.parametrize("manifest", ["rbac.yaml", "rbac-raw.yaml"])
+def test_exec_allows_the_websocket_get(manifest: str) -> None:
+    """The Kubernetes Python client opens exec streams with GET; create alone is forbidden in-cluster."""
+    docs = [d for d in yaml.safe_load_all((K8S_DIR / manifest).read_text()) if d]
+    rules = [r for d in docs if d["kind"] == "Role" for r in d["rules"]]
+    exec_verbs = {v for r in rules if "pods/exec" in r["resources"] for v in r["verbs"]}
+
+    assert {"create", "get"} <= exec_verbs

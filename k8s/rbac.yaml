@@ -19,7 +19,7 @@ rules:
   # Exec into sandbox pods and stream logs
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]

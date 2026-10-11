@@ -17,9 +17,13 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
+import ipaddress
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable, Collection
+from urllib.parse import urljoin, urlsplit
 
 import html2text as _html2text
 import httpx
@@ -57,27 +61,32 @@ async def fetch_changelog(
     if not changelog_url and not repository_url:
         return "", [f"No changelog URL or repository URL provided for {dep_name}"]
 
+    sources: list[Callable[[], Awaitable[str]]] = []
     if changelog_url:
-        try:
-            return await _fetch_from_url(changelog_url), []
-        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-            logger.debug("changelog_url fetch failed for %s: %s", dep_name, exc)
+        url = changelog_url
 
-    # Step 2: extract changelog link from README.
-    if repository_url:
-        readme_link = await _fetch_changelog_link_from_readme(repository_url)
-        # A link to the GitHub releases page ("Latest Release") is served by the Releases API below.
-        if readme_link and readme_link != changelog_url and not _github_releases_repo(readme_link):
-            try:
-                return await _fetch_from_url(readme_link), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-                logger.debug("readme changelog link fetch failed for %s: %s", dep_name, exc)
+        async def from_changelog_url() -> str:
+            return await _fetch_from_url(url)
+
+        sources.append(from_changelog_url)
+
+        async def from_version_pages() -> str:
+            if not current_version or not latest_version:
+                raise FileNotFoundError("versions unknown")
+            return await _fetch_version_pages(url, current_version, latest_version)
+
+        sources.append(from_version_pages)
 
     if repository_url:
         settings = get_settings()
-        # With a token: API is cheap (5 000 req/hr) → try it before slow file probing.
-        # Without token: preserve quota (60 req/hr) → file probing first, API last.
         repo = repository_url
+
+        async def from_readme_link() -> str:
+            link = await _fetch_changelog_link_from_readme(repo)
+            # A link to the GitHub releases page ("Latest Release") is served by the Releases API below.
+            if not link or link == changelog_url or _github_releases_repo(link):
+                raise FileNotFoundError("no changelog link in the README")
+            return await _fetch_from_url(link)
 
         async def from_releases() -> str:
             return await _fetch_from_github_releases(repo, current_version)
@@ -85,14 +94,69 @@ async def fetch_changelog(
         async def from_files() -> str:
             return await _fetch_from_github(repo, current_version, latest_version)
 
-        ordered = [from_releases, from_files] if settings.github_token else [from_files, from_releases]
-        for strategy in ordered:
-            try:
-                return await strategy(), []
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
-                logger.debug("strategy %s failed for %s: %s", strategy.__name__, dep_name, exc)
+        # With a token: API is cheap (5 000 req/hr) → try it before slow file probing.
+        # Without token: preserve quota (60 req/hr) → file probing first, API last.
+        sources.append(from_readme_link)
+        sources += [from_releases, from_files] if settings.github_token else [from_files, from_releases]
 
+    # A source can parse yet lack this bump's notes (docs.rs, an index page, a page or a paged
+    # Releases list that stops before the new major): keep looking, and keep the best text seen.
+    best_text, best_score = "", -1
+    for source in sources:
+        try:
+            text = await source()
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError, FileNotFoundError) as exc:
+            logger.debug("changelog source %s failed for %s: %s", source.__name__, dep_name, exc)
+            continue
+        score = _coverage(text, current_version, latest_version)
+        if score > best_score:
+            best_text, best_score = text, score
+        if score == _FULL_COVERAGE:
+            break
+    if best_score >= 0:
+        return best_text, []
     return "", [f"Could not fetch changelog for {dep_name}"]
+
+
+_MAX_REDIRECTS = 5
+
+
+async def _resolve(host: str) -> list[str]:
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    return [str(info[4][0]) for info in infos]
+
+
+async def _assert_public(url: str) -> None:
+    """Changelog URLs come from package metadata and from pages: only public http(s) addresses.
+
+    Every address the host resolves to must be global, so a link or redirect cannot reach the cluster,
+    the host or a cloud metadata service. (A host that re-resolves between this check and the request
+    is not covered.)
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").rstrip(".").lower()
+    if parts.scheme not in ("http", "https") or not host:
+        raise ValueError(f"not an http(s) URL: {url}")
+    try:
+        addresses = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        try:
+            addresses = await _resolve(host)
+        except OSError as exc:
+            raise ValueError(f"cannot resolve {host}") from exc
+    if not addresses or not all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addresses):
+        raise ValueError(f"not a public address: {url}")
+
+
+async def _get_public(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET ``url``, following redirects by hand so each hop is checked with ``_assert_public``."""
+    for _ in range(_MAX_REDIRECTS + 1):
+        await _assert_public(url)
+        response = await client.get(url, follow_redirects=False)
+        if not response.is_redirect:
+            return response
+        url = urljoin(url, response.headers["location"])
+    raise ValueError(f"too many redirects: {url}")
 
 
 async def _fetch_from_url(url: str) -> str:
@@ -106,7 +170,7 @@ async def _fetch_from_url(url: str) -> str:
     if blob:
         url = f"https://raw.githubusercontent.com/{blob.group(1)}/{blob.group(2)}/{blob.group(3)}/{blob.group(4)}"
     client = get_http_client()
-    response = await client.get(url)
+    response = await _get_public(client, url)
     response.raise_for_status()
     text = response.text
     is_html = text.lstrip().startswith(("<", "<!DOCTYPE", "<!doctype"))
@@ -114,27 +178,93 @@ async def _fetch_from_url(url: str) -> str:
         # GitHub's own pages (releases, repository views) are site chrome, not changelogs.
         raise ValueError(f"GitHub web page, not a changelog: {url}")
     if is_html:
-        text = _main_content(text)
-        converter = _html2text.HTML2Text()
-        converter.ignore_links = True
-        converter.ignore_images = True
-        converter.body_width = 0
-        stripped = converter.handle(text)
+        stripped = _html_to_text(text)
         if not chunk_changelog_by_version(stripped):
             raise ValueError(f"HTML response with no parseable version headers: {url}")
         return stripped
     return text
 
 
+def _html_to_text(html: str) -> str:
+    """The page's main content as plain text (headings kept as ``#`` lines)."""
+    converter = _html2text.HTML2Text()
+    converter.ignore_links = True
+    converter.ignore_images = True
+    converter.body_width = 0
+    return converter.handle(_main_content(html))
+
+
+# Links on a documentation index to one release line's pages: "2.0 Changelog", "5.0 release notes",
+# "What's New in SQLAlchemy 2.0?".
+_ANCHOR = re.compile(r"<a\b[^>]*?\bhref\s*=\s*[\"']([^\"'#]+)[^\"']*[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_WHATS_NEW_LINK = re.compile(r"what[’'`]?s\s+new\b.*?\b(\d+\.\d+)\b", re.IGNORECASE)
+_VERSION_PAGE_LINK = re.compile(
+    r"^(?:[a-z][\w.-]*\s+)?(\d+\.\d+)(?:\.0)?\s+(?:changelog|release\s+notes)\b", re.IGNORECASE
+)
+_MAX_VERSION_LINES = 3
+
+
+async def _fetch_version_pages(index_url: str, current_version: str, latest_version: str) -> str:
+    """Follow a documentation index (Sphinx, Django) to the pages of the release lines the bump crosses.
+
+    Per crossed line (oldest first, at most three), its "What's New" page, then its changelog page; a
+    "What's New" page gets a ``## X.Y`` heading so its text is attributed to that release.
+    """
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new:
+        raise FileNotFoundError("versions unknown")
+    low, high = _major_line(cur), _major_line(new)
+    client = get_http_client()
+    response = await _get_public(client, index_url)
+    response.raise_for_status()
+
+    pages: dict[tuple[int, ...], dict[str, tuple[str, str]]] = {}
+    for href, inner in _ANCHOR.findall(response.text):
+        label = " ".join(_html.unescape(re.sub(r"<[^>]+>", " ", inner)).split())
+        for kind, pattern in (("new", _WHATS_NEW_LINK), ("log", _VERSION_PAGE_LINK)):
+            match = pattern.search(label)
+            if not match:
+                continue
+            numbers = _release_numbers(match.group(1))
+            line = _major_line(numbers)
+            if low < line <= high and not any(numbers[len(line):]):
+                pages.setdefault(line, {}).setdefault(kind, (match.group(1), urljoin(str(response.url), href)))
+    wanted = [
+        (kind, *pages[line][kind])
+        for line in sorted(pages)[:_MAX_VERSION_LINES]
+        for kind in ("new", "log")
+        if kind in pages[line]
+    ]
+    if not wanted:
+        raise FileNotFoundError(f"no release-line pages linked from {index_url}")
+
+    async def page(kind: str, version: str, url: str) -> str:
+        try:
+            page_response = await _get_public(client, url)
+            page_response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+            logger.debug("version page %s failed: %s", url, exc)
+            return ""
+        text = _html_to_text(page_response.text)
+        return f"## {version}\n{text}" if kind == "new" else text
+
+    texts = [t for t in await asyncio.gather(*(page(*w) for w in wanted)) if t.strip()]
+    if not texts:
+        raise FileNotFoundError(f"release-line pages of {index_url} could not be fetched")
+    return "\n\n".join(texts)
+
+
+# role="main" first: some sites (Sphinx themes such as SQLAlchemy's) wrap the whole page, navigation
+# included, in a <main> and mark the content inside it with role="main".
 _MAIN_START = (
+    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
     re.compile(r"<main\b[^>]*>", re.IGNORECASE),
     re.compile(r"<article\b[^>]*>", re.IGNORECASE),
-    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
 )
 
 
 def _main_content(html: str) -> str:
-    """The inner HTML of the page's main element (``<main>``, ``<article>``, ``role="main"``), else the page.
+    """The inner HTML of the page's main element (``role="main"``, ``<main>``, ``<article>``), else the page.
 
     Documentation sites wrap the changelog in navigation, sidebars and footers that would otherwise be
     converted along with it (and carry stray version numbers of their own).
@@ -797,13 +927,15 @@ def merge_duplicate_versions(chunks: list[dict]) -> list[dict]:
     ]
 
 
-def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
+def extract_breaking_changes(chunks: list[dict], always_keep: Collection[str] = ()) -> list[dict]:
     """Filter chunk content to only breaking-change-related sections.
 
     For each chunk:
     - If breaking change patterns are found, extract the matching
       line + subsequent lines until a section boundary.
-    - If no patterns match, replace content with a placeholder.
+    - If no patterns match, replace content with a placeholder, unless its version is in
+      ``always_keep`` (a crossed major's first release: its notes are the break even when
+      they never say "breaking").
     - Version keys are always preserved.
     """
     if not chunks:
@@ -815,7 +947,8 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
         matches = list(_BREAKING_CHANGE_PATTERNS.finditer(content))
 
         if not matches:
-            result.append({"version": chunk["version"], "content": "(no breaking changes noted)"})
+            kept = content.strip() if chunk["version"] in always_keep else "(no breaking changes noted)"
+            result.append({"version": chunk["version"], "content": kept})
             continue
 
         # Extract paragraphs around each match.
@@ -857,6 +990,83 @@ def extract_breaking_changes(chunks: list[dict]) -> list[dict]:
         })
 
     return result
+
+
+def _release_numbers(version: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", version or ""))
+
+
+def _major_line(numbers: tuple[int, ...]) -> tuple[int, ...]:
+    """The release line a version belongs to: its major, or for 0.x its minor too (0.9 → 0.10 is a break)."""
+    return numbers[:1] if numbers[0] > 0 else numbers[:2]
+
+
+def first_releases(chunks: list[dict], current_version: str, latest_version: str) -> list[dict]:
+    """The first release of each major crossed by (current, latest], oldest major first.
+
+    That is where a major's breaking changes are written: ``2.0``, ``v2.0`` or ``5.0.1`` when
+    there is no ``5.0.0``.
+    """
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new:
+        return []
+    low, high = _major_line(cur), _major_line(new)
+    firsts: dict[tuple[int, ...], tuple[tuple[int, ...], int]] = {}
+    for index, chunk in enumerate(chunks):
+        numbers = _release_numbers(str(chunk.get("version", "")))
+        if not numbers:
+            continue
+        line = _major_line(numbers)
+        if low < line <= high and (line not in firsts or numbers < firsts[line][0]):
+            firsts[line] = (numbers, index)
+    return [chunks[index] for _, (_, index) in sorted(firsts.items())]
+
+
+def order_for_breaking(chunks: list[dict], current_version: str, latest_version: str) -> list[dict]:
+    """``first_releases`` first, then every other chunk in its original order."""
+    heads = first_releases(chunks, current_version, latest_version)
+    return heads + [chunk for chunk in chunks if not any(chunk is head for head in heads)]
+
+
+_FULL_COVERAGE = 2
+_LIST_ITEM = re.compile(r"^(?:[*+-]|\d+\.)\s+(.*)$")
+
+
+def _is_link_list(content: str) -> bool:
+    """Navigation or an index of pages, not release notes: many short list items, none naming a change."""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if len(lines) < 6 or any(_CHANGE_WORDS.search(line) for line in lines):
+        return False
+    items = [m.group(1) for m in map(_LIST_ITEM.match, lines) if m]
+    short = [item for item in items if len(item.split()) <= 6 and not item.rstrip().endswith((".", ":", ";"))]
+    return len(short) >= 0.9 * len(lines)
+
+
+def drop_link_lists(chunks: list[dict]) -> list[dict]:
+    """Chunks that carry notes, without navigation or page indexes parsed as a release."""
+    return [chunk for chunk in chunks if not _is_link_list(str(chunk.get("content", "")))]
+
+
+def _coverage(text: str, current_version: str | None, latest_version: str | None) -> int:
+    """How well ``text`` covers the bump: 0 no notes in (current, latest], 1 notes but not the release
+    that starts the next major, 2 full. Without both versions any text counts as full."""
+    if not current_version or not latest_version:
+        return _FULL_COVERAGE
+    in_range = drop_link_lists(filter_chunks_by_version_range(
+        merge_duplicate_versions(chunk_changelog_by_version(text)), current_version, latest_version
+    ))
+    if not in_range:
+        return 0
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new or _major_line(cur) == _major_line(new):
+        return _FULL_COVERAGE
+    line = _major_line(cur)
+    next_line = line[:-1] + (line[-1] + 1,)
+    for chunk in first_releases(in_range, current_version, latest_version):
+        numbers = _release_numbers(str(chunk.get("version", "")))
+        if _major_line(numbers) == next_line and not any(numbers[len(next_line):]):
+            return _FULL_COVERAGE
+    return 1
 
 
 def truncate_chunks(chunks: list[dict], max_chars: int) -> tuple[list[dict], bool]:

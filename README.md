@@ -151,13 +151,13 @@ See [bitkaio/migratowl-action](https://github.com/bitkaio/migratowl-action) for 
 ```yaml
 stages: [test]
 include:
-  - component: gitlab.com/bitkaio/migratowl-gitlab-component/scan@v1
+  - component: gitlab.com/bitkaio/migratowl/migratowl-gitlab-component/scan@v1
     inputs:
       anthropic-api-key: $ANTHROPIC_API_KEY
       stage: test
 ```
 
-See [bitkaio/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl/migratowl-gitlab-component) for details.
+See [bitkaio/migratowl/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl/migratowl-gitlab-component) for details.
 
 ### Self-hosted (existing Kubernetes cluster)
 
@@ -554,7 +554,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
-| `MIGRATOWL_MAX_MODEL_CALLS` | `60` | Ceiling on the model calls the analysis agent may make in one scan; the run then ends gracefully. Each scan sizes its cap below this: 6 calls plus 3 per package left to analyse. Packages left without a verdict are reported as skipped, never as safe. `0` = no limit |
+| `MIGRATOWL_MAX_MODEL_CALLS` | `60` | Ceiling on the model calls the analysis agent may make in one scan; the run then ends gracefully. Each scan sizes its cap below this: 6 calls plus 3 per package left to analyse (5 when its ecosystem's upgraded tests failed). Packages left without a verdict are reported as skipped, never as safe. `0` = no limit |
 | `MIGRATOWL_MAX_SUBAGENT_MODEL_CALLS` | `20` | Ceiling on each package-analyzer subagent run. Sized per scan: 6 calls plus 1 per 5 files importing the most-used package (the ceiling when that is unknown). `0` = no limit |
 | `MIGRATOWL_CONTEXT_TRIM_TOKENS` | `40000` | Once the agent's context passes this many tokens, older tool outputs are replaced with a placeholder (the last 3 are kept). `0` = never trim |
 
@@ -653,7 +653,7 @@ To build the image yourself: `docker build -t migratowl-server .`
 
 ## Kubernetes Setup
 
-Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.1` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
+Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.2` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
 
 ```bash
 # Install controller + CRDs (one-time)

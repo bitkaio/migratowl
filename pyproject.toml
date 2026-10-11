@@ -1,6 +1,6 @@
 [project]
 name = "migratowl"
-version = "0.8.0"
+version = "0.8.1"
 description = "AI-powered dependency migration analyzer"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn>=0.30",
     # Maintained fork (MIT, originally bitkaio/langchain-kubernetes): carries the raw-mode
     # NetworkPolicy cleanup and the agent-sandbox reconnect fix that PyPI's 0.4.0 lacks.
-    "langchain-kubernetes[agent-sandbox] @ git+https://github.com/barnakun/langchain-kubernetes@py-0.4.1#subdirectory=python",
+    "langchain-kubernetes[agent-sandbox] @ git+https://github.com/barnakun/langchain-kubernetes@py-0.4.2#subdirectory=python",
     "langchain-anthropic",
     "langchain-openai",
     "pydantic>=2.0",
@@ -87,6 +87,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["real_dns_guard: run the changelog public-address guard against its real resolver hook"]
 
 [tool.setuptools.packages.find]
 include = ["migratowl*"]

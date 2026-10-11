@@ -278,3 +278,118 @@ class TestReviewFlags:
         unknown = self._assemble(self._prepared({}), [self._verdict()])
 
         assert breaking.reviews == {} and unknown.reviews == {}
+
+
+class TestReviewFlagsAfterFailedValidation:
+    """MO-83: a bare 'safe' on a major bump whose ecosystem's upgraded tests failed needs review."""
+
+    @staticmethod
+    def _prepared(passed: bool, latest: str = "2.1.4", evidence: dict | None = None):
+        from migratowl.models.schemas import OutdatedDependency, ScanResult
+        from migratowl.pipeline import EcosystemValidation, PreparedScan
+
+        dep = OutdatedDependency(name="sqlalchemy", current_version="1.4.54", latest_version=latest,
+                                 ecosystem="python", manifest_path="requirements.txt")
+        return PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[], evidence=evidence or {},
+            validations=[EcosystemValidation(ecosystem="python", passed=passed, failed_step=None if passed else "test")],
+        )
+
+    @staticmethod
+    def _verdict(citation: str = ""):
+        from migratowl.models.schemas import AnalysisReport
+
+        return AnalysisReport(dependency_name="sqlalchemy", is_breaking=False, error_summary="",
+                              changelog_citation=citation, suggested_human_fix="", confidence=0.9)
+
+    def test_uncited_safe_major_after_failed_tests_is_flagged(self) -> None:
+        report = TestReviewFlags._assemble(self._prepared(passed=False), [self._verdict()])
+
+        assert "tests failed" in report.reviews["sqlalchemy"]
+
+    def test_a_citation_filled_in_from_the_excerpt_does_not_count(self) -> None:
+        """The report backs an empty citation with the fetched excerpt; the model still cited nothing."""
+        prepared = self._prepared(passed=False)
+        prepared.changelog_excerpts = {"sqlalchemy": "2.0\nWhat's New in SQLAlchemy 2.0"}
+
+        report = TestReviewFlags._assemble(prepared, [self._verdict()])
+
+        assert "tests failed" in report.reviews["sqlalchemy"]
+        assert report.reports[0].changelog_citation.startswith("2.0")
+
+    def test_cited_minor_or_green_cases_are_not_flagged(self) -> None:
+        cited = TestReviewFlags._assemble(self._prepared(passed=False), [self._verdict("2.0.0: Engine.execute kept")])
+        green = TestReviewFlags._assemble(self._prepared(passed=True), [self._verdict()])
+        minor = TestReviewFlags._assemble(self._prepared(passed=False, latest="1.4.60"), [self._verdict()])
+
+        assert cited.reviews == {} and green.reviews == {} and minor.reviews == {}
+
+class TestLowConfidenceReview:
+    """MO-87: a safe verdict below the confidence threshold is not shown as plainly safe."""
+
+    @staticmethod
+    def _assemble(confidence: float, threshold: float | None):
+        from migratowl.api.helpers import TokenUsage, assemble_report
+        from migratowl.models.schemas import AnalysisReport, OutdatedDependency, ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan
+
+        dep = OutdatedDependency(name="click", current_version="7.1.2", latest_version="8.5.0",
+                                 ecosystem="python", manifest_path="requirements.txt")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[],
+        )
+        verdict = AnalysisReport(dependency_name="click", is_breaking=False, error_summary="",
+                                 changelog_citation="8.0.0: Python 2 dropped", suggested_human_fix="",
+                                 confidence=confidence)
+        kwargs = {} if threshold is None else {"confidence_threshold": threshold}
+        return assemble_report(ScanWebhookPayload(repo_url="https://x/y"), prepared, [verdict],
+                               duration=1.0, tokens=TokenUsage(), **kwargs)
+
+    def test_low_confidence_safe_verdict_is_flagged(self) -> None:
+        report = self._assemble(0.4, 0.7)
+
+        assert "low confidence" in report.reviews["click"] and "0.40" in report.reviews["click"]
+
+    def test_confident_or_unconfigured_verdicts_are_not_flagged(self) -> None:
+        assert self._assemble(0.9, 0.7).reviews == {}
+        assert self._assemble(0.4, None).reviews == {}
+
+class TestModelCallUsage:
+    """MO-77: a scan records how many model calls it made, in total and by the analysis agent itself."""
+
+    @staticmethod
+    def _llm_result():
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        message = AIMessage("x", usage_metadata=usage, response_metadata={"model_name": "m"})
+        return LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    def test_handler_counts_calls_and_keeps_usage(self) -> None:
+        from migratowl.api.helpers import ScanUsageCallbackHandler
+
+        handler = ScanUsageCallbackHandler()
+        handler.on_llm_end(self._llm_result())
+        handler.on_llm_end(self._llm_result())
+
+        assert handler.model_calls == 2
+        assert handler.usage_metadata["m"]["input_tokens"] == 20
+
+    def test_agent_calls_are_its_ai_messages_without_the_limit_notice(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from migratowl.api.helpers import agent_model_calls
+
+        state = {"messages": [
+            HumanMessage("brief"),
+            AIMessage("", tool_calls=[{"name": "task", "args": {}, "id": "t1"}]),
+            ToolMessage(content="{}", tool_call_id="t1", name="task"),
+            AIMessage("{}"),
+            AIMessage("Model call limits exceeded: run limit (9/9)"),
+        ]}
+
+        assert agent_model_calls(state) == 2
+        assert agent_model_calls({}) == 0

@@ -193,6 +193,9 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
     summary_parts = [f"{breaking_count} breaking"] if breaking_count else []
     if review_count:
         summary_parts.append(f"{review_count} to review")
+    if report.skipped:
+        # Unanalysed packages are never "safe": say how many were left out.
+        summary_parts.append(f"{len(report.skipped)} skipped")
     summary = ", ".join(summary_parts) or "all safe"
 
     footer_parts = [

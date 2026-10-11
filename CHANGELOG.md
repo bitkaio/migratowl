@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-11
+
+### Security
+
+- **Changelog fetches reach only public addresses** — changelog URLs come from package metadata, READMEs and links
+  on documentation indexes. They now must be http(s) on a host that resolves only to global addresses, and each
+  redirect hop is checked. A package could otherwise point the server at the cluster, the host or a cloud metadata
+  service and have the response land in the brief and the PR comment.
+
+### Added
+
+- **SQLAlchemy 2 evidence rules** — `Engine.execute()` and `MetaData(bind=...)`, both removed in 2.0.
+- **Model calls in the report** — `model_calls` (all calls of the scan) and `agent_model_calls` (those by the
+  analysis agent; the rest are package-analyzer subagent calls) sit next to `model_call_budget`, and the log names
+  both against the budget.
+
+### Changed
+
+- **Riskiest packages first** — the brief lists packages with breaking patterns in the code first, then major
+  bumps whose upgraded tests failed, then other majors, so a call cap drops the safest ones. A package in an
+  ecosystem whose upgraded tests failed gets 5 agent calls instead of 3. In the 0.8.0 test run a capped scan had
+  skipped the two packages that break.
+
+### Fixed
+
+- **Changelog excerpts showed the wrong release** — the excerpt led with the newest release, and notes without
+  breaking-change keywords were dropped. As a result, pydantic 1 → 2 showed 2.14.0, click 7 → 8 showed 8.5.0, and
+  a two-major bump lost its older major. The first release of each crossed major (`2.0`, `v2.0`, `5.0.1`, `0.9.0`)
+  now leads, oldest first, keeps its notes, and shares the excerpt with the other crossed majors.
+- **A changelog source without the bump's notes ended the search** — docs.rs, documentation index pages and paged
+  GitHub Releases that stop before the new major gave an empty or wrong excerpt (rand, sqlalchemy, mongoose). The
+  next source is now tried, and the best one is kept.
+- **0.x minor bumps counted as minor** — under semver `0.8` → `0.9` is breaking. Such bumps were presolved as safe
+  when the tests passed, and got no changelog excerpt or evidence rules.
+- **An uncited safe verdict passed after failed tests** — a major bump judged safe without a changelog citation of
+  its own, when its ecosystem's upgraded tests failed, is now marked 🔍 Review.
+- **Raw-mode scans hung for 30 minutes and lost their evidence** — in raw mode (the GitHub Action and the GitLab
+  component) every upload to the sandbox waited for an end-of-input that never came, until the 30-minute exec
+  timeout; the library's fallback then returned nothing and the evidence step crashed. Fixed in
+  langchain-kubernetes 0.4.2; Migratowl also no longer trusts an upload's return value over the file check.
+- **Raw mode could not run inside the cluster** — the chart's raw-mode Role, `k8s/rbac-raw.yaml` and `k8s/rbac.yaml`
+  granted only `create` on `pods/exec`, but the Kubernetes Python client opens exec streams with `GET`, so every
+  sandbox command was forbidden. They now grant `create` and `get`. The GitHub Action did not notice, because its
+  server uses kind's admin kubeconfig.
+- **"All safe" with skipped packages** — the PR comment footer and the commit status said "all safe" / "all
+  upgrades safe" when packages were skipped (call budget, `max_deps`), even when none was analysed. Both now count
+  the skipped packages; "all safe" means every candidate was analysed.
+- **Low-confidence safe verdicts looked safe** — a safe verdict below `MIGRATOWL_CONFIDENCE_THRESHOLD` is now marked
+  🔍 Review; the threshold used to steer only the prompt.
+- **Documentation indexes became release notes** — SQLAlchemy's changelog link is an index page; its navigation
+  parsed as a 2.1 release and became the excerpt and the model's citation. Link lists no longer count as notes, a
+  `role="main"` element wins over a page-wide `<main>`, and an index (Sphinx, Django) is followed to the "What's New"
+  and changelog pages of the release lines a bump crosses.
+
 ## [0.8.0] - 2026-10-10
 
 ### Added
@@ -680,7 +734,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/bitkaio/migratowl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bitkaio/migratowl/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/bitkaio/migratowl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bitkaio/migratowl/compare/v0.5.0...v0.6.0

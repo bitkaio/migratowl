@@ -35,7 +35,8 @@ def upload_to_sandbox(backend: Any, files: list[tuple[str, bytes]]) -> list[str]
         backend.execute(f"mkdir -p {q(directory)}")
     failed: list[str] = []
     for path, content in files:
-        responses = backend.upload_files([(path, content)])
+        # langchain-kubernetes before 0.4.2 could return None (MO-92): the test -f below decides.
+        responses = backend.upload_files([(path, content)]) or []
         errors = [f"{r.path}: {r.error}" for r in responses if r.error]
         if errors:
             failed += errors

@@ -96,6 +96,9 @@ class TestOptions:
         assert "MIGRATOWL_SANDBOX_API_URL" not in env
         rules = _by_kind(docs, "Role")[0]["rules"]
         assert any("pods/exec" in r["resources"] for r in rules)
+        # The Kubernetes Python client opens exec streams with GET (a websocket upgrade).
+        exec_verbs = {v for r in rules if "pods/exec" in r["resources"] for v in r["verbs"]}
+        assert {"create", "get"} <= exec_verbs
         assert any("networkpolicies" in r["resources"] for r in rules)
         assert len(_by_kind(docs, "NetworkPolicy")) == 1
 

@@ -19,7 +19,7 @@ rules:
   # Exec and log access for executing commands in sandbox Pods
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]

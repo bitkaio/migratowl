@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from migratowl.changelog import first_releases
 from migratowl.evidence.rules import rules_for
 from migratowl.models.schemas import (
     AnalysisReport,
@@ -84,11 +85,24 @@ def parse_major(version: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _zero_minor(version: str) -> int | None:
+    match = re.match(r"0\.(\d+)", _LEADING_OPERATORS.sub("", version or ""))
+    return int(match.group(1)) if match else None
+
+
 def is_major_bump(current: str, latest: str) -> bool | None:
-    """True/False when both majors parse; None when unknown (never treat unknown as safe)."""
+    """True/False when both majors parse; None when unknown (never treat unknown as safe).
+
+    Under semver a 0.x minor bump is breaking too (``0.8`` → ``0.9``, as Cargo and npm's ``^`` treat it).
+    """
     cur, new = parse_major(current), parse_major(latest)
     if cur is None or new is None:
         return None
+    if cur == new == 0:
+        cur_minor, new_minor = _zero_minor(current), _zero_minor(latest)
+        if cur_minor is None or new_minor is None:
+            return None
+        return new_minor > cur_minor
     return new > cur
 
 
@@ -276,7 +290,26 @@ def presolve(prepared: PreparedScan) -> tuple[list[AnalysisReport], list[Outdate
 
 _EXCERPT_CHARS = 1500
 _NO_BREAKING = "(no breaking changes noted)"
-_MAJOR_RELEASE = re.compile(r"^v?\d+\.0\.0$")
+
+
+def _excerpt(chunks: list[dict], current_version: str, latest_version: str, limit: int) -> str:
+    """Join chunks into at most ``limit`` characters, the crossed majors' first releases first.
+
+    Those releases share the budget equally (a short one leaves its share to the next), so a
+    two-major bump shows the breaking notes of both majors; other releases fill what is left.
+    """
+    heads = first_releases(chunks, current_version, latest_version)
+    rest = [chunk for chunk in chunks if not any(chunk is head for head in heads)]
+    parts: list[str] = []
+    remaining = limit
+    for position, chunk in enumerate(heads + rest):
+        if remaining <= 0:
+            break
+        text = f"{chunk.get('version', '')}\n{chunk['content']}".strip()
+        share = remaining // (len(heads) - position) if position < len(heads) else remaining
+        parts.append(text[:share])
+        remaining -= len(parts[-1]) + 2  # the "\n\n" separator
+    return "\n\n".join(parts)[:limit]
 
 
 async def fetch_major_changelogs(
@@ -305,12 +338,9 @@ async def fetch_major_changelogs(
             logger.info("No changelog for %s", dep.name, exc_info=True)
             continue
         useful = [c for c in chunks if isinstance(c, dict) and c.get("content") and c["content"] != _NO_BREAKING]
-        # A new major's X.0.0 notes carry the breaking changes; put them first so the
-        # character cap does not cut them off behind later minor releases.
-        useful.sort(key=lambda c: not _MAJOR_RELEASE.match(str(c.get("version", ""))))
-        text = "\n\n".join(f"{c.get('version', '')}\n{c['content']}".strip() for c in useful)
+        text = _excerpt(useful, payload["current_version"] or "", dep.latest_version, _EXCERPT_CHARS)
         if text:
-            excerpts[dep.name] = text[:_EXCERPT_CHARS]
+            excerpts[dep.name] = text
     return excerpts
 
 
@@ -361,16 +391,31 @@ def _evidence_line(name: str, ev: PackageEvidence) -> list[str]:
     return lines
 
 
+def risk_order(pending: list[OutdatedDependency], prepared: PreparedScan) -> list[OutdatedDependency]:
+    """Riskiest first: breaking patterns in the code, then major bumps in an ecosystem whose upgraded
+    tests failed, then other major bumps, then the rest; ties keep their order."""
+    failed = {v.ecosystem for v in prepared.validations if not v.passed}
+
+    def key(dep: OutdatedDependency) -> tuple[bool, bool, bool]:
+        ev = prepared.evidence.get(dep.name)
+        major = dependency_is_major_bump(dep) is not False
+        broken = str(dep.ecosystem) in failed or dep.name in prepared.update_failures
+        return (not (ev is not None and ev.hits), not (major and broken), not major)
+
+    return sorted(pending, key=key)
+
+
 def build_analysis_brief(
     payload: ScanWebhookPayload, prepared: PreparedScan, pending: list[OutdatedDependency]
 ) -> str:
     """Compact text the LLM analyses instead of driving Phases 1–2 itself."""
+    pending = risk_order(pending, prepared)
     lines = [
         f"Repository: {payload.repo_url} (branch {payload.branch_name}).",
         "Already done in code: the repo is cloned to source/, every package below was updated to its "
         "latest version in main/, and main/ was built and tested.",
         "",
-        f"Packages to analyze ({len(pending)}):",
+        f"Packages to analyze ({len(pending)}, most at risk first; analyse them in this order):",
     ]
     for dep in pending:
         bump = dependency_is_major_bump(dep)

@@ -57,6 +57,25 @@ class TestCurated:
                 "pydantic2-parse-obj", "pydantic2-dict"} <= rules
 
 
+    def test_sqlalchemy2_rules(self, tmp_path: Path) -> None:
+        """SQLAlchemy 2 removed Engine.execute() and bound metadata (MO-86 follow-up)."""
+        src = (
+            "from sqlalchemy import MetaData, create_engine, text\n\n"
+            "engine = create_engine('sqlite://')\n"
+            "value = engine.execute('select 42').scalar()\n"
+            "rows = db_engine.execute(text('select 1'))\n"
+            "meta = MetaData(bind=engine)\n"
+            "with engine.connect() as conn:\n    conn.execute(text('select 1'))\n"
+        )
+        rules = curated_rules("python", "sqlalchemy", "1.4.54", "2.1.4")
+        hits = _hits(tmp_path, {"db.py": src}, "sqlalchemy", "python", rules)
+        found = {(h["rule"], h["line"]) for h in hits}
+
+        assert ("sqlalchemy2-engine-execute", 4) in found
+        assert ("sqlalchemy2-engine-execute", 5) in found
+        assert ("sqlalchemy2-bound-metadata", 6) in found
+        assert not any(h["line"] == 8 for h in hits)
+
 class TestFromChangelog:
     def test_call_snippets_become_arity_patterns(self, tmp_path: Path) -> None:
         excerpt = (
