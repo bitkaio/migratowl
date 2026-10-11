@@ -21,6 +21,7 @@ from langchain.tools import tool
 
 from migratowl.changelog import (
     chunk_changelog_by_version,
+    drop_link_lists,
     extract_breaking_changes,
     fetch_changelog,
     filter_chunks_by_version_range,
@@ -52,11 +53,11 @@ def create_fetch_changelog_tool() -> Any:
             latest_version=dep.get("latest_version"),
         )
         chunks = merge_duplicate_versions(chunk_changelog_by_version(text))
-        filtered = filter_chunks_by_version_range(
+        filtered = drop_link_lists(filter_chunks_by_version_range(
             chunks,
             dep["current_version"],
             dep["latest_version"],
-        )
+        ))
         # The first release of each crossed major carries its breaking changes; keep those
         # ahead of the newer minor/patch notes so truncation drops the latter first.
         majors = {c["version"] for c in first_releases(filtered, dep["current_version"], dep["latest_version"])}

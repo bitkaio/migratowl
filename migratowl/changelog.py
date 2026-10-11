@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Collection
+from urllib.parse import urljoin
 
 import html2text as _html2text
 import httpx
@@ -66,6 +68,13 @@ async def fetch_changelog(
             return await _fetch_from_url(url)
 
         sources.append(from_changelog_url)
+
+        async def from_version_pages() -> str:
+            if not current_version or not latest_version:
+                raise FileNotFoundError("versions unknown")
+            return await _fetch_version_pages(url, current_version, latest_version)
+
+        sources.append(from_version_pages)
 
     if repository_url:
         settings = get_settings()
@@ -127,27 +136,93 @@ async def _fetch_from_url(url: str) -> str:
         # GitHub's own pages (releases, repository views) are site chrome, not changelogs.
         raise ValueError(f"GitHub web page, not a changelog: {url}")
     if is_html:
-        text = _main_content(text)
-        converter = _html2text.HTML2Text()
-        converter.ignore_links = True
-        converter.ignore_images = True
-        converter.body_width = 0
-        stripped = converter.handle(text)
+        stripped = _html_to_text(text)
         if not chunk_changelog_by_version(stripped):
             raise ValueError(f"HTML response with no parseable version headers: {url}")
         return stripped
     return text
 
 
+def _html_to_text(html: str) -> str:
+    """The page's main content as plain text (headings kept as ``#`` lines)."""
+    converter = _html2text.HTML2Text()
+    converter.ignore_links = True
+    converter.ignore_images = True
+    converter.body_width = 0
+    return converter.handle(_main_content(html))
+
+
+# Links on a documentation index to one release line's pages: "2.0 Changelog", "5.0 release notes",
+# "What's New in SQLAlchemy 2.0?".
+_ANCHOR = re.compile(r"<a\b[^>]*?\bhref\s*=\s*[\"']([^\"'#]+)[^\"']*[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_WHATS_NEW_LINK = re.compile(r"what[’'`]?s\s+new\b.*?\b(\d+\.\d+)\b", re.IGNORECASE)
+_VERSION_PAGE_LINK = re.compile(
+    r"^(?:[a-z][\w.-]*\s+)?(\d+\.\d+)(?:\.0)?\s+(?:changelog|release\s+notes)\b", re.IGNORECASE
+)
+_MAX_VERSION_LINES = 3
+
+
+async def _fetch_version_pages(index_url: str, current_version: str, latest_version: str) -> str:
+    """Follow a documentation index (Sphinx, Django) to the pages of the release lines the bump crosses.
+
+    Per crossed line (oldest first, at most three), its "What's New" page, then its changelog page; a
+    "What's New" page gets a ``## X.Y`` heading so its text is attributed to that release.
+    """
+    cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))
+    if not cur or not new:
+        raise FileNotFoundError("versions unknown")
+    low, high = _major_line(cur), _major_line(new)
+    client = get_http_client()
+    response = await client.get(index_url, follow_redirects=True)
+    response.raise_for_status()
+
+    pages: dict[tuple[int, ...], dict[str, tuple[str, str]]] = {}
+    for href, inner in _ANCHOR.findall(response.text):
+        label = " ".join(_html.unescape(re.sub(r"<[^>]+>", " ", inner)).split())
+        for kind, pattern in (("new", _WHATS_NEW_LINK), ("log", _VERSION_PAGE_LINK)):
+            match = pattern.search(label)
+            if not match:
+                continue
+            numbers = _release_numbers(match.group(1))
+            line = _major_line(numbers)
+            if low < line <= high and not any(numbers[len(line):]):
+                pages.setdefault(line, {}).setdefault(kind, (match.group(1), urljoin(str(response.url), href)))
+    wanted = [
+        (kind, *pages[line][kind])
+        for line in sorted(pages)[:_MAX_VERSION_LINES]
+        for kind in ("new", "log")
+        if kind in pages[line]
+    ]
+    if not wanted:
+        raise FileNotFoundError(f"no release-line pages linked from {index_url}")
+
+    async def page(kind: str, version: str, url: str) -> str:
+        try:
+            page_response = await client.get(url, follow_redirects=True)
+            page_response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            logger.debug("version page %s failed: %s", url, exc)
+            return ""
+        text = _html_to_text(page_response.text)
+        return f"## {version}\n{text}" if kind == "new" else text
+
+    texts = [t for t in await asyncio.gather(*(page(*w) for w in wanted)) if t.strip()]
+    if not texts:
+        raise FileNotFoundError(f"release-line pages of {index_url} could not be fetched")
+    return "\n\n".join(texts)
+
+
+# role="main" first: some sites (Sphinx themes such as SQLAlchemy's) wrap the whole page, navigation
+# included, in a <main> and mark the content inside it with role="main".
 _MAIN_START = (
+    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
     re.compile(r"<main\b[^>]*>", re.IGNORECASE),
     re.compile(r"<article\b[^>]*>", re.IGNORECASE),
-    re.compile(r"<(?P<tag>[a-z][a-z0-9]*)\b[^>]*\brole\s*=\s*[\"']main[\"'][^>]*>", re.IGNORECASE),
 )
 
 
 def _main_content(html: str) -> str:
-    """The inner HTML of the page's main element (``<main>``, ``<article>``, ``role="main"``), else the page.
+    """The inner HTML of the page's main element (``role="main"``, ``<main>``, ``<article>``), else the page.
 
     Documentation sites wrap the changelog in navigation, sidebars and footers that would otherwise be
     converted along with it (and carry stray version numbers of their own).
@@ -912,6 +987,22 @@ def order_for_breaking(chunks: list[dict], current_version: str, latest_version:
 
 
 _FULL_COVERAGE = 2
+_LIST_ITEM = re.compile(r"^(?:[*+-]|\d+\.)\s+(.*)$")
+
+
+def _is_link_list(content: str) -> bool:
+    """Navigation or an index of pages, not release notes: many short list items, none naming a change."""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if len(lines) < 6 or any(_CHANGE_WORDS.search(line) for line in lines):
+        return False
+    items = [m.group(1) for m in map(_LIST_ITEM.match, lines) if m]
+    short = [item for item in items if len(item.split()) <= 6 and not item.rstrip().endswith((".", ":", ";"))]
+    return len(short) >= 0.9 * len(lines)
+
+
+def drop_link_lists(chunks: list[dict]) -> list[dict]:
+    """Chunks that carry notes, without navigation or page indexes parsed as a release."""
+    return [chunk for chunk in chunks if not _is_link_list(str(chunk.get("content", "")))]
 
 
 def _coverage(text: str, current_version: str | None, latest_version: str | None) -> int:
@@ -919,9 +1010,9 @@ def _coverage(text: str, current_version: str | None, latest_version: str | None
     that starts the next major, 2 full. Without both versions any text counts as full."""
     if not current_version or not latest_version:
         return _FULL_COVERAGE
-    in_range = filter_chunks_by_version_range(
+    in_range = drop_link_lists(filter_chunks_by_version_range(
         merge_duplicate_versions(chunk_changelog_by_version(text)), current_version, latest_version
-    )
+    ))
     if not in_range:
         return 0
     cur, new = _release_numbers(_bound_version(current_version)), _release_numbers(_bound_version(latest_version))

@@ -857,11 +857,12 @@ class TestSourceCoverage:
             patch("migratowl.changelog._fetch_from_github", strategy(github_text)),
             patch("migratowl.changelog._fetch_from_github_releases", strategy(releases_text)),
             patch("migratowl.changelog.get_settings"),
+            patch("migratowl.changelog._fetch_version_pages", AsyncMock(side_effect=FileNotFoundError)),
         )
 
     async def _fetch(self, patches, current, latest):
-        url_p, readme_p, github_p, releases_p, settings_p = patches
-        with url_p, readme_p, github_p as github, releases_p, settings_p as settings:
+        url_p, readme_p, github_p, releases_p, settings_p, pages_p = patches
+        with url_p, readme_p, github_p as github, releases_p, settings_p as settings, pages_p:
             settings.return_value.github_token = ""
             text, _ = await fetch_changelog("https://docs.rs/rand", "https://github.com/rust-random/rand",
                                             "rand", current, latest)
@@ -912,3 +913,63 @@ class TestCrossedMajorNotesAreKept:
 
         assert result[0]["content"] == "- `thread_rng()` renamed to `rng()`"
         assert result[1]["content"] == "(no breaking changes noted)"
+
+
+class TestDocumentationIndexes:
+    """MO-86 / MO-43: navigation is not notes, and a docs index leads to the crossed majors' pages."""
+
+    NAV = "## 2.1\n" + "\n".join(f"  * {t}" for t in (
+        "Overview", "SQLAlchemy Unified Tutorial", "SQLAlchemy ORM", "SQLAlchemy Core", "Dialects",
+        "Frequently Asked Questions", "Error Messages", "2.1 Changelog", "2.0 Changelog", "1.4 Changelog"))
+
+    def test_role_main_inside_a_page_wide_main_wins(self) -> None:
+        from migratowl.changelog import _main_content
+
+        html = ('<main id="docs"><div id="nav">Overview Tutorial</div>'
+                '<div id="docs-body" role="main"><h2>2.0.0</h2><p>Engine.execute removed</p></div></main>')
+
+        body = _main_content(html)
+
+        assert "Engine.execute removed" in body and "Overview" not in body
+
+    def test_link_lists_are_not_notes(self) -> None:
+        from migratowl.changelog import _is_link_list
+
+        assert _is_link_list(self.NAV.split("\n", 1)[1])
+        assert not _is_link_list("* Removed `Engine.execute()`; use `Connection.execute()` inside a transaction.\n"
+                                 "* The `future` flag is now the default behaviour of every engine and session.")
+        assert not _is_link_list("* doc fixes")  # too short to tell
+
+    def test_navigation_does_not_cover_a_bump(self) -> None:
+        from migratowl.changelog import _coverage
+
+        assert _coverage(self.NAV, "1.4.54", "2.1.4") == 0
+
+    async def test_index_links_to_the_crossed_majors_pages(self) -> None:
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from migratowl.changelog import _fetch_version_pages
+
+        base = "https://docs.example.org/changelog/"
+        index = ('<div role="main"><a href="changelog_21.html">2.1 Changelog</a>'
+                 '<a href="changelog_20.html">2.0 Changelog</a><a href="changelog_14.html">1.4 Changelog</a>'
+                 '<a href="migration_20.html">What’s New in SQLAlchemy 2.0?</a></div>')
+        pages = {
+            base + "index.html": index,
+            base + "migration_20.html": '<div role="main"><p>Engine.execute() is removed in 2.0.</p></div>',
+            base + "changelog_20.html": '<div role="main"><h2>2.0.0</h2><p>Final release.</p></div>',
+        }
+        requested: list[str] = []
+
+        async def get(url: str, *args, **kwargs) -> httpx.Response:
+            requested.append(url)
+            req = httpx.Request("GET", url)
+            return httpx.Response(200, text=pages[url], request=req) if url in pages else httpx.Response(404, request=req)
+
+        client = _AsyncMock()
+        client.get.side_effect = get
+        with patch("migratowl.changelog.get_http_client", return_value=client):
+            text = await _fetch_version_pages(base + "index.html", "1.4.54", "2.1.4")
+
+        assert text.index("Engine.execute() is removed") < text.index("Final release.")
+        assert base + "changelog_14.html" not in requested and base + "changelog_21.html" not in requested

@@ -175,3 +175,21 @@ class TestCrossedMajorNotesSurviveExtraction:
 
         chunks = json.loads(raw)["chunks"]
         assert chunks[0] == {"version": "0.9.0", "content": "- `thread_rng()` renamed to `rng()`"}
+
+
+class TestNavigationIsDropped:
+    async def test_link_list_chunks_never_reach_the_model(self) -> None:
+        """MO-86: a docs index chunk (navigation) is not a release's notes."""
+        nav = "\n".join(f"  * {t}" for t in ("Overview", "Tutorial", "ORM", "Core", "Dialects", "FAQ"))
+        changelog = f"## 2.1\n{nav}\n## 2.0.0\n- BREAKING CHANGE: Engine.execute() removed\n"
+        input_json = json.dumps({"name": "sqlalchemy", "current_version": "1.4.54", "latest_version": "2.1.4",
+                                 "changelog_url": "https://example.com/CHANGELOG.md"})
+        with (
+            patch("migratowl.agent.tools.changelog.fetch_changelog", new_callable=AsyncMock,
+                  return_value=(changelog, [])),
+            patch("migratowl.agent.tools.changelog.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.max_changelog_chars = 3_000
+            raw = await create_fetch_changelog_tool().ainvoke({"outdated_dep_json": input_json})
+
+        assert [c["version"] for c in json.loads(raw)["chunks"]] == ["2.0.0"]
