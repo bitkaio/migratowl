@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   component) every upload to the sandbox waited for an end-of-input that never came, until the 30-minute exec
   timeout; the library's fallback then returned nothing and the evidence step crashed. Fixed in
   langchain-kubernetes 0.4.2; Migratowl also no longer trusts an upload's return value over the file check.
+- **Raw mode could not run inside the cluster** — the chart's raw-mode Role, `k8s/rbac-raw.yaml` and `k8s/rbac.yaml`
+  granted only `create` on `pods/exec`, but the Kubernetes Python client opens exec streams with `GET`, so every
+  sandbox command was forbidden. They now grant `create` and `get`. The GitHub Action did not notice, because its
+  server uses kind's admin kubeconfig.
 - **"All safe" with skipped packages** — the PR comment footer and the commit status said "all safe" / "all
   upgrades safe" when packages were skipped (call budget, `max_deps`), even when none was analysed. Both now count
   the skipped packages; "all safe" means every candidate was analysed.
