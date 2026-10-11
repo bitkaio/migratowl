@@ -84,6 +84,18 @@ _CURATED: dict[tuple[str, str], dict[int, list[dict[str, Any]]]] = {
                  "model_dump_json / model_copy",
          "rule": {"pattern": "$M.dict($$$ARGS)"}},
     ]},
+    ("python", "sqlalchemy"): {2: [
+        {"id": "sqlalchemy2-engine-execute", "language": "python",
+         "note": "Engine.execute() was removed in SQLAlchemy 2.0; run statements on a Connection "
+                 "(with engine.connect() as conn: conn.execute(text(...)))",
+         "rule": {"pattern": "$ENGINE.execute($$$ARGS)"},
+         "constraints": {"ENGINE": {"regex": "(?i)engine$"}}},
+        {"id": "sqlalchemy2-bound-metadata", "language": "python",
+         "note": "Bound metadata (MetaData(bind=...)) was removed in SQLAlchemy 2.0; pass the engine or "
+                 "connection explicitly",
+         "rule": {"pattern": "MetaData($$$ARGS)",
+                  "has": {"kind": "keyword_argument", "regex": "^bind\\s*=", "stopBy": "end"}}},
+    ]},
     ("python", "numpy"): {2: [
         {"id": "numpy2-removed-aliases", "language": "python",
          "note": "NumPy 2 removed aliases such as np.float_, np.complex_, np.NaN, np.Inf, np.unicode_",
