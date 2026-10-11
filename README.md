@@ -151,13 +151,13 @@ See [bitkaio/migratowl-action](https://github.com/bitkaio/migratowl-action) for 
 ```yaml
 stages: [test]
 include:
-  - component: gitlab.com/bitkaio/migratowl-gitlab-component/scan@v1
+  - component: gitlab.com/bitkaio/migratowl/migratowl-gitlab-component/scan@v1
     inputs:
       anthropic-api-key: $ANTHROPIC_API_KEY
       stage: test
 ```
 
-See [bitkaio/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl/migratowl-gitlab-component) for details.
+See [bitkaio/migratowl/migratowl-gitlab-component](https://gitlab.com/bitkaio/migratowl/migratowl-gitlab-component) for details.
 
 ### Self-hosted (existing Kubernetes cluster)
 
