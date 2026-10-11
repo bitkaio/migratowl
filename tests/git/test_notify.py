@@ -289,3 +289,24 @@ async def test_skipped_packages_are_named_instead_of_all_safe() -> None:
 
     description = mock_gh.set_commit_status.call_args.args[4]
     assert "2 skipped" in description and "all upgrades safe" not in description
+
+
+async def test_breaking_upgrades_keep_the_status_green_unless_asked_to_fail() -> None:
+    """MO-99: on GitLab a failed status turns the whole MR pipeline red; follow the caller's fail_on_breaking."""
+    payload = _gh_payload()
+    payload.fail_on_breaking = False
+    mock_gh = AsyncMock()
+    with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+        await notify_pr_done(payload, _report(breaking=2), _settings())
+
+    status_args = mock_gh.set_commit_status.call_args.args
+    assert status_args[3] == "success"
+    assert "2 breaking upgrade(s) found" in status_args[4]
+
+
+async def test_fail_on_breaking_defaults_to_a_failed_status() -> None:
+    mock_gh = AsyncMock()
+    with patch("migratowl.git.notify.GitHubClient", return_value=mock_gh):
+        await notify_pr_done(_gh_payload(), _report(breaking=1), _settings())
+
+    assert mock_gh.set_commit_status.call_args.args[3] == "failure"

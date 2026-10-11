@@ -116,8 +116,8 @@ async def notify_pr_done(
         _status(
             payload,
             settings,
-            github="failure" if breaking_count else "success",
-            gitlab="failed" if breaking_count else "success",
+            github="failure" if breaking_count and payload.fail_on_breaking else "success",
+            gitlab="failed" if breaking_count and payload.fail_on_breaking else "success",
             description=description,
         ),
     )

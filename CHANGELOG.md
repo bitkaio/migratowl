@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`fail_on_breaking` in the webhook payload** — `false` keeps the final commit status successful when a breaking
+  upgrade is found (the description still names the count). On GitLab a failed status on the pipeline's commit
+  fails the whole MR pipeline, whatever the scan job's own result; the Action and the component now pass their
+  `fail-on-breaking` input. Default `true`, as before.
+
 ### Fixed
 
 - **Raw-mode sandbox activity was not recorded in the cluster** — langchain-kubernetes patches a last-activity
