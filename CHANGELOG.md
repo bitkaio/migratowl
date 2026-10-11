@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-11
+
+### Added
+
+- **`fail_on_breaking` in the webhook payload** — `false` keeps the final commit status successful when a breaking
+  upgrade is found (the description still names the count). On GitLab a failed status on the pipeline's commit
+  fails the whole MR pipeline, whatever the scan job's own result; the Action and the component now pass their
+  `fail-on-breaking` input. Default `true`, as before.
+
+### Fixed
+
+- **Raw-mode sandbox activity was not recorded in the cluster** — langchain-kubernetes patches a last-activity
+  annotation on each sandbox pod for idle-TTL cleanup, but the raw-mode Role (chart, `k8s/rbac-raw.yaml`) did not
+  allow `patch` on pods, so every update was forbidden. The Role now allows it.
+
 ## [0.8.1] - 2026-10-11
 
 ### Security
@@ -734,7 +749,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/bitkaio/migratowl/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bitkaio/migratowl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bitkaio/migratowl/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/bitkaio/migratowl/compare/v0.6.0...v0.7.0

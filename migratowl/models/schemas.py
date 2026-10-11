@@ -64,6 +64,9 @@ class ScanWebhookPayload(BaseModel):
     git_provider: Literal["github", "gitlab"] = "github"
     pr_number: int | None = None
     commit_sha: str | None = None
+    # A breaking upgrade sets the final commit status to failed; False keeps it successful (the description
+    # still names the breaking count). On GitLab a failed status on the pipeline's SHA fails the MR pipeline.
+    fail_on_breaking: bool = True
     callback_url: str | None = None
     exclude_deps: list[str] = []
     check_deps: list[str] = []
