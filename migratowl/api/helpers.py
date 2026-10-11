@@ -158,13 +158,20 @@ def _subagent_verdicts(messages: list[Any]) -> list[AnalysisReport]:
 
 
 def _reviews(
-    prepared: PreparedScan, verdicts: dict[str, AnalysisReport], evidence: dict[str, PackageEvidence]
+    prepared: PreparedScan,
+    verdicts: dict[str, AnalysisReport],
+    evidence: dict[str, PackageEvidence],
+    *,
+    cited: set[str],
+    confidence_threshold: float = 0.0,
 ) -> dict[str, str]:
     """'Safe' verdicts the evidence does not support, with the reason (package → reason).
 
     Flagged when a breaking-change rule matched the code; when a major bump was judged safe with
-    no changelog evidence on tests that never reach the package; or when a major bump was judged
-    safe without a citation although the tests failed after its ecosystem's upgrade.
+    no changelog evidence on tests that never reach the package; when a major bump was judged
+    safe without a citation (``cited``: the model's own, not the excerpt filled in for it) although
+    the tests failed after its ecosystem's upgrade; or when the verdict's confidence is below
+    ``confidence_threshold``.
     """
     from migratowl.pipeline import dependency_is_major_bump  # pipeline imports this module's callers
 
@@ -190,10 +197,15 @@ def _reviews(
             )
             continue
         step = failed.get(str(dep.ecosystem)) if dep is not None else None
-        if dep is not None and major and step and not verdict.changelog_citation.strip():
+        if dep is not None and major and step and name not in cited:
             reviews[name] = (
                 f"Major upgrade judged safe without a changelog citation, although the tests failed "
                 f"after the {dep.ecosystem} upgrade ({step} step)"
+            )
+            continue
+        if verdict.confidence < confidence_threshold:
+            reviews[name] = (
+                f"Judged safe with low confidence ({verdict.confidence:.2f}, threshold {confidence_threshold:.2f})"
             )
     return reviews
 
@@ -205,6 +217,7 @@ def assemble_report(
     *,
     duration: float,
     tokens: TokenUsage,
+    confidence_threshold: float = 0.0,
 ) -> ScanAnalysisReport:
     """Build the final report in code; the LLM only contributes per-package verdicts.
 
@@ -216,6 +229,7 @@ def assemble_report(
     for dep in prepared.candidates:
         canonical.setdefault(dep.name.lower(), dep.name)
     by_name: dict[str, AnalysisReport] = {}
+    cited: set[str] = set()  # verdicts whose citation came from the model, not from the excerpt
     for report in reports:
         name = canonical.get(report.dependency_name.lower())
         if name is None:
@@ -223,6 +237,10 @@ def assemble_report(
         current = by_name.get(name)
         # Several verdicts for one name (same package in several manifests): breaking wins.
         if current is None or (report.is_breaking and not current.is_breaking):
+            if report.changelog_citation.strip():
+                cited.add(name)
+            else:
+                cited.discard(name)
             update: dict[str, str] = {"dependency_name": name}
             # Back an empty citation with the changelog excerpt fetched in code.
             excerpt = prepared.changelog_excerpts.get(name)
@@ -231,7 +249,7 @@ def assemble_report(
             by_name[name] = report.model_copy(update=update)
     names = list(canonical.values())
     evidence = {name: ev for name, ev in prepared.evidence.items() if name in by_name}
-    reviews = _reviews(prepared, by_name, evidence)
+    reviews = _reviews(prepared, by_name, evidence, cited=cited, confidence_threshold=confidence_threshold)
     missing = [name for name in names if name not in by_name]
     if missing:
         logger.warning("No verdict for %s; reporting them as skipped", ", ".join(missing))

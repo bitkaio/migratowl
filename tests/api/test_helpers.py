@@ -308,12 +308,53 @@ class TestReviewFlagsAfterFailedValidation:
 
         assert "tests failed" in report.reviews["sqlalchemy"]
 
+    def test_a_citation_filled_in_from_the_excerpt_does_not_count(self) -> None:
+        """The report backs an empty citation with the fetched excerpt; the model still cited nothing."""
+        prepared = self._prepared(passed=False)
+        prepared.changelog_excerpts = {"sqlalchemy": "2.0\nWhat's New in SQLAlchemy 2.0"}
+
+        report = TestReviewFlags._assemble(prepared, [self._verdict()])
+
+        assert "tests failed" in report.reviews["sqlalchemy"]
+        assert report.reports[0].changelog_citation.startswith("2.0")
+
     def test_cited_minor_or_green_cases_are_not_flagged(self) -> None:
         cited = TestReviewFlags._assemble(self._prepared(passed=False), [self._verdict("2.0.0: Engine.execute kept")])
         green = TestReviewFlags._assemble(self._prepared(passed=True), [self._verdict()])
         minor = TestReviewFlags._assemble(self._prepared(passed=False, latest="1.4.60"), [self._verdict()])
 
         assert cited.reviews == {} and green.reviews == {} and minor.reviews == {}
+
+class TestLowConfidenceReview:
+    """MO-87: a safe verdict below the confidence threshold is not shown as plainly safe."""
+
+    @staticmethod
+    def _assemble(confidence: float, threshold: float | None):
+        from migratowl.api.helpers import TokenUsage, assemble_report
+        from migratowl.models.schemas import AnalysisReport, OutdatedDependency, ScanResult, ScanWebhookPayload
+        from migratowl.pipeline import PreparedScan
+
+        dep = OutdatedDependency(name="click", current_version="7.1.2", latest_version="8.5.0",
+                                 ecosystem="python", manifest_path="requirements.txt")
+        prepared = PreparedScan(
+            scan_result=ScanResult(all_deps=[], outdated=[dep], manifests_found=[], scan_duration_seconds=0),
+            candidates=[dep], skipped=[],
+        )
+        verdict = AnalysisReport(dependency_name="click", is_breaking=False, error_summary="",
+                                 changelog_citation="8.0.0: Python 2 dropped", suggested_human_fix="",
+                                 confidence=confidence)
+        kwargs = {} if threshold is None else {"confidence_threshold": threshold}
+        return assemble_report(ScanWebhookPayload(repo_url="https://x/y"), prepared, [verdict],
+                               duration=1.0, tokens=TokenUsage(), **kwargs)
+
+    def test_low_confidence_safe_verdict_is_flagged(self) -> None:
+        report = self._assemble(0.4, 0.7)
+
+        assert "low confidence" in report.reviews["click"] and "0.40" in report.reviews["click"]
+
+    def test_confident_or_unconfigured_verdicts_are_not_flagged(self) -> None:
+        assert self._assemble(0.9, 0.7).reviews == {}
+        assert self._assemble(0.4, None).reviews == {}
 
 class TestModelCallUsage:
     """MO-77: a scan records how many model calls it made, in total and by the analysis agent itself."""

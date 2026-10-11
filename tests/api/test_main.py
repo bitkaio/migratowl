@@ -939,3 +939,25 @@ class TestRunScanCountsModelCalls:
 
         result = app.state.job_store.get(job.job_id).result
         assert (result.model_calls, result.agent_model_calls) == (3, 1)
+
+
+class TestRunScanUsesTheConfidenceThreshold:
+    @pytest.mark.asyncio
+    async def test_low_confidence_safe_verdict_is_marked_for_review(self, app) -> None:
+        from migratowl.models.schemas import AnalysisReport, PackageVerdicts, ScanWebhookPayload
+
+        verdict = AnalysisReport(dependency_name="flask", is_breaking=False, error_summary="",
+                                 changelog_citation="3.0.0: nothing relevant", suggested_human_fix="",
+                                 confidence=0.2)
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.pipeline.fetch_major_changelogs", AsyncMock(return_value={})), \
+             patch("migratowl.pipeline.collect_evidence", AsyncMock(return_value={})), \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_graph = AsyncMock()
+            mock_graph.ainvoke.return_value = {"messages": [], "structured_response": PackageVerdicts(reports=[verdict])}
+            mock_factory.return_value = mock_graph
+            job = app.state.job_store.create(ScanWebhookPayload(repo_url="https://github.com/x/y"))
+            await main_mod._run_scan(app, job.job_id)
+
+        assert "low confidence" in app.state.job_store.get(job.job_id).result.reviews["flask"]

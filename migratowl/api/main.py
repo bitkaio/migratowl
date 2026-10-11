@@ -371,7 +371,8 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 )
 
             report = assemble_report(
-                job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens
+                job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens,
+                confidence_threshold=settings.confidence_threshold,
             )
             report.model_name = settings.model_name
             report.model_call_budget = budget
