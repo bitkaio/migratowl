@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SQLAlchemy 2 evidence rules** — `Engine.execute()` and `MetaData(bind=...)`, both removed in 2.0.
 - **Model calls in the report** — `model_calls` (all calls of the scan) and `agent_model_calls` (those by the
   analysis agent; the rest are package-analyzer subagent calls) sit next to `model_call_budget`, and the log names
   both against the budget.
@@ -31,8 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next source is now tried, and the best one is kept.
 - **0.x minor bumps counted as minor** — under semver `0.8` → `0.9` is breaking. Such bumps were presolved as safe
   when the tests passed, and got no changelog excerpt or evidence rules.
-- **An uncited safe verdict passed after failed tests** — a major bump judged safe without a changelog citation,
-  when its ecosystem's upgraded tests failed, is now marked 🔍 Review.
+- **An uncited safe verdict passed after failed tests** — a major bump judged safe without a changelog citation of
+  its own, when its ecosystem's upgraded tests failed, is now marked 🔍 Review.
+- **Low-confidence safe verdicts looked safe** — a safe verdict below `MIGRATOWL_CONFIDENCE_THRESHOLD` is now marked
+  🔍 Review; the threshold used to steer only the prompt.
+- **Documentation indexes became release notes** — SQLAlchemy's changelog link is an index page; its navigation
+  parsed as a 2.1 release and became the excerpt and the model's citation. Link lists no longer count as notes, a
+  `role="main"` element wins over a page-wide `<main>`, and an index (Sphinx, Django) is followed to the "What's New"
+  and changelog pages of the release lines a bump crosses.
 
 ## [0.8.0] - 2026-10-10
 
