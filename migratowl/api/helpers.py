@@ -213,6 +213,16 @@ def _reviews(
     return reviews
 
 
+_TEXT_FIELDS = ("error_summary", "changelog_citation", "suggested_human_fix")
+
+
+def _unescape_newlines(text: str) -> str:
+    """Line breaks a model wrote as the two characters ``\\n``; text with real line breaks is left alone."""
+    if "\\n" not in text or "\n" in text:
+        return text
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 def assemble_report(
     payload: ScanWebhookPayload,
     prepared: PreparedScan,
@@ -245,6 +255,10 @@ def assemble_report(
             else:
                 cited.discard(name)
             update: dict[str, str] = {"dependency_name": name}
+            for field in _TEXT_FIELDS:
+                text = getattr(report, field)
+                if text != (fixed := _unescape_newlines(text)):
+                    update[field] = fixed
             # Back an empty citation with the changelog excerpt fetched in code.
             excerpt = prepared.changelog_excerpts.get(name)
             if excerpt and not report.changelog_citation.strip():

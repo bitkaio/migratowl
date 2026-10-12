@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Escaped line breaks from the model showed as `\n`** — a verdict whose text held the two characters `\n` and no
+  real line breaks is unescaped before the report is built, so the PR comment and the report show line breaks.
 - **Packages used without an import looked unused** — a view engine named in a string (`app.set("view engine",
   "ejs")`) or a test runner run from `package.json` scripts (`jest`) showed as "imported in 0 file(s); tests reach
   it: no", which told the model the package was unused. The evidence now reports them as referenced by name or used
