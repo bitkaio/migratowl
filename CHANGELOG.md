@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sandboxes were left running when the server ran outside the cluster** — in agent-sandbox mode the claim list and
+  delete calls sent no credentials outside a cluster and got 403, so every scan left its sandbox behind and the TTL
+  sweep failed. langchain-kubernetes 0.4.3 uses the local kubeconfig's credentials for them.
 - **Escaped line breaks from the model showed as `\n`** — a verdict whose text held the two characters `\n` and no
   real line breaks is unescaped before the report is built, so the PR comment and the report show line breaks.
 - **Packages used without an import looked unused** — a view engine named in a string (`app.set("view engine",

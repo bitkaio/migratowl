@@ -988,8 +988,8 @@ wheels = [
 
 [[package]]
 name = "langchain-kubernetes"
-version = "0.4.2"
-source = { git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.2#e80731aa0980c8d3b239da55765ef50565301bf2" }
+version = "0.4.3"
+source = { git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.3#c90a37233286751317db85f801d7e0b1a37f6c20" }
 dependencies = [
     { name = "deepagents" },
 ]
@@ -1354,7 +1354,7 @@ requires-dist = [
     { name = "html2text", specifier = ">=2024.2.26" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-anthropic" },
-    { name = "langchain-kubernetes", extras = ["agent-sandbox"], git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.2" },
+    { name = "langchain-kubernetes", extras = ["agent-sandbox"], git = "https://github.com/barnakun/langchain-kubernetes?subdirectory=python&rev=py-0.4.3" },
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },

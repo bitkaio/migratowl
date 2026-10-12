@@ -654,7 +654,7 @@ To build the image yourself: `docker build -t migratowl-server .`
 
 ## Kubernetes Setup
 
-Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.2` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
+Migratowl uses [langchain-kubernetes](https://github.com/barnakun/langchain-kubernetes) (installed from that repository's `py-0.4.3` tag) in **agent-sandbox mode** by default, which requires the [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) controller and CRDs installed in your cluster. This provides warm pod pools and, once you set a gVisor or Kata `runtimeClassName` in the template, kernel-level isolation.
 
 ```bash
 # Install controller + CRDs (one-time)
