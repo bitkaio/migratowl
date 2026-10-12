@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Model benchmarks** — [`docs/model-benchmarks.md`](docs/model-benchmarks.md) gives the measured cost, time and
+  accuracy of Sonnet 5.5, Haiku 5.5 and a free OpenRouter model on three test projects with known answers, and how
+  to reproduce them. The README's model advice links to it.
+
 ### Fixed
 
 - **Claude cache writes were counted as plain input** — langchain-anthropic reports them under per-TTL keys and

@@ -235,7 +235,7 @@ The attribution threshold is configurable via `MIGRATOWL_CONFIDENCE_THRESHOLD` (
 
 The evidence goes into the model's brief, and code (not the model) checks every "safe" verdict against it. A package is marked **🔍 Review** in the PR comment when a breaking pattern was found in the code, or when a major upgrade was judged safe with no changelog evidence on tests that never reach it. Review does not fail the commit status; breaking verdicts do.
 
-**Choosing a model:** Claude (the default `claude-sonnet-5-5`) gives the most accurate verdicts. Free or small models are fine for smoke tests, but they miss behaviour changes that only the changelog and the code reveal. The evidence and Review flags limit the damage, and `MIGRATOWL_MAX_MODEL_CALLS` limits the cost.
+**Choosing a model:** the default `claude-sonnet-5-5` gives the most precise verdicts; a scan of a small project costs about $0.01–0.15. `claude-haiku-5-5` was as accurate on our test projects for about a twelfth of the cost, which suits frequent scans. Free or small models are fine for trying Migratowl out, but they raise more Review flags and miss more; the code evidence and Review flags limit the damage, and `MIGRATOWL_MAX_MODEL_CALLS` limits the cost. Measured cost, time and accuracy per model: [`docs/model-benchmarks.md`](docs/model-benchmarks.md).
 
 **Sandbox workspace layout:**
 
