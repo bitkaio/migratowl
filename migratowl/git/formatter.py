@@ -56,6 +56,7 @@ _PRICING: dict[str, tuple[float, float, float | None]] = {
     "claude-sonnet-5-5": (2.0, 10.0, 0.20),
     "claude-sonnet-5": (2.0, 10.0, None),
     "claude-sonnet-4-6": (3.0, 15.0, None),
+    "claude-haiku-5-5": (0.10, 0.50, None),  # prompts up to 100K tokens; $0.50 / $2.50 above
     "claude-haiku-4-5": (1.0, 5.0, None),
     "claude-haiku-4-5-20251001": (1.0, 5.0, None),
     "gpt-4o": (2.50, 10.0, None),

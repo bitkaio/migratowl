@@ -57,7 +57,10 @@ def sum_usage(usages: Iterable[Mapping[str, Any]]) -> TokenUsage:
         total.input += usage.get("input_tokens") or 0
         total.output += usage.get("output_tokens") or 0
         total.cache_read += details.get("cache_read") or 0
-        total.cache_creation += details.get("cache_creation") or 0
+        # langchain-anthropic zeroes cache_creation when Anthropic reports the writes per TTL.
+        total.cache_creation += (details.get("cache_creation") or 0) or sum(
+            details.get(key) or 0 for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        )
     return total
 
 
