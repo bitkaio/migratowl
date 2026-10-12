@@ -364,6 +364,30 @@ class TestLowConfidenceReview:
         assert self._assemble(0.9, 0.7).reviews == {}
         assert self._assemble(0.4, None).reviews == {}
 
+class TestEscapedNewlines:
+    """MO-89: models sometimes write the two characters \\n instead of a line break."""
+
+    def test_escaped_newlines_become_line_breaks(self) -> None:
+        from migratowl.models.schemas import AnalysisReport
+
+        verdict = AnalysisReport(dependency_name="express", is_breaking=True, error_summary="Routes break.\\nSee below.",
+                                 changelog_citation="5.0.0", confidence=0.9,
+                                 suggested_human_fix="Use a connection:\\n\\nwith engine.connect() as conn:\\n    conn.execute()")
+        report = TestReviewFlags._assemble(TestReviewFlags._prepared({}), [verdict])
+
+        fix = report.reports[0].suggested_human_fix
+        assert fix == "Use a connection:\n\nwith engine.connect() as conn:\n    conn.execute()"
+        assert report.reports[0].error_summary == "Routes break.\nSee below."
+
+    def test_text_with_real_line_breaks_is_left_alone(self) -> None:
+        from migratowl.models.schemas import AnalysisReport
+
+        verdict = AnalysisReport(dependency_name="express", is_breaking=True, error_summary="line one\nuse \\n here",
+                                 changelog_citation="", suggested_human_fix="", confidence=0.9)
+        report = TestReviewFlags._assemble(TestReviewFlags._prepared({}), [verdict])
+
+        assert report.reports[0].error_summary == "line one\nuse \\n here"
+
 class TestModelCallUsage:
     """MO-77: a scan records how many model calls it made, in total and by the analysis agent itself."""
 

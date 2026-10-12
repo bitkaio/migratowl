@@ -382,10 +382,17 @@ async def collect_evidence(
 
 
 def _evidence_line(name: str, ev: PackageEvidence) -> list[str]:
-    files = ", ".join(ev.importing_files[:5]) + (" …" if ev.importing_count > 5 else "")
     reach = {True: "yes", False: "no", None: "unknown"}[ev.tests_reach]
-    line = f"- {name}: imported in {ev.importing_count} file(s)" + (f" ({files})" if files else "")
-    lines = [f"{line}; tests reach it: {reach}"]
+    uses: list[str] = []
+    if ev.importing_count or not (ev.referencing_count or ev.scripts):
+        files = ", ".join(ev.importing_files[:5]) + (" …" if ev.importing_count > 5 else "")
+        uses.append(f"imported in {ev.importing_count} file(s)" + (f" ({files})" if files else ""))
+    if ev.referencing_count:
+        named = ", ".join(ev.referencing_files[:5]) + (" …" if ev.referencing_count > 5 else "")
+        uses.append(f"referenced by name in {ev.referencing_count} file(s) ({named})")
+    if ev.scripts:
+        uses.append(f"used by package.json scripts: {', '.join(ev.scripts)}")
+    lines = [f"- {name}: {'; '.join(uses)}; tests reach it: {reach}"]
     for hit in ev.hits:
         lines.append(f"  - {hit.note} — {hit.file}:{hit.line} `{hit.text}`")
     return lines
