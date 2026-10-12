@@ -243,6 +243,23 @@ def _reachable_from_tests(
 # --------------------------------------------------------------------------- scan
 
 
+def _package_scripts(root: str) -> list[tuple[str, str]]:
+    """``(script name, command)`` of every ``package.json`` outside dependency and build folders."""
+    scripts: list[tuple[str, str]] = []
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        if "package.json" not in names:
+            continue
+        try:
+            with open(os.path.join(directory, "package.json"), encoding="utf-8") as fh:
+                declared = json.load(fh).get("scripts") or {}
+        except Exception:
+            continue
+        if isinstance(declared, dict):
+            scripts += [(str(k), str(v)) for k, v in declared.items()]
+    return scripts
+
+
 def scan(root: str, request: dict[str, Any]) -> dict[str, Any]:
     try:
         from ast_grep_py import SgRoot
@@ -285,6 +302,7 @@ def scan(root: str, request: dict[str, Any]) -> dict[str, Any]:
         edges[path] = targets
     tests = [p for p in specs_of if _is_test(p)]
     reached = _reachable_from_tests(tests, edges)
+    package_scripts = _package_scripts(root)
 
     result: dict[str, Any] = {}
     for pkg in packages:
@@ -295,6 +313,14 @@ def scan(root: str, request: dict[str, Any]) -> dict[str, Any]:
             if lang_of[p] in langs and any(_matches_package(s, name, ecosystem) for s in specs)
         )
         test_importers = [p for p in importing if _is_test(p)]
+        # Used without an import: named in a string (app.set("view engine", "ejs"), plugin lists) or run
+        # from a package.json script (a test runner such as jest).
+        literal = re.compile(r"""(['"`])""" + re.escape(name) + r"\1")
+        referencing = sorted(
+            p for p, text in texts.items() if lang_of[p] in langs and p not in importing and literal.search(text)
+        )
+        command_word = re.compile(r"(?<![\w@/.-])" + re.escape(name) + r"(?![\w-])")
+        scripts = sorted({s for s, cmd in package_scripts if command_word.search(cmd)}) if ecosystem == "nodejs" else []
         reach: bool | None
         if ecosystem in ("python", "nodejs", "go"):
             reach = any(p in reached for p in importing)
@@ -302,6 +328,8 @@ def scan(root: str, request: dict[str, Any]) -> dict[str, Any]:
             reach = True if test_importers or any("#[cfg(test)]" in texts.get(p, "") for p in importing) else None
         else:
             reach = True if test_importers else None
+        if not importing and (referencing or scripts):
+            reach = None  # used, but not through imports: whether tests reach it cannot be told
 
         hits: list[dict[str, Any]] = []
         for rule in pkg.get("rules") or []:
@@ -332,6 +360,9 @@ def scan(root: str, request: dict[str, Any]) -> dict[str, Any]:
             "importing_count": len(importing),
             "test_files": test_importers[:_MAX_LISTED],
             "tests_reach": reach,
+            "referencing_files": referencing[:_MAX_LISTED],
+            "referencing_count": len(referencing),
+            "scripts": scripts,
             "hits": hits,
         }
 

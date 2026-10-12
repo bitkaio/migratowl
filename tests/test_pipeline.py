@@ -643,3 +643,18 @@ class TestRiskOrder:
 
         assert brief.index("- pydantic ") < brief.index("- click ") < brief.index("- requests ")
         assert "most at risk first" in brief
+
+
+
+class TestEvidenceLineForNamedUse:
+    def test_a_package_used_by_name_is_not_described_as_unused(self) -> None:
+        """MO-81: "imported in 0 file(s); tests reach it: no" told the model ejs and jest were unused."""
+        from migratowl.models.schemas import PackageEvidence
+        from migratowl.pipeline import _evidence_line
+
+        ejs = _evidence_line("ejs", PackageEvidence(referencing_files=["app.js"], referencing_count=1))
+        jest = _evidence_line("jest", PackageEvidence(scripts=["test"]))
+
+        assert "imported in 0" not in ejs[0] and "referenced by name in 1 file(s) (app.js)" in ejs[0]
+        assert "used by package.json scripts: test" in jest[0]
+        assert "tests reach it: unknown" in ejs[0]

@@ -168,6 +168,10 @@ class PackageEvidence(BaseModel):
     importing_count: int = 0
     test_files: list[str] = []
     tests_reach: bool | None = None  # None = could not tell
+    # Used without an import: named in a string literal, or run from a package.json script.
+    referencing_files: list[str] = []
+    referencing_count: int = 0
+    scripts: list[str] = []
     hits: list[EvidenceHit] = []
 
 

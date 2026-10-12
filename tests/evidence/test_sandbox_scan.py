@@ -147,3 +147,28 @@ def test_reports_unavailable_without_ast_grep(tmp_path: Path, monkeypatch: pytes
     out = sandbox_scan.scan(str(tmp_path), {"packages": [{"name": "x", "ecosystem": "nodejs"}]})
 
     assert out["available"] is False
+
+
+class TestUsedWithoutImport:
+    """MO-81: a view engine named in a string, or a test runner in package.json scripts, is used."""
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path) -> Path:
+        _write(tmp_path, {
+            "app.js": "const express = require('express');\nconst app = express();\n"
+                      "app.set('view engine', 'ejs');\n",
+            "__tests__/a.test.js": "test('x', () => expect(1).toBe(1));\n",
+            "package.json": json.dumps({"scripts": {"test": "jest --ci", "start": "node app.js"}}),
+        })
+        return tmp_path
+
+    def test_named_and_script_uses_are_reported(self, repo: Path) -> None:
+        out = _scan(repo, [{"name": "ejs", "ecosystem": "nodejs", "rules": []},
+                           {"name": "jest", "ecosystem": "nodejs", "rules": []},
+                           {"name": "lodash", "ecosystem": "nodejs", "rules": []}])["packages"]
+
+        assert (out["ejs"]["referencing_files"], out["ejs"]["importing_count"]) == (["app.js"], 0)
+        assert out["jest"]["scripts"] == ["test"]
+        # Used, but not through imports: whether tests reach it cannot be told.
+        assert out["ejs"]["tests_reach"] is None and out["jest"]["tests_reach"] is None
+        assert (out["lodash"]["referencing_count"], out["lodash"]["scripts"], out["lodash"]["tests_reach"]) == (0, [], False)

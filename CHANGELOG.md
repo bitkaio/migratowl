@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Packages used without an import looked unused** — a view engine named in a string (`app.set("view engine",
+  "ejs")`) or a test runner run from `package.json` scripts (`jest`) showed as "imported in 0 file(s); tests reach
+  it: no", which told the model the package was unused. The evidence now reports them as referenced by name or used
+  by scripts (`referencing_files`, `scripts`), and whether tests reach them as unknown.
+
 ### Added
 
 - **Model benchmarks** — [`docs/model-benchmarks.md`](docs/model-benchmarks.md) gives the measured cost, time and
