@@ -28,6 +28,14 @@ class TestSumUsage:
         ]
         assert sum_usage(usages) == TokenUsage(input=150, output=10, cache_read=60, cache_creation=10)
 
+    def test_per_ttl_cache_writes_are_counted(self) -> None:
+        """MO-100: langchain-anthropic zeroes cache_creation and reports writes per TTL instead."""
+        usages = [{"input_tokens": 1000, "output_tokens": 5, "total_tokens": 1005,
+                   "input_token_details": {"cache_read": 600, "cache_creation": 0,
+                                           "ephemeral_5m_input_tokens": 300, "ephemeral_1h_input_tokens": 50}}]
+
+        assert sum_usage(usages) == TokenUsage(input=1000, output=5, cache_read=600, cache_creation=350)
+
 
 def _verdict(name: str, breaking: bool = False):
     from migratowl.models.schemas import AnalysisReport

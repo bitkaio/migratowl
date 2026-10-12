@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude cache writes were counted as plain input** — langchain-anthropic reports them under per-TTL keys and
+  zeroes `cache_creation`, so `total_cache_creation_tokens` stayed 0 and the PR comment's cost line priced the
+  writes as input. They are now counted.
+- **No cost line for Claude Haiku 5.5** — added at $0.10 / $0.50 per 1M tokens (prompts up to 100K tokens).
+
 ## [0.8.2] - 2026-10-11
 
 ### Added

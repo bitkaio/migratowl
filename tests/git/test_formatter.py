@@ -186,6 +186,12 @@ class TestEstimateCost:
         result = _estimate_cost("claude-opus-4-7", 1_000_000, 500_000)
         assert result == "~$17.50"
 
+    def test_claude_haiku_5_5_pricing(self) -> None:
+        """MO-76: Haiku 5.5 is $0.10 / $0.50 per 1M (prompts up to 100K tokens)."""
+        from migratowl.git.formatter import _estimate_cost
+
+        assert _estimate_cost("claude-haiku-5-5", 1_000_000, 1_000_000) == "~$0.60"
+
     def test_claude_haiku_4_5_pricing(self) -> None:
         from migratowl.git.formatter import _estimate_cost
         # claude-haiku-4-5: $1/1M input, $5/1M output
