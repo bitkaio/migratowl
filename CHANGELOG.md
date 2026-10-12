@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-12
+
+### Added
+
+- **Model benchmarks** — [`docs/model-benchmarks.md`](docs/model-benchmarks.md) gives the measured cost, time and
+  accuracy of Sonnet 5.5, Haiku 5.5 and a free OpenRouter model on three test projects with known answers, and how
+  to reproduce them. The README's model advice links to it.
+
 ### Fixed
 
 - **Sandboxes were left running when the server ran outside the cluster** — in agent-sandbox mode the claim list and
@@ -18,15 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "ejs")`) or a test runner run from `package.json` scripts (`jest`) showed as "imported in 0 file(s); tests reach
   it: no", which told the model the package was unused. The evidence now reports them as referenced by name or used
   by scripts (`referencing_files`, `scripts`), and whether tests reach them as unknown.
-
-### Added
-
-- **Model benchmarks** — [`docs/model-benchmarks.md`](docs/model-benchmarks.md) gives the measured cost, time and
-  accuracy of Sonnet 5.5, Haiku 5.5 and a free OpenRouter model on three test projects with known answers, and how
-  to reproduce them. The README's model advice links to it.
-
-### Fixed
-
 - **Claude cache writes were counted as plain input** — langchain-anthropic reports them under per-TTL keys and
   zeroes `cache_creation`, so `total_cache_creation_tokens` stayed 0 and the PR comment's cost line priced the
   writes as input. They are now counted.
@@ -774,7 +773,8 @@ Initial release.
 - **Observability** — Langfuse tracing on every agent invocation; OpenAI model support alongside
   Anthropic for model flexibility
 
-[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/bitkaio/migratowl/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/bitkaio/migratowl/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bitkaio/migratowl/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bitkaio/migratowl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bitkaio/migratowl/compare/v0.7.0...v0.8.0
