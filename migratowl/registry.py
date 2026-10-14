@@ -680,6 +680,7 @@ async def query_maven_central(
         if (norm := _maven_pep440(v)) is not None and _maven_flavour(norm) == flavour
     }
     pinned = _pinned_target(dep, all_versions, options)
+    target_norm: str | None
     if pinned is not None:
         target_norm, target = _maven_pep440(pinned) or pinned, pinned
     elif not by_norm:
