@@ -264,6 +264,18 @@ class TestFormatPrCommentRegistryFailures:
         assert "`express` (nodejs): pinned version 9.9.9 not found in the registry" in comment
 
 
+class TestFormatPrCommentScorerRecord:
+    def test_scorer_fields_stay_out_of_the_comment(self) -> None:
+        report = _make_report([]).model_copy(update={
+            "presolved": ["flask"], "delegated": ["django"], "phase_seconds": {"prepare": 1.0},
+            "migratowl_version": "9.9.9+gabc", "analysis_brief": "SECRET BRIEF",
+        })
+        comment = format_pr_comment(report)
+        assert "SECRET BRIEF" not in comment
+        assert "9.9.9+gabc" not in comment
+        assert "phase" not in comment
+
+
 class TestShortFix:
     def test_uses_first_sentence_when_short(self) -> None:
         from migratowl.git.formatter import _short_fix

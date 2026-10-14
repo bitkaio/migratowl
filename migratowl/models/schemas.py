@@ -221,6 +221,14 @@ class ScanAnalysisReport(BaseModel):
     # Model calls the scan made: all of them, and those by the analysis agent (the rest are subagent calls).
     model_calls: int = 0
     agent_model_calls: int = 0
+    # Record for evaluation: packages settled in code without the LLM, packages the agent handed to the
+    # package-analyzer subagent, seconds per phase (prepare, evidence, analysis, compile), the build that
+    # ran, and the brief the LLM got (only with MIGRATOWL_RECORD_ANALYSIS_BRIEF; never sent to the callback).
+    presolved: list[str] = []
+    delegated: list[str] = []
+    phase_seconds: dict[str, float] = {}
+    migratowl_version: str = ""
+    analysis_brief: str = ""
 
 
 class JobState(enum.StrEnum):

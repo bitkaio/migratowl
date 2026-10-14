@@ -475,3 +475,20 @@ class TestTargetVersions:
         pins = {f"pkg{i}": "1.0.0" for i in range(201)}
         with pytest.raises(ValidationError):
             ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions=pins)
+
+
+class TestScorerRecordDefaults:
+    def test_a_result_stored_before_the_record_fields_still_loads(self) -> None:
+        from migratowl.models.schemas import ScanAnalysisReport
+
+        old = {
+            "repo_url": "https://github.com/x/y", "branch_name": "main", "reports": [], "total_duration_seconds": 1.0,
+            "scan_result": {"all_deps": [], "outdated": [], "manifests_found": [], "scan_duration_seconds": 0.5,
+                            "registry_failures": [{"name": "flask", "ecosystem": "python"}]},
+        }
+        report = ScanAnalysisReport.model_validate(old)
+
+        assert (report.presolved, report.delegated, report.phase_seconds) == ([], [], {})
+        assert (report.migratowl_version, report.analysis_brief) == ("", "")
+        assert report.scan_result.unmatched_targets == []
+        assert report.scan_result.registry_failures[0].reason == ""

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -137,6 +138,44 @@ def agent_model_calls(agent_result: dict) -> int:
         for m in agent_result.get("messages", [])
         if getattr(m, "type", "") == "ai" and not _message_text(m).startswith(_CALL_LIMIT_PREFIX)
     )
+
+
+def _named_package(text: str, names: list[str]) -> str | None:
+    """The package of ``names`` that ``text`` names first (``react-dom`` is not ``react``)."""
+    found: list[tuple[int, str]] = []
+    for name in names:
+        match = re.search(rf"(?<![\w@/.:-]){re.escape(name)}(?![\w/:@-]|\.\w)", text, re.IGNORECASE)
+        if match:
+            found.append((match.start(), name))
+    return min(found)[1] if found else None
+
+
+def delegated_packages(agent_result: dict, names: list[str]) -> list[str]:
+    """Packages the agent sent to the package-analyzer subagent, as spelled in ``names``, in call order.
+
+    Read from the subagent's verdict when it returned one, else from the ``task`` call's description.
+    """
+    canonical = {name.lower(): name for name in names}
+    calls: dict[str, str] = {}  # tool_call_id → description
+    for msg in agent_result.get("messages", []):
+        for call in getattr(msg, "tool_calls", None) or []:
+            args = call.get("args") or {}
+            if call.get("name") == "task" and args.get("subagent_type") == "package-analyzer":
+                calls[call.get("id") or str(len(calls))] = str(args.get("description", ""))
+    verdicts: dict[str, str] = {}
+    for msg in agent_result.get("messages", []):
+        call_id = getattr(msg, "tool_call_id", None)
+        if getattr(msg, "type", "") == "tool" and call_id in calls:
+            try:
+                verdicts[call_id] = AnalysisReport.model_validate(json.loads(_message_text(msg))).dependency_name
+            except Exception:
+                continue
+    delegated: list[str] = []
+    for call_id, description in calls.items():
+        name = canonical.get(verdicts.get(call_id, "").lower()) or _named_package(description, names)
+        if name is not None and name not in delegated:
+            delegated.append(name)
+    return delegated
 
 
 def call_limit_reached(agent_result: dict) -> bool:
