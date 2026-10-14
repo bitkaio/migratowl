@@ -443,3 +443,35 @@ def test_unused_models_are_gone() -> None:
 def test_job_status_has_no_unused_lease_fields() -> None:
     assert "owner_pid" not in JobStatus.model_fields
     assert "heartbeat_at" not in JobStatus.model_fields
+
+
+class TestTargetVersions:
+    def test_defaults_to_empty(self) -> None:
+        assert ScanWebhookPayload(repo_url="https://github.com/x/y").target_versions == {}
+
+    def test_accepts_ecosystem_names_and_versions(self) -> None:
+        pins = {
+            "pydantic": "2.5.0",
+            "@types/node": "20.11.0",
+            "github.com/gin-gonic/gin": "v1.9.1",
+            "com.google.guava:guava": "33.0.0-jre",
+            "requests[socks]": "2.32.0rc1",
+        }
+        assert ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions=pins).target_versions == pins
+
+    def test_rejects_bad_name(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"evil name;rm": "1.0.0"})
+
+    def test_rejects_empty_version(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"pydantic": ""})
+
+    def test_rejects_bad_version(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"pydantic": "2.0 || 3"})
+
+    def test_rejects_too_many_entries(self) -> None:
+        pins = {f"pkg{i}": "1.0.0" for i in range(201)}
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions=pins)

@@ -338,6 +338,23 @@ class TestRunScanSetsModelName:
             assert app.state.job_store.get(job.job_id).sandbox_id == "sbx-run"
 
 
+class TestRunScanTargetVersions:
+    @pytest.mark.asyncio
+    async def test_payload_pins_reach_the_tools(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_factory.return_value.ainvoke = AsyncMock(return_value=_ok_result())
+            payload = ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"flask": "3.0.0"})
+            job = app.state.job_store.create(payload)
+
+            await main_mod._run_scan(app, job.job_id)
+
+        assert fake_pipeline.build_tools.call_args.kwargs["target_versions"] == {"flask": "3.0.0"}
+
+
 class TestResumeEndpoint:
     @pytest.mark.asyncio
     async def test_resume_404_for_unknown_job(self, client: AsyncClient) -> None:

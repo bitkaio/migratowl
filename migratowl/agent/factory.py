@@ -191,6 +191,7 @@ def build_tools(
     settings: Settings,
     mode: OutdatedCheckMode = OutdatedCheckMode.SAFE,
     include_prerelease: bool = False,
+    target_versions: dict[str, str] | None = None,
     on_sandbox_acquired: Callable[[str], None] | None = None,
 ) -> MigratowlTools:
     """Build Migratowl's sandbox-bound tools once, for both the pipeline and the agent.
@@ -229,6 +230,7 @@ def build_tools(
                 include_prerelease=include_prerelease,
                 python_version=settings.sandbox_python_version,
                 registries=registries,
+                target_versions=dict(target_versions or {}),
             ),
         ),
         update_dependencies=create_update_dependencies_tool(get_sandbox, workspace_path=workspace_path),

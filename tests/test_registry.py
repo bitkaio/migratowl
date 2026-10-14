@@ -1541,3 +1541,200 @@ class TestDepsDevLinks:
                                  latest_version="3.21.0", ecosystem=Ecosystem.JAVA, manifest_path="pom.xml")
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))) as client:
             assert await _deps_dev_repository(client, dep) == "https://github.com/apache/commons-lang"
+
+
+# ===========================================================================
+# target_versions: pinned upgrade targets
+# ===========================================================================
+
+
+def _pinned(**pins: str) -> CheckOptions:
+    return CheckOptions(target_versions=pins)
+
+
+class TestPinnedTargets:
+    async def test_pypi_pin_wins_over_newer_release(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={
+                "info": {"home_page": None, "project_urls": None},
+                "releases": {"2.31.0": [], "2.32.0": [], "3.0.0": []},
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("requests", "2.31.0", Ecosystem.PYTHON),
+                                      CheckOptions(target_versions={"requests": "2.32.0"}))
+
+        assert result is not None
+        assert result.latest_version == "2.32.0"
+
+    async def test_pypi_pin_matches_normalised_name(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/Pydantic/json": httpx.Response(200, json={
+                "info": {"home_page": None, "project_urls": None},
+                "releases": {"1.10.0": [], "2.5.0": [], "2.9.0": []},
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("Pydantic", "1.10.0", Ecosystem.PYTHON),
+                                      CheckOptions(target_versions={"pydantic": "2.5.0"}))
+
+        assert result is not None
+        assert result.latest_version == "2.5.0"
+
+    async def test_pypi_pin_overrides_safe_mode_and_prerelease(self) -> None:
+        from migratowl.registry import query_pypi
+
+        transport = _mock_transport({
+            "/pypi/requests/json": httpx.Response(200, json={
+                "info": {"home_page": None, "project_urls": None},
+                "releases": {"2.31.0": [], "2.32.0": [], "3.0.0rc1": []},
+            }),
+        })
+        options = CheckOptions(mode=OutdatedCheckMode.SAFE, target_versions={"requests": "3.0.0rc1"})
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_pypi(client, _dep("requests", ">=2.31,<3", Ecosystem.PYTHON), options)
+
+        assert result is not None
+        assert result.latest_version == "3.0.0rc1"
+
+    async def test_npm_pin_wins_over_newer_release(self) -> None:
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.21.2": {}, "5.0.0": {}, "5.1.0": {}}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_npm(client, _dep("express", "^4.21.2", Ecosystem.NODEJS, "package.json"),
+                                     _pinned(express="5.0.0"))
+
+        assert result is not None
+        assert result.latest_version == "5.0.0"
+
+    async def test_crates_pin_wins_over_newer_release(self) -> None:
+        from migratowl.registry import query_crates
+
+        transport = _mock_transport({
+            "/api/v1/crates/serde": httpx.Response(200, json={
+                "crate": {},
+                "versions": [{"num": "1.0.150"}, {"num": "1.0.180"}, {"num": "1.0.200"}],
+            }),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_crates(client, _dep("serde", "1.0.150", Ecosystem.RUST, "Cargo.toml"),
+                                        _pinned(serde="1.0.180"))
+
+        assert result is not None
+        assert result.latest_version == "1.0.180"
+
+    async def test_go_pin_wins_over_newer_release(self) -> None:
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({
+            "/github.com/gin-gonic/gin/@v/list": httpx.Response(200, text="v1.9.0\nv1.9.1\nv1.10.0\n"),
+        })
+        options = CheckOptions(target_versions={"github.com/gin-gonic/gin": "1.9.1"})
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_golang(client, _dep("github.com/gin-gonic/gin", "v1.9.0", Ecosystem.GO, "go.mod"),
+                                        options)
+
+        assert result is not None
+        assert result.latest_version == "v1.9.1"
+        assert result.module_path is None
+
+    async def test_go_pin_to_new_major_uses_major_module_path(self) -> None:
+        from migratowl.registry import query_golang
+
+        transport = _mock_transport({
+            "/example.com/foo/@v/list": httpx.Response(200, text="v1.0.0\n"),
+            "/example.com/foo/v2/@v/list": httpx.Response(200, text="v2.0.0\nv2.1.0\n"),
+            "/example.com/foo/v3/@v/list": httpx.Response(200, text="v3.0.0\n"),
+        })
+        options = CheckOptions(target_versions={"example.com/foo": "v2.0.0"})
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_golang(client, _dep("example.com/foo", "v1.0.0", Ecosystem.GO, "go.mod"), options)
+
+        assert result is not None
+        assert result.latest_version == "v2.0.0"
+        assert result.module_path == "example.com/foo/v2"
+
+    async def test_maven_pin_wins_over_newer_release(self) -> None:
+        from migratowl.registry import query_maven_central
+
+        metadata = (
+            "<metadata><versioning><versions>"
+            "<version>32.0.0-jre</version><version>33.0.0-jre</version><version>33.5.0-jre</version>"
+            "</versions></versioning></metadata>"
+        )
+        transport = _mock_transport({
+            "/maven2/com/google/guava/guava/maven-metadata.xml": httpx.Response(200, text=metadata),
+        })
+        options = CheckOptions(target_versions={"com.google.guava:guava": "33.0.0-jre"})
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_maven_central(
+                client, _dep("com.google.guava:guava", "32.0.0-jre", Ecosystem.JAVA, "pom.xml"), options
+            )
+
+        assert result is not None
+        assert result.latest_version == "33.0.0-jre"
+
+    async def test_pin_equal_to_installed_version_is_not_outdated(self) -> None:
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.21.2": {}, "5.0.0": {}}}),
+        })
+        dep = Dependency(name="express", current_version="^4.0.0", installed_version="4.21.2",
+                         ecosystem=Ecosystem.NODEJS, manifest_path="package.json")
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_npm(client, dep, _pinned(express="4.21.2"))
+
+        assert result is None
+
+    async def test_unpinned_package_still_resolves_latest(self) -> None:
+        from migratowl.registry import query_npm
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.21.2": {}, "5.0.0": {}, "5.1.0": {}}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await query_npm(client, _dep("express", "4.21.2", Ecosystem.NODEJS, "package.json"),
+                                     _pinned(lodash="4.17.21"))
+
+        assert result is not None
+        assert result.latest_version == "5.1.0"
+
+    async def test_missing_pin_is_a_registry_failure_with_reason(self) -> None:
+        from migratowl.registry import check_outdated
+
+        transport = _mock_transport({
+            "/express": httpx.Response(200, json={"versions": {"4.21.2": {}, "5.0.0": {}}}),
+        })
+        async with httpx.AsyncClient(transport=transport) as client:
+            outdated, failures = await check_outdated(
+                [_dep("express", "4.21.2", Ecosystem.NODEJS, "package.json")],
+                _pinned(express="9.9.9"),
+                client=client,
+            )
+
+        assert outdated == []
+        assert len(failures) == 1
+        assert failures[0].name == "express"
+        assert "9.9.9" in failures[0].reason
+
+
+class TestPinKey:
+    def test_python_names_normalise_per_pep_503(self) -> None:
+        from migratowl.registry import pin_key
+
+        assert pin_key(Ecosystem.PYTHON, "Zope.Interface") == pin_key(Ecosystem.PYTHON, "zope_interface")
+        assert pin_key(Ecosystem.PYTHON, "requests[socks]") == "requests"
+
+    def test_other_ecosystems_match_exactly(self) -> None:
+        from migratowl.registry import pin_key
+
+        assert pin_key(Ecosystem.NODEJS, "React") != pin_key(Ecosystem.NODEJS, "react")
+        assert pin_key(Ecosystem.JAVA, "org.slf4j:slf4j-api") == "org.slf4j:slf4j-api"

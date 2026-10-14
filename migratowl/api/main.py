@@ -325,6 +325,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                 settings=settings,
                 mode=job.payload.mode,
                 include_prerelease=job.payload.include_prerelease,
+                target_versions=job.payload.target_versions,
                 on_sandbox_acquired=_persist_sandbox_id,
             )
             prepared = await prepare_scan(tools, job.payload, config, tail_chars=settings.analysis_tail_chars)

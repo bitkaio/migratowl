@@ -59,6 +59,13 @@ class CheckOptions:
     python_version: str | None = None
     # Where the registries are: the public ones unless a mirror is configured.
     registries: Registries = field(default_factory=Registries)
+    # Package name → version to upgrade to instead of the resolved latest, whatever the mode
+    # and include_prerelease. Names match per ecosystem (see ``pin_key``).
+    target_versions: dict[str, str] = field(default_factory=dict)
+
+
+class PinNotFoundError(Exception):
+    """A pinned target version is not in the registry's version list."""
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +245,45 @@ def _is_outdated(current: str, latest: str, *, semver: bool = False) -> bool:
     return lat[0] > cur[0]  # type: ignore[operator]
 
 
+def pin_key(ecosystem: Ecosystem, name: str) -> str:
+    """The name a ``target_versions`` entry matches on: PEP 503 for PyPI (extras dropped), else exact."""
+    if ecosystem == Ecosystem.PYTHON:
+        return re.sub(r"[-_.]+", "-", name.split("[")[0].strip()).lower()
+    return name
+
+
+def _pin_for(dep: Dependency, options: CheckOptions) -> str | None:
+    key = pin_key(dep.ecosystem, dep.name)
+    return next((v for n, v in options.target_versions.items() if pin_key(dep.ecosystem, n) == key), None)
+
+
+def _find_version(pin: str, versions: list[str], *, semver: bool = False) -> str | None:
+    """``pin`` as the registry spells it (a leading 'v' stripped), or None when it is not listed."""
+    want = pin.strip().lstrip("v")
+    for raw in versions:
+        if raw.strip().lstrip("v") == want:
+            return want
+    wanted = _sort_key(want, semver)
+    for raw in versions:
+        parsed = _sort_key(raw, semver)
+        if wanted is not None and parsed is not None and parsed[0] == wanted[0]:
+            return raw.strip().lstrip("v")
+    return None
+
+
+def _pinned_target(
+    dep: Dependency, all_versions: list[str], options: CheckOptions, *, semver: bool = False
+) -> str | None:
+    """The pinned target for ``dep``, or None when it has no pin; raises when the pin does not exist."""
+    pin = _pin_for(dep, options)
+    if pin is None:
+        return None
+    found = _find_version(pin, all_versions, semver=semver)
+    if found is None:
+        raise PinNotFoundError(f"pinned version {pin} not found in the registry")
+    return found
+
+
 def _supports_python(files: list[dict[str, Any]], python_version: str | None) -> bool:
     """False only when every file's ``requires_python`` excludes ``python_version``."""
     if python_version is None or not files:
@@ -370,7 +416,9 @@ async def query_pypi(
         if (not files or not all(f.get("yanked", False) for f in files))
         and _supports_python(files, options.python_version)
     ]
-    target = _resolve_latest(dep.current_version, all_versions, options)
+    target = _pinned_target(dep, list(data.get("releases", {})), options) or _resolve_latest(
+        dep.current_version, all_versions, options
+    )
 
     if target is None or not _is_outdated(dep.installed_version or dep.current_version, target):
         return None
@@ -408,7 +456,9 @@ async def query_npm(
     data = resp.json()
 
     all_versions = list(data.get("versions", {}).keys())
-    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
+    target = _pinned_target(dep, all_versions, options, semver=True) or _resolve_latest(
+        dep.current_version, all_versions, options, semver=True
+    )
 
     if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
@@ -438,7 +488,9 @@ async def query_crates(
     crate = data["crate"]
 
     all_versions = [v["num"] for v in data.get("versions", []) if not v.get("yanked", False)]
-    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
+    target = _pinned_target(dep, all_versions, options, semver=True) or _resolve_latest(
+        dep.current_version, all_versions, options, semver=True
+    )
 
     if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
@@ -494,6 +546,25 @@ async def _newest_go_major(
     return found
 
 
+async def _go_pinned_versions(
+    client: httpx.AsyncClient, dep: Dependency, all_versions: list[str], options: CheckOptions
+) -> tuple[str | None, list[str]]:
+    """``(module_path, versions)`` holding the pinned version: the module itself, or its ``/vN`` path."""
+    pin = _pin_for(dep, options) or ""
+    if _find_version(pin, all_versions, semver=True) is not None or dep.name.startswith("gopkg.in/"):
+        return None, all_versions
+    major = re.match(r"v?(\d+)\.", pin.strip())
+    m = _GO_MAJOR_SUFFIX.match(dep.name)
+    base = m["base"] if m else dep.name
+    if major is None or int(major[1]) < 2:
+        return None, all_versions
+    path = f"{base}/v{major[1]}"
+    try:
+        return path, await _go_version_list(client, path, options.registries)
+    except httpx.HTTPStatusError:
+        return None, all_versions  # no such major: _pinned_target reports the missing pin
+
+
 async def query_golang(
     client: httpx.AsyncClient,
     dep: Dependency,
@@ -506,12 +577,15 @@ async def query_golang(
     """
     all_versions = await _go_version_list(client, dep.name, options.registries)
     module_path: str | None = None
-    if options.mode == OutdatedCheckMode.NORMAL:
-        newer = await _newest_go_major(client, dep.name, options.include_prerelease, options.registries)
-        if newer is not None:
-            module_path, all_versions = newer
-
-    target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
+    if _pin_for(dep, options) is not None:
+        module_path, all_versions = await _go_pinned_versions(client, dep, all_versions, options)
+        target = _pinned_target(dep, all_versions, options, semver=True)
+    else:
+        if options.mode == OutdatedCheckMode.NORMAL:
+            newer = await _newest_go_major(client, dep.name, options.include_prerelease, options.registries)
+            if newer is not None:
+                module_path, all_versions = newer
+        target = _resolve_latest(dep.current_version, all_versions, options, semver=True)
 
     if target is None or not _is_outdated(dep.installed_version or dep.current_version, target, semver=True):
         return None
@@ -605,12 +679,18 @@ async def query_maven_central(
         norm: v for v in all_versions
         if (norm := _maven_pep440(v)) is not None and _maven_flavour(norm) == flavour
     }
-    if not by_norm:
+    pinned = _pinned_target(dep, all_versions, options)
+    if pinned is not None:
+        target_norm, target = _maven_pep440(pinned) or pinned, pinned
+    elif not by_norm:
         return None
-    target_norm = _resolve_latest(current_norm, list(by_norm), options)
-    if target_norm is None or not _is_outdated(current_norm, target_norm):
+    else:
+        target_norm = _resolve_latest(current_norm, list(by_norm), options)
+        if target_norm is None:
+            return None
+        target = by_norm[target_norm]
+    if not _is_outdated(current_norm, target_norm):
         return None
-    target = by_norm[target_norm]
 
     return OutdatedDependency(
         name=dep.name,
@@ -726,6 +806,9 @@ async def check_outdated(
                 if result is not None and not result.repository_url and not _options.registries.uses_mirror:
                     result.repository_url = await _deps_dev_repository(c, result)
                 return result, None
+            except PinNotFoundError as exc:
+                logger.warning("%s (%s): %s", dep.name, dep.ecosystem, exc)
+                return None, RegistryFailure(name=dep.name, ecosystem=dep.ecosystem, reason=str(exc))
             except Exception:
                 logger.warning("Failed to query registry for %s (%s)", dep.name, dep.ecosystem, exc_info=True)
                 return None, RegistryFailure(name=dep.name, ecosystem=dep.ecosystem)

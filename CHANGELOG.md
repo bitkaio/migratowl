@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pinned upgrade targets (`target_versions`)** — a webhook field mapping package names to the version to upgrade
+  to, instead of the newest one the registry offers. Useful for scanning exactly what a Dependabot or Renovate PR
+  proposes, and for benchmarks that must not drift when new releases come out. A pinned version the registry does not
+  list is reported in `registry_failures` with a `reason` (also shown in the PR comment); a pinned name that matches
+  no dependency is reported in `scan_result.unmatched_targets`.
+
 ## [0.8.3] - 2026-10-12
 
 ### Added

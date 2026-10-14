@@ -257,6 +257,12 @@ class TestFormatPrCommentRegistryFailures:
         comment = format_pr_comment(_make_report([], registry_failures=failures))
         assert "2 package(s)" in comment
 
+    def test_failure_reason_shown(self) -> None:
+        failures = [RegistryFailure(name="express", ecosystem=Ecosystem.NODEJS,
+                                    reason="pinned version 9.9.9 not found in the registry")]
+        comment = format_pr_comment(_make_report([], registry_failures=failures))
+        assert "`express` (nodejs): pinned version 9.9.9 not found in the registry" in comment
+
 
 class TestShortFix:
     def test_uses_first_sentence_when_short(self) -> None:

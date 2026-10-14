@@ -256,6 +256,45 @@ class TestPrepareScan:
         assert prepared.update_failures == {"flask": "no dist"}
 
 
+class TestPrepareScanTargetVersions:
+    async def test_pinned_version_reaches_update_dependencies(self, monkeypatch) -> None:
+        import httpx
+
+        from migratowl.agent.tools.registry import create_check_outdated_tool
+        from migratowl.pipeline import prepare_scan
+        from migratowl.registry import CheckOptions
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path != "/pypi/flask/json":
+                return httpx.Response(404)
+            return httpx.Response(200, json={
+                "info": {"home_page": None, "project_urls": None},
+                "releases": {"2.0.0": [], "3.0.0": [], "3.1.0": []},
+            })
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        monkeypatch.setattr("migratowl.registry.get_http_client", lambda: client)
+        payload = ScanWebhookPayload(repo_url="https://x/y", target_versions={"Flask": "3.0.0"})
+        tools = _fake_tools()
+        tools.check_outdated_deps = create_check_outdated_tool(
+            options=CheckOptions(target_versions=payload.target_versions)
+        )
+
+        prepared = await prepare_scan(tools, payload, CONFIG)
+
+        sent = json.loads(tools.update_dependencies.calls[0][0]["packages_json"])
+        assert sent[0]["name"] == "flask" and sent[0]["latest_version"] == "3.0.0"
+        assert prepared.scan_result.unmatched_targets == []
+
+    async def test_pin_for_a_package_the_repo_lacks_is_reported(self) -> None:
+        from migratowl.pipeline import prepare_scan
+
+        payload = ScanWebhookPayload(repo_url="https://x/y", target_versions={"flaks": "3.0.0", "Flask": "3.0.0"})
+        prepared = await prepare_scan(_fake_tools(), payload, CONFIG)
+
+        assert prepared.scan_result.unmatched_targets == ["flaks"]
+
+
 def _prepared(candidates, validations, update_failures=None):
     from migratowl.models.schemas import ScanResult
     from migratowl.pipeline import EcosystemValidation, PreparedScan

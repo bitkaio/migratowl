@@ -318,6 +318,7 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
 | `mode` | `string` | `"normal"` | Version resolution mode — see below |
 | `include_prerelease` | `boolean` | `false` | When `true`, pre-release versions (alpha, beta, RC) are considered when finding the latest version |
+| `target_versions` | `object` | `{}` | Package name → version to upgrade to instead of the newest one, whatever `mode` and `include_prerelease` say (at most 200). Names match as each ecosystem spells them: PyPI names normalised (`Pydantic` = `pydantic`), Maven as `groupId:artifactId`, Go as the module path (a leading `v` on the version is optional). A version the registry does not list goes to `registry_failures` with a reason; a name no dependency has goes to `scan_result.unmatched_targets`. Does not limit the scan to these packages: send `check_deps` too for that |
 
 **Version resolution modes (`mode`):**
 
