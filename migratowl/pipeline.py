@@ -41,6 +41,7 @@ from migratowl.models.schemas import (
     ScanResult,
     ScanWebhookPayload,
 )
+from migratowl.registry import pin_key
 
 if TYPE_CHECKING:
     from migratowl.agent.factory import MigratowlTools
@@ -134,6 +135,16 @@ def select_candidates(
     return pool[: payload.max_deps], [dep.name for dep in pool[payload.max_deps :]]
 
 
+def unmatched_targets(deps: list[Dependency], target_versions: dict[str, str]) -> list[str]:
+    """Pinned names that match none of ``deps`` (names compared per ecosystem, see ``pin_key``)."""
+    keys = {(dep.ecosystem, pin_key(dep.ecosystem, dep.name)) for dep in deps}
+    ecosystems = {ecosystem for ecosystem, _ in keys}
+    return [
+        name for name in target_versions
+        if not any((ecosystem, pin_key(ecosystem, name)) in keys for ecosystem in ecosystems)
+    ]
+
+
 def parse_update_failures(summary: str) -> dict[str, str]:
     """Map package name → failure detail from ``update_dependencies``' summary text."""
     failures: dict[str, str] = {}
@@ -215,6 +226,7 @@ async def prepare_scan(
             manifests_found=sorted({dep.manifest_path for dep in deps}),
             scan_duration_seconds=round(time.monotonic() - started, 1),
             registry_failures=failures,
+            unmatched_targets=unmatched_targets(deps, payload.target_versions),
         ),
         candidates=candidates,
         skipped=skipped,

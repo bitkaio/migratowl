@@ -338,6 +338,92 @@ class TestRunScanSetsModelName:
             assert app.state.job_store.get(job.job_id).sandbox_id == "sbx-run"
 
 
+class TestRunScanRecord:
+    """The per-scan record the evaluation scorer reads from GET /jobs/{id}."""
+
+    async def _run(self, app, payload=None, result=None):
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main._post_callback", new_callable=AsyncMock) as cb, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_factory.return_value.ainvoke = AsyncMock(return_value=result or _ok_result())
+            job = app.state.job_store.create(payload or ScanWebhookPayload(
+                repo_url="https://github.com/x/y", callback_url="https://cb.example/r"
+            ))
+            await main_mod._run_scan(app, job.job_id)
+        return app.state.job_store.get(job.job_id).result, cb
+
+    @pytest.mark.asyncio
+    async def test_records_phase_times_and_version(self, app) -> None:
+        from migratowl.version import build_version
+
+        report, _ = await self._run(app)
+
+        assert set(report.phase_seconds) == {"prepare", "evidence", "analysis", "compile"}
+        assert all(seconds >= 0 for seconds in report.phase_seconds.values())
+        assert report.migratowl_version == build_version()
+
+    @pytest.mark.asyncio
+    async def test_records_presolved_packages(self, app, fake_pipeline) -> None:
+        fake_pipeline.prepare_scan.return_value = _prepared_scan(pending=False)
+
+        report, _ = await self._run(app)
+
+        assert report.presolved == ["flask"]
+        assert report.delegated == []
+
+    @pytest.mark.asyncio
+    async def test_records_delegated_packages(self, app) -> None:
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        result = _ok_result()
+        result["messages"] = [
+            AIMessage(content="", tool_calls=[{"name": "task", "id": "c1",
+                                               "args": {"description": "Analyze flask", "subagent_type": "package-analyzer"}}]),
+            ToolMessage(content="Model call limit reached", tool_call_id="c1", name="task"),
+        ]
+
+        report, _ = await self._run(app, result=result)
+
+        assert report.presolved == []
+        assert report.delegated == ["flask"]
+
+    @pytest.mark.asyncio
+    async def test_analysis_brief_is_not_recorded_by_default(self, app) -> None:
+        report, _ = await self._run(app)
+
+        assert report.analysis_brief == ""
+
+    @pytest.mark.asyncio
+    async def test_analysis_brief_is_recorded_when_enabled_but_not_sent_to_the_callback(self, app) -> None:
+        app.state.settings = Settings(_env_file=None, record_analysis_brief=True)
+
+        report, cb = await self._run(app)
+
+        assert report.analysis_brief.startswith("Repository: https://github.com/x/y")
+        assert "flask" in report.analysis_brief
+        assert "analysis_brief" not in cb.call_args.args[2]
+
+
+class TestRunScanTargetVersions:
+    @pytest.mark.asyncio
+    async def test_payload_pins_reach_the_tools(self, app, fake_pipeline) -> None:
+        from migratowl.models.schemas import ScanWebhookPayload
+
+        with patch("migratowl.agent.factory.create_migratowl_agent") as mock_factory, \
+             patch("migratowl.api.main.notify_pr_done", new_callable=AsyncMock), \
+             patch("migratowl.api.main.notify_pr_start", new_callable=AsyncMock):
+            mock_factory.return_value.ainvoke = AsyncMock(return_value=_ok_result())
+            payload = ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"flask": "3.0.0"})
+            job = app.state.job_store.create(payload)
+
+            await main_mod._run_scan(app, job.job_id)
+
+        assert fake_pipeline.build_tools.call_args.kwargs["target_versions"] == {"flask": "3.0.0"}
+
+
 class TestResumeEndpoint:
     @pytest.mark.asyncio
     async def test_resume_404_for_unknown_job(self, client: AsyncClient) -> None:

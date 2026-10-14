@@ -443,3 +443,52 @@ def test_unused_models_are_gone() -> None:
 def test_job_status_has_no_unused_lease_fields() -> None:
     assert "owner_pid" not in JobStatus.model_fields
     assert "heartbeat_at" not in JobStatus.model_fields
+
+
+class TestTargetVersions:
+    def test_defaults_to_empty(self) -> None:
+        assert ScanWebhookPayload(repo_url="https://github.com/x/y").target_versions == {}
+
+    def test_accepts_ecosystem_names_and_versions(self) -> None:
+        pins = {
+            "pydantic": "2.5.0",
+            "@types/node": "20.11.0",
+            "github.com/gin-gonic/gin": "v1.9.1",
+            "com.google.guava:guava": "33.0.0-jre",
+            "requests[socks]": "2.32.0rc1",
+        }
+        assert ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions=pins).target_versions == pins
+
+    def test_rejects_bad_name(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"evil name;rm": "1.0.0"})
+
+    def test_rejects_empty_version(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"pydantic": ""})
+
+    def test_rejects_bad_version(self) -> None:
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions={"pydantic": "2.0 || 3"})
+
+    def test_rejects_too_many_entries(self) -> None:
+        pins = {f"pkg{i}": "1.0.0" for i in range(201)}
+        with pytest.raises(ValidationError):
+            ScanWebhookPayload(repo_url="https://github.com/x/y", target_versions=pins)
+
+
+class TestScorerRecordDefaults:
+    def test_a_result_stored_before_the_record_fields_still_loads(self) -> None:
+        from migratowl.models.schemas import ScanAnalysisReport
+
+        old = {
+            "repo_url": "https://github.com/x/y", "branch_name": "main", "reports": [], "total_duration_seconds": 1.0,
+            "scan_result": {"all_deps": [], "outdated": [], "manifests_found": [], "scan_duration_seconds": 0.5,
+                            "registry_failures": [{"name": "flask", "ecosystem": "python"}]},
+        }
+        report = ScanAnalysisReport.model_validate(old)
+
+        assert (report.presolved, report.delegated, report.phase_seconds) == ([], [], {})
+        assert (report.migratowl_version, report.analysis_brief) == ("", "")
+        assert report.scan_result.unmatched_targets == []
+        assert report.scan_result.registry_failures[0].reason == ""

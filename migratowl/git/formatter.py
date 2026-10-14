@@ -181,7 +181,7 @@ def format_pr_comment(report: ScanAnalysisReport) -> str:
 
     if report.scan_result.registry_failures:
         failed_str = ", ".join(
-            f"{_code(f.name)} ({f.ecosystem})"
+            f"{_code(f.name)} ({f.ecosystem})" + (f": {_safe_text(f.reason)}" if f.reason else "")
             for f in report.scan_result.registry_failures
         )
         lines += _details_block(

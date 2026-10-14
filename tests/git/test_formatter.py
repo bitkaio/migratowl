@@ -257,6 +257,24 @@ class TestFormatPrCommentRegistryFailures:
         comment = format_pr_comment(_make_report([], registry_failures=failures))
         assert "2 package(s)" in comment
 
+    def test_failure_reason_shown(self) -> None:
+        failures = [RegistryFailure(name="express", ecosystem=Ecosystem.NODEJS,
+                                    reason="pinned version 9.9.9 not found in the registry")]
+        comment = format_pr_comment(_make_report([], registry_failures=failures))
+        assert "`express` (nodejs): pinned version 9.9.9 not found in the registry" in comment
+
+
+class TestFormatPrCommentScorerRecord:
+    def test_scorer_fields_stay_out_of_the_comment(self) -> None:
+        report = _make_report([]).model_copy(update={
+            "presolved": ["flask"], "delegated": ["django"], "phase_seconds": {"prepare": 1.0},
+            "migratowl_version": "9.9.9+gabc", "analysis_brief": "SECRET BRIEF",
+        })
+        comment = format_pr_comment(report)
+        assert "SECRET BRIEF" not in comment
+        assert "9.9.9+gabc" not in comment
+        assert "phase" not in comment
+
 
 class TestShortFix:
     def test_uses_first_sentence_when_short(self) -> None:

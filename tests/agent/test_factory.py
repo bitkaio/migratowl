@@ -596,6 +596,14 @@ class TestBuildToolsPythonVersion:
 
         assert mock_check.call_args.kwargs["options"].python_version == "3.12"
 
+    def test_outdated_check_gets_the_pinned_targets(self) -> None:
+        from migratowl.agent.factory import build_tools
+
+        with patch("migratowl.agent.factory.create_check_outdated_tool") as mock_check:
+            build_tools(_make_mock_manager(), settings=Settings(_env_file=None), target_versions={"flask": "3.0.0"})
+
+        assert mock_check.call_args.kwargs["options"].target_versions == {"flask": "3.0.0"}
+
 
 class TestAgentBudget:
     """MO-65.2: model calls are capped and old tool outputs are trimmed, on the agent and the subagent."""

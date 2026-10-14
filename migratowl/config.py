@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     max_output_chars: int = 30_000
     # Characters of failing validation output (tail) given to the LLM in the analysis brief.
     analysis_tail_chars: int = 4_000
+    # Keep the LLM's analysis brief on the job result (GET /jobs/{id}) for offline evaluation.
+    record_analysis_brief: bool = False
 
     # Git providers
     github_token: str = Field(

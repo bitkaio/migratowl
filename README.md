@@ -318,6 +318,7 @@ Accepts a scan request. Returns `202 Accepted` immediately; analysis runs in the
 | `ecosystems` | `string[] \| null` | `null` | Limit to specific ecosystems: `"python"`, `"nodejs"`, `"go"`, `"rust"`, `"java"`. `null` = auto-detect all |
 | `mode` | `string` | `"normal"` | Version resolution mode — see below |
 | `include_prerelease` | `boolean` | `false` | When `true`, pre-release versions (alpha, beta, RC) are considered when finding the latest version |
+| `target_versions` | `object` | `{}` | Package name → version to upgrade to instead of the newest one, whatever `mode` and `include_prerelease` say (at most 200). Names match as each ecosystem spells them: PyPI names normalised (`Pydantic` = `pydantic`), Maven as `groupId:artifactId`, Go as the module path (a leading `v` on the version is optional). A version the registry does not list goes to `registry_failures` with a reason; a name no dependency has goes to `scan_result.unmatched_targets`. Does not limit the scan to these packages: send `check_deps` too for that |
 
 **Version resolution modes (`mode`):**
 
@@ -454,9 +455,11 @@ ScanAnalysisReport
 │   │   └── changelog_url     string | null
 │   ├── manifests_found       string[]  — manifest file paths discovered
 │   ├── scan_duration_seconds float
-│   └── registry_failures     RegistryFailure[]  — deps whose registry lookup failed
-│       ├── name              string
-│       └── ecosystem         string
+│   ├── registry_failures     RegistryFailure[]  — deps whose registry lookup failed
+│   │   ├── name              string
+│   │   ├── ecosystem         string
+│   │   └── reason            string    — e.g. a pinned version the registry does not list ("" if unknown)
+│   └── unmatched_targets     string[]  — target_versions names no dependency has
 ├── reports                   AnalysisReport[]  — one per analyzed package
 │   ├── dependency_name       string
 │   ├── is_breaking           bool
@@ -470,7 +473,12 @@ ScanAnalysisReport
 ├── total_output_tokens       int
 ├── total_cache_read_tokens   int
 ├── total_cache_creation_tokens int
-└── model_name                string    — model that produced the analysis
+├── model_name                string    — model that produced the analysis
+├── presolved                 string[]  — packages settled in code, without the LLM
+├── delegated                 string[]  — packages the agent sent to the package-analyzer subagent
+├── phase_seconds             object    — seconds per phase: prepare, evidence, analysis, compile
+├── migratowl_version         string    — server version (plus +g<commit> when run from a git checkout)
+└── analysis_brief            string    — the LLM's brief; "" unless MIGRATOWL_RECORD_ANALYSIS_BRIEF=true
 ```
 
 **Example report entry:**
@@ -553,6 +561,7 @@ See [`docs/proxy-setup.md`](docs/proxy-setup.md) for troubleshooting, model name
 | `MIGRATOWL_SCAN_REGISTRY_CONCURRENCY` | `10` | Concurrent registry queries when checking outdated deps |
 | `MIGRATOWL_MAX_OUTPUT_CHARS` | `30000` | Truncation limit for sandbox command output |
 | `MIGRATOWL_ANALYSIS_TAIL_CHARS` | `4000` | Characters of failing build/test output (the tail) included in the LLM's analysis brief |
+| `MIGRATOWL_RECORD_ANALYSIS_BRIEF` | `false` | Keep the LLM's analysis brief on the job result (`analysis_brief` in `GET /jobs/{id}`) for offline evaluation. It holds build/test output and changelog excerpts, so it is off by default; it is never sent to the callback or the PR comment |
 | `MIGRATOWL_MAX_CHANGELOG_CHARS` | `15000` | Truncation limit for fetched changelogs |
 | `MIGRATOWL_MAX_OUTDATED_DEPS` | `100` | Hard cap on registry scan results |
 | `MIGRATOWL_MAX_MODEL_CALLS` | `60` | Ceiling on the model calls the analysis agent may make in one scan; the run then ends gracefully. Each scan sizes its cap below this: 6 calls plus 3 per package left to analyse (5 when its ecosystem's upgraded tests failed). Packages left without a verdict are reported as skipped, never as safe. `0` = no limit |

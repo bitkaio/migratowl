@@ -16,9 +16,9 @@
 
 import enum
 from datetime import UTC, datetime
-from typing import Literal, TypedDict
+from typing import Annotated, Literal, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class Ecosystem(enum.StrEnum):
@@ -56,6 +56,11 @@ class LanguageDetection(BaseModel):
     default_install_command: str
 
 
+# Characters real package names and versions use (the PR comment allows the same in names).
+PackageName = Annotated[str, StringConstraints(min_length=1, max_length=200, pattern=r"^[\w@/.:+\-\[\]]+$")]
+PackageVersion = Annotated[str, StringConstraints(min_length=1, max_length=100, pattern=r"^[\w.+\-]+$")]
+
+
 class ScanWebhookPayload(BaseModel):
     """Payload received to trigger a repository scan."""
 
@@ -74,6 +79,9 @@ class ScanWebhookPayload(BaseModel):
     ecosystems: list[Ecosystem] | None = None
     mode: OutdatedCheckMode = OutdatedCheckMode.NORMAL
     include_prerelease: bool = False
+    # Package → version to upgrade to instead of the newest one, whatever ``mode`` and
+    # ``include_prerelease`` say. Does not limit the scan to these packages (``check_deps`` does).
+    target_versions: dict[PackageName, PackageVersion] = Field(default={}, max_length=200)
 
 
 class Dependency(BaseModel):
@@ -112,6 +120,7 @@ class RegistryFailure(BaseModel):
 
     name: str
     ecosystem: Ecosystem
+    reason: str = ""
 
 
 class ScanResult(BaseModel):
@@ -122,6 +131,8 @@ class ScanResult(BaseModel):
     manifests_found: list[str]
     scan_duration_seconds: float
     registry_failures: list[RegistryFailure] = []
+    # target_versions names that match no dependency of the repository (a typo, or the wrong ecosystem filter).
+    unmatched_targets: list[str] = []
 
 
 class ChangelogResult(TypedDict):
@@ -210,6 +221,14 @@ class ScanAnalysisReport(BaseModel):
     # Model calls the scan made: all of them, and those by the analysis agent (the rest are subagent calls).
     model_calls: int = 0
     agent_model_calls: int = 0
+    # Record for evaluation: packages settled in code without the LLM, packages the agent handed to the
+    # package-analyzer subagent, seconds per phase (prepare, evidence, analysis, compile), the build that
+    # ran, and the brief the LLM got (only with MIGRATOWL_RECORD_ANALYSIS_BRIEF; never sent to the callback).
+    presolved: list[str] = []
+    delegated: list[str] = []
+    phase_seconds: dict[str, float] = {}
+    migratowl_version: str = ""
+    analysis_brief: str = ""
 
 
 class JobState(enum.StrEnum):

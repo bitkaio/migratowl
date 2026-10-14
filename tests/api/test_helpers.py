@@ -425,3 +425,45 @@ class TestModelCallUsage:
 
         assert agent_model_calls(state) == 2
         assert agent_model_calls({}) == 0
+
+
+class TestDelegatedPackages:
+    @staticmethod
+    def _task(call_id: str, description: str, subagent: str = "package-analyzer") -> AIMessage:
+        return AIMessage(content="", tool_calls=[{
+            "name": "task", "id": call_id, "args": {"description": description, "subagent_type": subagent},
+        }])
+
+    def test_names_come_from_the_subagent_verdict(self) -> None:
+        from langchain_core.messages import ToolMessage
+
+        from migratowl.api.helpers import delegated_packages
+
+        messages = [
+            self._task("c1", "Test the upgrade of the package"),
+            ToolMessage(content=_verdict("Flask", True).model_dump_json(), tool_call_id="c1", name="task"),
+        ]
+
+        assert delegated_packages({"messages": messages}, ["flask", "requests"]) == ["flask"]
+
+    def test_falls_back_to_the_name_in_the_task_description(self) -> None:
+        from langchain_core.messages import ToolMessage
+
+        from migratowl.api.helpers import delegated_packages
+
+        messages = [
+            self._task("c1", "Analyze react-dom 17.0.2 -> 19.0.0 (nodejs, package.json)"),
+            ToolMessage(content="Model call limit reached", tool_call_id="c1", name="task"),
+            self._task("c2", "Analyze react 17.0.2 -> 19.0.0"),
+        ]
+
+        assert delegated_packages({"messages": messages}, ["react", "react-dom"]) == ["react-dom", "react"]
+
+    def test_ignores_other_tools_and_subagents(self) -> None:
+        from migratowl.api.helpers import delegated_packages
+
+        other = AIMessage(content="", tool_calls=[{"name": "fetch_changelog_tool", "id": "c9",
+                                                   "args": {"outdated_dep_json": "{\"name\": \"flask\"}"}}])
+        messages = [other, self._task("c1", "Analyze flask", subagent="general-purpose")]
+
+        assert delegated_packages({"messages": messages}, ["flask"]) == []

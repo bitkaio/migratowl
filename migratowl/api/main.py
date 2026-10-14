@@ -43,6 +43,7 @@ from migratowl.api.helpers import (  # noqa: E402
     agent_model_calls,
     assemble_report,
     call_limit_reached,
+    delegated_packages,
     extract_verdicts,
     sum_usage,
 )
@@ -58,6 +59,7 @@ from migratowl.models.schemas import (  # noqa: E402
     WebhookAcceptedResponse,
 )
 from migratowl.pipeline import PipelineError  # noqa: E402
+from migratowl.version import build_version  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -320,24 +322,37 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             settings = app.state.settings
             config: RunnableConfig = {"configurable": {"thread_id": job_id}}
             started = time.monotonic()
+            phases: dict[str, float] = {}
+            mark = started
+
+            def _phase(name: str) -> None:
+                nonlocal mark
+                now = time.monotonic()
+                phases[name] = round(now - mark, 2)
+                mark = now
             tools = build_tools(
                 app.state.manager,
                 settings=settings,
                 mode=job.payload.mode,
                 include_prerelease=job.payload.include_prerelease,
+                target_versions=job.payload.target_versions,
                 on_sandbox_acquired=_persist_sandbox_id,
             )
             prepared = await prepare_scan(tools, job.payload, config, tail_chars=settings.analysis_tail_chars)
             resolved, pending = presolve(prepared)
+            _phase("prepare")
             if pending:
                 prepared.changelog_excerpts = await fetch_major_changelogs(tools, pending, config)
                 prepared.evidence = await collect_evidence(tools, pending, prepared.changelog_excerpts, config)
+            _phase("evidence")
 
             verdicts: list = []
             tokens = TokenUsage()
             budget = None
             capped = False
             calls = agent_calls = 0
+            brief = ""
+            delegated: list[str] = []
             if pending:
                 failed = {v.ecosystem for v in prepared.validations if not v.passed}
                 failing = [d.name for d in pending if str(d.ecosystem) in failed or d.name in prepared.update_failures]
@@ -357,11 +372,10 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     usage_callback=usage,
                     budget=budget,
                 )
-                result = await graph.ainvoke(
-                    {"messages": [("user", build_analysis_brief(job.payload, prepared, pending))]},
-                    config=config,
-                )
+                brief = build_analysis_brief(job.payload, prepared, pending)
+                result = await graph.ainvoke({"messages": [("user", brief)]}, config=config)
                 verdicts = extract_verdicts(result)
+                delegated = delegated_packages(result, list(dict.fromkeys(d.name for d in pending)))
                 capped = call_limit_reached(result)
                 tokens = sum_usage(usage.usage_metadata.values())
                 calls, agent_calls = usage.model_calls, agent_model_calls(result)
@@ -369,6 +383,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     "Job %s: %d model call(s): %d by the agent (budget %d), %d by subagents (budget %d per run)",
                     job_id, calls, agent_calls, budget.main, calls - agent_calls, budget.subagent,
                 )
+            _phase("analysis")
 
             report = assemble_report(
                 job.payload, prepared, resolved + verdicts, duration=time.monotonic() - started, tokens=tokens,
@@ -379,6 +394,12 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
             report.call_limit_reached = capped
             report.model_calls, report.agent_model_calls = calls, agent_calls
             report.repo_url = redact_secrets(report.repo_url)
+            report.presolved = [r.dependency_name for r in resolved]
+            report.delegated = delegated
+            report.migratowl_version = build_version()
+            report.analysis_brief = brief if settings.record_analysis_brief else ""
+            _phase("compile")
+            report.phase_seconds = phases
             store.set_result(job_id, report)
 
             # Terminal side effects fire at most once across the original run and
@@ -389,7 +410,7 @@ async def _run_scan(app: FastAPI, job_id: str, *, resume: bool = False) -> None:
                     await _post_callback(
                         job.payload.callback_url,
                         job_id,
-                        report.model_dump(mode="json"),
+                        report.model_dump(mode="json", exclude={"analysis_brief"}),
                         state="completed",
                         allow_private=app.state.settings.callback_allow_private,
                     )
