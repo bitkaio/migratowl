@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sonnet 5.5 cache reads priced at the old rate** — the cost line in the PR comment charged cache reads on
+  `claude-sonnet-5-5` at $0.20 per 1M tokens; Anthropic lowered it to $0.10 on 2026-10-07, so Sonnet scans read
+  high. [`docs/model-benchmarks.md`](docs/model-benchmarks.md) now uses the new price, and notes that Haiku 5.5's
+  higher price for prompts over 100K tokens is not in the cost line.
+
 ## [0.9.0] - 2026-10-14
 
 ### Added

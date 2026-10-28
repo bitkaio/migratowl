@@ -335,7 +335,7 @@ class TestFixDetails:
 
 
 class TestCurrentModelPricing:
-    """Prices from Anthropic's model table (2026-09-25)."""
+    """Prices from Anthropic's model table (2026-10-28)."""
 
     def test_current_models_are_priced(self) -> None:
         from migratowl.git.formatter import _estimate_cost
@@ -348,7 +348,13 @@ class TestCurrentModelPricing:
         from migratowl.git.formatter import _estimate_cost
 
         # input_tokens includes cached tokens (langchain-anthropic folds them in)
-        assert _estimate_cost("claude-sonnet-5-5", 1_000_000, 0, cache_read=1_000_000) == "~$0.20"
+        assert _estimate_cost("claude-opus-5-5", 1_000_000, 0, cache_read=1_000_000) == "~$0.20"
+
+    def test_sonnet_5_5_cache_reads_at_the_lowered_rate(self) -> None:
+        from migratowl.git.formatter import _estimate_cost
+
+        # Anthropic cut Sonnet 5.5 cache reads from $0.20 to $0.10 per 1M tokens on 2026-10-07
+        assert _estimate_cost("claude-sonnet-5-5", 1_000_000, 0, cache_read=1_000_000) == "~$0.10"
 
     def test_cache_writes_priced_at_one_and_a_quarter_input(self) -> None:
         from migratowl.git.formatter import _estimate_cost
@@ -365,7 +371,7 @@ class TestCurrentModelPricing:
             reports=[], total_duration_seconds=1.0, total_input_tokens=1_000_000, total_output_tokens=0,
             total_cache_read_tokens=1_000_000, model_name="claude-sonnet-5-5",
         )
-        assert "~$0.20" in format_pr_comment(report)
+        assert "~$0.10" in format_pr_comment(report)
 
 
 class TestCommentEscaping:

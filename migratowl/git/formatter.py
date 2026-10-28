@@ -44,7 +44,7 @@ def _code(name: str) -> str:
     return f"`{_UNSAFE_NAME_CHARS.sub('_', name)[:200]}`"
 
 # USD per 1M tokens: (input, output, cache read or None). Anthropic prices from
-# the published model table as of 2026-09-25. None = cache reads at 0.1x input.
+# the published model table as of 2026-10-28. None = cache reads at 0.1x input.
 _PRICING: dict[str, tuple[float, float, float | None]] = {
     "claude-fable-5-1": (10.0, 50.0, 0.25),
     "claude-fable-5": (10.0, 50.0, None),
@@ -53,7 +53,7 @@ _PRICING: dict[str, tuple[float, float, float | None]] = {
     "claude-opus-4-8": (5.0, 25.0, None),
     "claude-opus-4-7": (5.0, 25.0, None),
     "claude-opus-4-6": (5.0, 25.0, None),
-    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.10),
     "claude-sonnet-5": (2.0, 10.0, None),
     "claude-sonnet-4-6": (3.0, 15.0, None),
     "claude-haiku-5-5": (0.10, 0.50, None),  # prompts up to 100K tokens; $0.50 / $2.50 above
