@@ -35,10 +35,11 @@ dependencies = [
 # Lift this cap once langchain-kubernetes supports the newer client.
 constraint-dependencies = [
     "k8s-agent-sandbox<0.3",
-    # Security floor: pyasn1 0.6.3 has 3 known vulns (PYSEC-2026-3455/3456/3457),
-    # fixed in 0.6.4. Pulled in transitively via google-auth -> pyasn1-modules;
-    # dependents declare open lower bounds, so pin the floor to the fixed release.
-    "pyasn1>=0.6.4",
+    # Security floor: pyasn1 <0.6.4 has PYSEC-2026-3455/3456/3457; 0.6.4 has
+    # CVE-2026-119194/119195/119196/119197, fixed in 0.6.5. Pulled in transitively
+    # via google-auth -> pyasn1-modules; dependents declare open lower bounds, so
+    # pin the floor to the fixed release.
+    "pyasn1>=0.6.5",
     # Security floor: setuptools <83.0.0 has GHSA-h35f-9h28-mq5c (MANIFEST.in
     # exclusion bypass). Dev/build-only dep; not in the runtime export.
     "setuptools>=83.0.0",
@@ -52,18 +53,23 @@ constraint-dependencies = [
     "urllib3>=2.8.0",
     # anyio <4.14.2: GHSA-82r6-8w77-94w6 (TLS host name spoofing), GHSA-5p39-cfhj-2xmp.
     "anyio>=4.14.2",
-    # oauthlib <4.0.0: GHSA-xpv3-w29h-x7cv, GHSA-hj66-6f7g-4r5v.
-    "oauthlib>=4.0.0",
+    # oauthlib <4.0.0: GHSA-xpv3-w29h-x7cv, GHSA-hj66-6f7g-4r5v; <4.0.1: CVE-2026-49272.
+    "oauthlib>=4.0.1",
     # cryptography <50.0.0: GHSA-g6cj-pr64-35w5 (PKCS#7 Bleichenbacher oracle).
     # Transitive via google-auth / kubernetes (earlier floor: GHSA-537c-gmf6-5ccf).
     "cryptography>=50.0.0",
     # langgraph-checkpoint-sqlite <3.1.1: GHSA-47pj-3jcm-6whg.
     "langgraph-checkpoint-sqlite>=3.1.1",
-    # langgraph-sdk <0.4.4: CVE-2026-104873.
-    "langgraph-sdk>=0.4.4",
+    # langgraph-sdk <0.4.4: CVE-2026-104873; <0.4.6: CVE-2026-118667.
+    "langgraph-sdk>=0.4.6",
     # click <8.3.3: PYSEC-2026-2132 (GHSA-47fr-3ffg-hgmw). Dev-only, via langgraph-cli;
     # still scanned by Scorecard/OSV, which reads all of uv.lock.
     "click>=8.3.3",
+    # certifi <2026.10.18: PYSEC-2026-4320. Transitive via httpx / requests.
+    "certifi>=2026.10.18",
+    # opentelemetry-api <1.45.1: CVE-2026-114603. Transitive via langfuse,
+    # langsmith[otel] and langgraph-api; the SDK/exporters move with it.
+    "opentelemetry-api>=1.45.1",
 ]
 
 [dependency-groups]

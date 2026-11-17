@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   high. [`docs/model-benchmarks.md`](docs/model-benchmarks.md) now uses the new price, and notes that Haiku 5.5's
   higher price for prompts over 100K tokens is not in the cost line.
 
+### Security
+
+- **Dependency floors for new advisories** — raised the transitive floors so the locked versions clear
+  `pip-audit`: certifi 2026.10.23 (PYSEC-2026-4320), opentelemetry-api 1.45.2 (CVE-2026-114603), pyasn1 0.6.5
+  (CVE-2026-119194..119197), oauthlib 4.0.1 (CVE-2026-49272) and langgraph-sdk 0.4.14 (CVE-2026-118667). The
+  OpenTelemetry bump also moves the dev-only `langgraph-api` from 0.15.3 to 0.18.2.
+
 ## [0.9.0] - 2026-10-14
 
 ### Added
